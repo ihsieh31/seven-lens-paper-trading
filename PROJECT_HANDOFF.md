@@ -2,8 +2,8 @@
 
 最後更新：2026-08-15
 專案路徑：本 repository root
-目前階段：`P1 — Core foundation`；`P1-A`、`P1-B`、`P1-C1`、`P1-C2`、`P1-C3` 均已通過本機獨立驗收，P1-C 本機交付完成
-下一個最小步驟：取得使用者另行授權後，建立獨立 Seven-Lens repository 並讓兩個 required GitHub Actions jobs 真正成功；此前不得關閉 `P1 Core Gate`
+目前階段：`P1 — Core foundation` 已完成；本機、clean-machine 與遠端 CI 均已通過獨立驗收，`P1 Core Gate` 已關閉
+下一個最小步驟：先討論並定義 `P2 — Alpaca Paper 執行安全` 的最小安全工作包與 acceptance；不得直接假設已授權 broker/order implementation
 
 ---
 
@@ -342,8 +342,14 @@ PostgreSQL image digest。16個P1-C3對抗測試、Ruff、Mypy、`407 passed, 19
 PostgreSQL 16.15 `19 passed, 0 skipped`均通過。required mode的missing URL與SQLite各自於collection
 前以exit 4失敗；clean-machine隔離副本排除`.venv`並使用全新空uv cache，兩個一鍵命令均成功。
 `uv.lock`前後SHA-256不變，Docker volume集合hash不變，owned container為空。P1-C3因此通過本機
-獨立驗收，P1-C本機交付完成；workflow仍未在獨立Seven-Lens repository遠端執行，因此P1 Core
-Gate保持Open。
+獨立驗收，P1-C本機交付完成。其後建立公開且獨立的
+[`ihsieh31/seven-lens-paper-trading`](https://github.com/ihsieh31/seven-lens-paper-trading) repository；
+首次遠端 workflow 因 job-level `env` 不允許 `job.services` context 而在建立 jobs 前失敗。DSN
+expression 移到 integration test step 後，GitHub Actions run
+[`31868962828`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31868962828) 在 commit
+`4e795ff1dc6d5b6bc51d4bd0e55149fda3e4cc61` 上通過兩個 jobs：`quality-unit` 為
+`407 passed, 19 deselected`，Ruff/Mypy/lock checks 通過；`postgres-integration` 驗證 PostgreSQL
+16.15 且 `19 passed, 0 skipped`。P1 Core Gate 因此關閉，仍未進入 P2。
 
 Clean-machine evidence來自 `/private/tmp/seven-lens-p1c3-clean-evidence-20260815/repo` 隔離副本：
 copy時排除原專案 `.venv`、使用全新空 uv cache；第一次 `verify_p1.sh` 與第二次
@@ -444,8 +450,8 @@ P1-B 不應假裝解決這些問題；只在其範圍真的建立控制時更新
 
 ## 14. P1-C3 已授權範圍、驗收重點與下一個邊界
 
-P1-A／P1-B／P1-C1／P1-C2／P1-C3 已通過本機獨立驗收，P1-C本機交付完成。下列P1-C3範圍與
-驗收重點保留作已執行的驗收紀錄；workflow仍待獨立repository遠端執行，且不得開始P2。
+P1-A／P1-B／P1-C1／P1-C2／P1-C3 與遠端 CI 已通過獨立驗收，P1 Core Gate 已關閉。下列
+P1-C3範圍與驗收重點保留作已執行的驗收紀錄；這不代表已開始或授權P2。
 
 P1-C3 已授權交付：
 
@@ -473,9 +479,9 @@ P1-C3定點獨立驗收已依下列項目完成：
 狀態規則：
 
 - implementation agent完成後只能標示`P1-C3 implementation completed, pending independent acceptance`。
-- P1-C3本機驗收通過後，可說P1-C本機交付完成；但workflow尚未在獨立Seven-Lens repository真實執行。
-- 在獨立repository的兩個required jobs至少成功一次前，`P1 Core Gate`必須保持Open。
-- 未經使用者另行授權，不建立repository、不stage/commit/push、不進P2。
+- P1-C3本機驗收通過後，只能說P1-C本機交付完成；遠端兩個required jobs成功後才可關閉`P1 Core Gate`。
+- 2026-08-15 的遠端 run `31868962828` 已滿足上述條件，P1 Core Gate 已關閉。
+- GitHub 發布授權只涵蓋本工作包；不得據此推定 P2 broker/order implementation 已獲授權。
 
 ---
 
@@ -627,4 +633,4 @@ P1-A 已通過獨立驗收。保留 Paper-only、Tavily authorized pool fail-clo
 
 ## 17. 給下一個 AI 的一句話狀態
 
-> P0、P1-A、P1-B與P1-C1／C2／C3均已通過本機獨立驗收，P1-C本機交付完成。現有Keychain read-only secret boundary、explicit telemetry context、封閉五metric／兩span registry、fail-safe facade、PostgreSQL audit/transaction/lease/fencing、deterministic fakes、兩個Ubuntu CI jobs、zero-skip gate與clean-machine scripts；仍沒有OpenTelemetry/exporter、API client、broker/order/fill表、排程或交易能力，也未查詢真實Keychain。下一步需先取得使用者另行授權，再建立獨立Seven-Lens repository並讓`quality-unit`與`postgres-integration`兩個required jobs真正成功；此前P1 Core Gate保持Open，且不得進P2。
+> P0與完整P1均已通過本機、clean-machine及獨立GitHub Actions驗收，P1 Core Gate已關閉。公開repository為`ihsieh31/seven-lens-paper-trading`，run `31868962828`的`quality-unit`與`postgres-integration`均成功。現有Keychain read-only secret boundary、explicit telemetry context、封閉五metric／兩span registry、fail-safe facade、PostgreSQL audit/transaction/lease/fencing、deterministic fakes、zero-skip gate與clean-machine scripts；仍沒有OpenTelemetry/exporter、API client、broker/order/fill表、排程或交易能力，也未查詢真實Keychain。下一步先討論並定義P2安全工作包，不得直接開始broker/order implementation。

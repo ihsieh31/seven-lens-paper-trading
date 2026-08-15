@@ -2,10 +2,10 @@
 
 ## 狀態摘要
 
-- 專案階段：P1 — 專案骨架與權威狀態（P1-A、P1-B、P1-C1、P1-C2、P1-C3 均已通過本機獨立驗收；P1-C 本機交付完成）
+- 專案階段：P1 — 專案骨架與權威狀態（P1-A、P1-B、P1-C1、P1-C2、P1-C3 與遠端 CI 均已通過獨立驗收；P1 Core Gate 已關閉）
 - 完成度定義：只以路線圖的可驗證交付物計算，不以主觀百分比計算。
 - 最近更新：2026-08-15
-- 下一個 gate：P1 Core Gate；目前尚未完成，不得視為可連線或可交易系統。
+- 下一個 gate：P2 Safety Design Gate；尚未開始，且 P1 通過仍不得視為可連線或可交易系統。
 
 ## 已完成
 
@@ -42,10 +42,11 @@
 - [x] P1-C3 agent 本機自測：workflow/gate/script 對抗測試 `16 passed`；non-integration `407 passed, 19 deselected`；真實 digest-pinned PostgreSQL `16.15` integration `19 passed, 0 skipped`；Ruff/Mypy/lock checks 通過，uv.lock hash 未變且沒有殘留 owned container 或 volume。狀態仍為 `implementation completed, pending independent acceptance`。
 - [x] P1-C3 clean-machine evidence：在排除專案 `.venv` 且使用全新空 uv cache 的隔離副本依序執行兩個一鍵命令；兩次 non-integration 均 `407 passed, 19 deselected`，PostgreSQL `19 passed, 0 skipped`，lock SHA-256 前後皆為 `79809edba36965084b7561d616b0f95902e28e8fd4da6b07f35c409b6b34626b`；volume set未變、owned container為空，隔離副本已精確移除。
 - [x] P1-C3 已通過定點獨立驗收：官方 release／commit 與本機 RepoDigest 查核吻合；16 個對抗測試、Ruff、Mypy、`407 passed, 19 deselected`、真實 PostgreSQL 16.15 `19 passed, 0 skipped` 均通過。required mode 的 missing URL 與 SQLite 各自於 collection 前以 exit 4 fail closed；另一份排除 `.venv` 且使用全新空 uv cache 的副本也通過兩個一鍵命令，lock／volume hash 不變且 owned container 為空。
+- [x] 建立公開且獨立的 [`ihsieh31/seven-lens-paper-trading`](https://github.com/ihsieh31/seven-lens-paper-trading) repository；初始遠端 workflow 的 invalid-context 問題在獨立驗收中被發現並修正。
+- [x] GitHub Actions run [`31868962828`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31868962828) 在 commit `4e795ff1dc6d5b6bc51d4bd0e55149fda3e4cc61` 上通過：`quality-unit` 為 `407 passed, 19 deselected`，Ruff/Mypy/lock checks 全通過；`postgres-integration` 使用 PostgreSQL 16.15 且 `19 passed, 0 skipped`。P1 Core Gate 因此關閉。
 
 ## 尚未開始
 
-- [ ] 將專案放入獨立 Seven-Lens repository 後，讓兩個 required GitHub Actions jobs 真正成功；未取得此證據前 P1 Core Gate 保持 Open。
 - [ ] 實作 Paper broker adapter、reconciliation 與故障注入測試。
 - [ ] 建立來源 manifest、raw corpus 與七套 doctrine cards。
 - [ ] 取得 Tavily 對同一 Customer 彙總使用 7 個免費帳號的書面／後台授權證據。
@@ -54,8 +55,8 @@
 - [ ] 啟用本機 launchd 與告警。
 
 P1-C3 沒有建立 hosted macOS job、OpenTelemetry/exporter/backend、broker adapter、Tavily/OpenAI
-client、資料下載、策略、下單、排程或 launchd。P1-C 本機交付已完成並通過獨立驗收；遠端 CI
-仍無證據，因此 P1 Core Gate 維持 Open。
+client、資料下載、策略、下單、排程或 launchd。P1 Core Gate 已有遠端 CI 證據並關閉，但沒有
+擴張交易權限或進入 P2 implementation。
 
 ## Gate 規則
 

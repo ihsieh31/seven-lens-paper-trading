@@ -37,10 +37,11 @@
 
 主責：Terra；Sol review schema/security；Luna 建 fixtures/tests。
 
-P1 目前 gate 狀態（2026-08-15）：P1-A、P1-B、P1-C1、P1-C2、P1-C3 均已通過本機獨立驗收，
-P1-C 本機交付完成。由於本目錄尚非獨立 repository，workflow 存在與本機驗收通過都不等於遠端
-CI 已通過；在獨立 Seven-Lens repository 的 `quality-unit` 與 `postgres-integration` required jobs
-真正成功前，P1 Core Gate 保持 Open。
+P1 目前 gate 狀態（2026-08-15）：P1-A、P1-B、P1-C1、P1-C2、P1-C3 均已通過獨立驗收；
+公開且獨立的 [`ihsieh31/seven-lens-paper-trading`](https://github.com/ihsieh31/seven-lens-paper-trading)
+repository 已建立。GitHub Actions run [`31868962828`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31868962828)
+的 `quality-unit` 與 `postgres-integration` jobs 均成功，P1 Core Gate 已關閉。這不授權或代表 P2
+broker/order implementation 已開始。
 
 ## P2 — Alpaca Paper 執行安全（3–4 週）
 

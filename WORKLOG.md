@@ -271,3 +271,22 @@
 
 - 未修改workflow、程式、tests、`uv.lock`、migration或`ISSUES.md`；只同步README、Roadmap、ADR、Progress、Worklog與Handoff的驗收狀態。
 - 未stage、commit、push、建立repository或PR，未使用Keychain、broker/model/data API、repository secret或真實credential。
+
+## 2026-08-15 — Public GitHub publication 與 P1 Core Gate 遠端驗收
+
+### 發布與公開前檢查
+
+- 移除公開文件中的本機絕對路徑，確認`.env`、cache、virtualenv、archive、private-key檔與大檔未進入tracked內容；唯一private-key字串命中是對抗測試fixture。
+- 以隔離uv cache重跑完整本機gate：Ruff format/lint、Mypy、`407 passed, 19 deselected`與真實PostgreSQL 16.15 `19 passed, 0 skipped`均通過；`uv.lock` hash及Docker volume集合未變，owned container為空。
+- 建立公開且獨立的[`ihsieh31/seven-lens-paper-trading`](https://github.com/ihsieh31/seven-lens-paper-trading) repository，default branch為`main`；初始commit為`f0a328169a116b1bab9392be8c0566b386f297d6`。
+
+### 遠端驗收與修復
+
+- 首次workflow run `31868874046`在建立jobs前失敗；GitHub annotation指出job-level`env`中的`job.services.postgres.ports[5432]` context無效。
+- 將動態`TEST_DATABASE_URL`移到integration test step；P1-C3對抗測試仍為`16 passed`，修復commit為`4e795ff1dc6d5b6bc51d4bd0e55149fda3e4cc61`。
+- GitHub Actions run [`31868962828`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31868962828) 的兩個jobs均成功：`quality-unit`完成Ruff、Mypy、lock checks及`407 passed, 19 deselected`；`postgres-integration`使用PostgreSQL 16.15並完成`19 passed, 0 skipped`。
+
+### 狀態與邊界
+
+- P1 Core Gate已有獨立repository遠端證據並正式關閉。
+- 未使用repository secrets、Keychain、broker/model/data API或真實credential；未建立broker adapter、order/fill schema、策略、行情、排程、launchd或live path，也未開始P2 implementation。

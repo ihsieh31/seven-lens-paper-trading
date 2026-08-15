@@ -33,9 +33,10 @@
 ## 目前狀態
 
 `P1-C1 — macOS Keychain secret boundary`、`P1-C2 — dependency-neutral metrics/traces` 與
-`P1-C3 — CI／zero-skip／clean-machine gate` 均已通過本機獨立驗收，P1-C 本機交付完成。
-待啟用 GitHub Actions workflow 尚未在獨立 Seven-Lens repository 真正執行，因此 P1 Core Gate
-保持 Open；尚未開始 broker adapter、行情／研究 client、排程或任何委託能力。
+`P1-C3 — CI／zero-skip／clean-machine gate` 均已通過獨立驗收。專案已發布至
+[`ihsieh31/seven-lens-paper-trading`](https://github.com/ihsieh31/seven-lens-paper-trading)，遠端
+`quality-unit` 與 `postgres-integration` jobs 已真正成功，因此 P1 Core Gate 已關閉。尚未開始
+broker adapter、行情／研究 client、排程或任何委託能力；下一步是先定義並審核 P2 安全工作包。
 
 安全邊界：structured logging 只接受經 bounded redaction 轉成的 JSON-safe 值；cycle、過深、非字串 mapping key 或序列化異常會產生不含原始 fields 的固定 fallback audit event。Tavily `AUTHORIZED_ACCOUNT_POOL` 目前固定 fail closed，直到未來存在可獨立驗證外部授權的 verifier；使用者輸入的 reference、ticket 或 evidence record 不會自行升級權限。
 

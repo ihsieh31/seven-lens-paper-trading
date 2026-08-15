@@ -116,7 +116,7 @@
 ## ADR-015：兩段式 Ubuntu CI、zero-skip PostgreSQL 與 clean-machine bootstrap
 
 - 日期：2026-08-15
-- 狀態：Accepted；P1-C3 已通過本機獨立驗收，待遠端 CI 證據
+- 狀態：Accepted；P1-C3 與遠端 CI 已通過獨立驗收，P1 Core Gate 已關閉
 - Jobs：GitHub Actions 只建立 `quality-unit` 與 `postgres-integration` 兩個 Ubuntu 24.04 jobs；
   workflow permission 僅 `contents: read`，checkout 禁用 credential persistence。PR 同 ref 的新 run
   取消舊 run；default branch 已開始的 gate 不因新 run 取消。
@@ -131,6 +131,7 @@
   volume 或廣泛 prune。
 - 成本：不自動建立 GitHub-hosted macOS job；Keychain native boundary 目前由本機 fake-only contract
   tests 覆蓋，避免非 LLM hosted runner 成本。未來若要加入 macOS CI 必須另行核准成本與測試範圍。
-- Gate 語意：P1-C1、P1-C2 與 P1-C3 已通過本機獨立驗收；workflow 存在與本機通過都不等於
-  遠端 CI 成功。在獨立 Seven-Lens repository 的兩個 required jobs 至少成功一次前，P1 Core Gate
-  保持 Open。
+- Gate 證據：公開且獨立的 `ihsieh31/seven-lens-paper-trading` repository 已建立；GitHub Actions
+  run `31868962828` 在 commit `4e795ff1dc6d5b6bc51d4bd0e55149fda3e4cc61` 上讓 `quality-unit` 與
+  `postgres-integration` 均成功，後者使用 PostgreSQL 16.15 且為 `19 passed, 0 skipped`。P1 Core
+  Gate 因此關閉；此決策不授權 P2 或任何交易能力。
