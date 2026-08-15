@@ -2,8 +2,8 @@
 
 最後更新：2026-08-15
 專案路徑：本 repository root
-目前階段：`P1 — Core foundation` 已完成；本機、clean-machine 與遠端 CI 均已通過獨立驗收，`P1 Core Gate` 已關閉
-下一個最小步驟：先討論並定義 `P2 — Alpaca Paper 執行安全` 的最小安全工作包與 acceptance；不得直接假設已授權 broker/order implementation
+目前階段：`P1 — Core foundation` 與後續 authority hardening 已完成；本機、clean-machine 與遠端 CI 均通過，`P1 Core Gate` 保持關閉
+下一個最小步驟：依第 18 節的新 session Prompt，先討論並定義 `P2 — Alpaca Paper 執行安全` 的最小安全工作包與 acceptance；不得直接假設已授權 broker/order implementation
 
 ---
 
@@ -173,11 +173,21 @@
 ## 8. 工作區與 Git 注意事項
 
 - 專案目錄：本 repository root。
+- 獨立 public repository：[`ihsieh31/seven-lens-paper-trading`](https://github.com/ihsieh31/seven-lens-paper-trading)。
+- default branch 為 `main`；P1 authority hardening code commit為
+  `e8543b69bfc6a6d2dd9a87837d9d46bb11afc406`，遠端run `31891905869`兩個required jobs均成功。
+  後續可有只同步handoff/evidence的descendant commit；新session應以`git status`、`git log`與
+  `origin/main`現況為準，不把舊hash當固定checkout要求。
+- `main` branch protection 採 strict required checks：`quality-unit`、`postgres-integration`；禁止
+  force push 與 branch deletion，保留 repository admin 緊急 bypass。
+- 本次交接更新是使用者明確要求的本機變更；若新 session 開始時唯一 dirty file 是
+  `PROJECT_HANDOFF.md`，必須保留，不得當成未知修改還原。
 - 建立獨立 repository 前，它曾是另一個本機 repository 裡的未追蹤子目錄；歷史工作不得混入本專案。
-- 截至本交接建立時，專案檔案全部是 untracked，Git staging area 為空。
-- 上層 repository 可能有其他使用者變更；不得清理、還原或修改 `trading` 外的內容。
-- 未經使用者明確要求，不 stage、commit、push 或建立 PR。
-- 專案現有 `.venv`、Python 3.13.14、`uv.lock`。
+- 上層 repository 可能仍有其他使用者變更；不得清理、還原或修改本 repository 外的內容。
+- 未經使用者針對新工作包明確要求，不 stage、commit、push、建立 PR、改 repository visibility
+  或變更 branch protection。
+- 專案現有 `.venv`、Python 3.13 與 `uv.lock`；一律以 locked commands 和 CI 定義為準，不依賴
+  特定 patch 版本已存在於新機器。
 
 ---
 
@@ -315,7 +325,7 @@ runner calls 為空，Ruff、Mypy、offline lock check通過。這不代表 P1-C
 明確沒有開始 OpenTelemetry/exporter/backend、API client、broker/order/fill schema、策略、資料、
 下單、launchd或正式告警。P1-C2已接受；這仍不代表P1-C或P1 Core Gate完成。
 
-### P1-C3 — CI／zero-skip／clean-machine gate：已通過本機獨立驗收
+### P1-C3 — CI／zero-skip／clean-machine gate：已通過本機、clean-machine 與遠端獨立驗收
 
 已實作：
 
@@ -350,6 +360,12 @@ expression 移到 integration test step 後，GitHub Actions run
 `4e795ff1dc6d5b6bc51d4bd0e55149fda3e4cc61` 上通過兩個 jobs：`quality-unit` 為
 `407 passed, 19 deselected`，Ruff/Mypy/lock checks 通過；`postgres-integration` 驗證 PostgreSQL
 16.15 且 `19 passed, 0 skipped`。P1 Core Gate 因此關閉，仍未進入 P2。
+
+Gate closure 文件 commit `2982c0d6a911036a150245e6f408f064d3d8f5df` 另由最終 GitHub Actions
+run [`31869097859`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31869097859)
+再次驗證；兩個 jobs 均為 `success`。其後 `main` 已設定 strict required checks：`quality-unit` 與
+`postgres-integration`，並禁止 force push／branch deletion；repository visibility 經 GitHub API
+核對為 `public`，default branch 為 `main`。
 
 Clean-machine evidence來自 `/private/tmp/seven-lens-p1c3-clean-evidence-20260815/repo` 隔離副本：
 copy時排除原專案 `.venv`、使用全新空 uv cache；第一次 `verify_p1.sh` 與第二次
@@ -488,7 +504,8 @@ P1-C3定點獨立驗收已依下列項目完成：
 ## 15. 已執行的 P1-B Prompt（歷史紀錄，不得重跑）
 
 下列 Prompt 已在本輪完成並由真實 PostgreSQL 驗收，只保留作 scope／acceptance 歷史。
-下一個 AI 不應再次執行；應先讀第 10、14、17 節並獨立驗收 P1-C3 agent回報。
+下一個 AI 不應再次執行；除非 P1 source／migration／workflow 後續被修改，也不應重跑已封關的
+P1 驗收。新 session 應先讀第 10、14、17、18 節，再進行 P2 定義討論。
 
 ```text
 請開始 P1-B：PostgreSQL 權威狀態、append-only audit/domain events、job lease 與 market clock abstraction。
@@ -627,10 +644,111 @@ P1-A 已通過獨立驗收。保留 Paper-only、Tavily authorized pool fail-clo
 12. 測試是否留下 background PostgreSQL、container、port、暫存 DB 或 secrets。
 
 本輪以上項目已全部通過。若 P1-B source/migration 後續變更，必須重新使用真實 PostgreSQL
-驗證。本輪因修改 job service已重新通過真實PostgreSQL 16的19個integration tests；不要直接跳到 Alpaca 下單。
+驗證。本輪authority hardening因修改migration、job service與event schema，已重新通過真實PostgreSQL
+16的33個integration tests與遠端zero-skip job；不要直接跳到 Alpaca 下單。
 
 ---
 
 ## 17. 給下一個 AI 的一句話狀態
 
-> P0與完整P1均已通過本機、clean-machine及獨立GitHub Actions驗收，P1 Core Gate已關閉。公開repository為`ihsieh31/seven-lens-paper-trading`，run `31868962828`的`quality-unit`與`postgres-integration`均成功。現有Keychain read-only secret boundary、explicit telemetry context、封閉五metric／兩span registry、fail-safe facade、PostgreSQL audit/transaction/lease/fencing、deterministic fakes、zero-skip gate與clean-machine scripts；仍沒有OpenTelemetry/exporter、API client、broker/order/fill表、排程或交易能力，也未查詢真實Keychain。下一步先討論並定義P2安全工作包，不得直接開始broker/order implementation。
+> P0、完整P1與authority hardening均已通過本機及獨立GitHub Actions驗收，P1 Core Gate保持關閉；hardening code commit為`e8543b69bfc6a6d2dd9a87837d9d46bb11afc406`，run `31891905869`的`quality-unit`與`postgres-integration`均成功。公開repository為`ihsieh31/seven-lens-paper-trading`，required checks維持strict。現有Keychain read-only secret boundary、explicit telemetry context、PostgreSQL owner/runtime分權、hardened SECURITY DEFINER、typed event/audit registry、bounded persisted JSON、audit/transaction/lease/fencing、zero-skip gate與clean-machine scripts；仍沒有OpenTelemetry/exporter、API client、broker/order/fill表、排程或交易能力，也未查詢真實Keychain。下一步只先討論並定義P2安全工作包，不得直接開始broker/order implementation。
+
+---
+
+## 18. 新 session 起始 Prompt
+
+把以下 Prompt 貼給新的 session；這一輪只做 P2 scope／architecture／acceptance 定義，不寫程式：
+
+```text
+請接手 Seven-Lens Paper Trading 專案。工作目錄是目前 repository root。
+
+先完整閱讀 PROJECT_HANDOFF.md，並檢查目前 Git status、branch、HEAD 與 remote；再閱讀 P2 直接相關文件：
+- docs/MASTER_PLAN.md
+- docs/ARCHITECTURE.md
+- docs/OPERATIONS_AND_SAFETY.md
+- docs/ROADMAP_AND_ACCEPTANCE.md
+- SECURITY.md
+- DECISIONS.md
+- PROGRESS.md
+- ISSUES.md
+- RISK_REGISTER.md
+
+目前權威狀態：P0、完整 P1 與 authority hardening 已完成，P1 Core Gate 保持關閉；public repository 是
+ihsieh31/seven-lens-paper-trading。main 必須包含hardening code commit
+e8543b69bfc6a6d2dd9a87837d9d46bb11afc406；GitHub Actions run 31891905869 的quality-unit與
+postgres-integration均成功，required checks仍為strict。其後若只有handoff/evidence descendant commit，
+以origin/main現況與該commit自己的CI為準，不要求HEAD永遠等於上述code commit。
+
+本次不要寫程式、不要修改文件、不要 stage／commit／push、不要建立 PR，也不要讀取 Keychain、
+索取或使用任何 credential、呼叫 Alpaca 或其他外部交易／資料 API。除非目前狀態與上述證據不符，
+不要重跑已封關的完整 P1 驗收。若 Git status 唯一修改是 PROJECT_HANDOFF.md，這是使用者要求的
+handoff 更新，請保留且不要還原。
+
+本次只完成 P2 — Alpaca Paper 執行安全的需求釐清與工作包定義。請先用繁體中文向我說明金融與
+執行概念，再提出可討論的方案，不要把未確認選項當成決策。至少涵蓋：
+
+1. 將 P2 拆成最小、可獨立驗收且有依賴順序的工作包；指出第一個建議工作包，但不要實作。
+2. 定義 Paper-only broker capability boundary；程式中不得存在 live endpoint、live adapter 或模式切換。
+3. 定義 OrderIntent、broker order、fill、position、cash/NAV ledger、outbox與reconciliation各自的
+   權威來源、責任及允許的狀態轉移。
+4. 定義 submit timeout before/after broker accept、duplicate/out-of-order updates、partial fill、cancel、
+   reject、expire、process crash/restart、stale fencing token與broker/local mismatch的fail-closed行為。
+5. 定義client_order_id、idempotency、transaction/outbox邊界、REST/WebSocket reconciliation與
+   pause-entries／cancel-entries／人工緊急控制語意。
+6. 列出需要使用者決定的金融／營運參數，以及哪些可先用安全provisional值；逐項解釋影響。
+7. 為每個工作包提出可重現的acceptance tests與明確禁止範圍，包含fake broker與fault injection；
+   不得以「API call成功」當成安全驗收。
+8. 說明P2哪些變更會觸發真實PostgreSQL integration、migration restore、concurrency/crash tests及
+   擴大安全review。
+
+回覆格式：先給目前狀態判斷，再解釋關鍵概念、列出待決策問題、提出P2分包方案與建議的第一包，
+最後等待我確認。只有在我完全理解並明確核准後，才規劃或實作程式架構。
+```
+
+---
+
+## 19. P1 authority hardening報告查核、修復與遠端證據
+
+### 確認為本階段問題並已修復
+
+1. PostgreSQL migration/schema owner與application runtime authority未分離。
+2. `SECURITY DEFINER` search path與relation qualification未達可抵抗`pg_temp` shadowing的完整契約。
+3. Audit/domain event接受任意JSON；event name、payload schema與requested transition未封閉綁定。
+4. Persisted `JsonObject`沒有node／width／UTF-8／serialized-size budgets。
+5. 缺少統一`SECURITY.md`與Risk Register lifecycle/evidence taxonomy。
+
+修復由migration 0002、`postgres_roles.py`、typed payload registry、DB check constraints、JSON budgets、
+catalog/runtime adversarial tests與ADR-016落實。application runtime現在必須是外建non-owner login；
+PUBLIC沒有schema CREATE、database TEMP或protected function EXECUTE。functions固定
+`pg_catalog, public, pg_temp`並schema-qualify authoritative objects。
+
+### 是P2-entry契約、但不是現存可利用path
+
+- Config binding：目前沒有service composition root；已固定raw mapping只存在exact-schema parser edge、
+  adapter只收typed config，P2不得用generic configuration bag。
+- DB DSN/credential：目前沒有長駐runtime credential composition；已固定owner DSN不得進runtime，
+  runtime需exact secret ref／bounded reveal，任何DSN不得進snapshot、argv、log、telemetry、audit或exception。
+
+兩項都在P2加入長駐process前是blocker，但本輪不虛構尚不存在的adapter/composition implementation。
+
+### 未證實或依法延後
+
+- 未證實Keychain必須改為persistent-reference兩段查詢：Apple contract與現行exact service/account +
+  match-all 0/1/many fail-closed behavior沒有提供此必要性，因此未改native boundary。
+- Native Keychain smoke是真實evidence gap，但會建立／刪除disposable item，未獲該mutation授權；沒有
+  查詢現有item，fake tests也未被冒充為native evidence。
+- Coverage threshold與security-static／dependency/SBOM/license/secret-scan lane屬獨立quality／
+  supply-chain工作包，不是本次可重現P1 exploit；未靜默改變ADR-015兩個required jobs與成本／權限。
+
+### 驗收與發布
+
+- Local locked gate：Ruff format/lint、Mypy 59 source files、`440 passed, 33 deselected`。
+- 真實digest-pinned PostgreSQL 16.15：`33 passed, 0 skipped`，包含migration up/down/up、catalog ACL、
+  runtime正常repository path、direct DML／ALTER trigger／function replacement／TEMP denial、owner temp
+  shadowing與stale fencing。
+- Code commit：`e8543b69bfc6a6d2dd9a87837d9d46bb11afc406`。
+- GitHub Actions run [`31891905869`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31891905869)：
+  `quality-unit`與`postgres-integration`均為`success`；遠端數字分別為`440 passed, 33 deselected`與
+  `33 passed`。
+- 未讀取／修改Keychain，未使用broker/model/data API、repository secret或真實credential；沒有P2
+  broker/order/fill、scheduler、launchd或live path。

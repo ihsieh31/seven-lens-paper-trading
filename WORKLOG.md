@@ -322,4 +322,8 @@
 - 真實digest-pinned PostgreSQL 16.15：第一輪32 tests中只有4個舊fixture/version expectation不相容；
   更新為typed registry與migration version 2後通過。加入catalog ACL/proconfig斷言後最終為
   `33 passed, 0 skipped`；runtime-role 13 cases一次通過。
+- Code commit `e8543b69bfc6a6d2dd9a87837d9d46bb11afc406`已直接push到public `main`；GitHub
+  Actions run [`31891905869`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31891905869)
+  兩jobs均成功，遠端quality為`440 passed, 33 deselected`、PostgreSQL為`33 passed`。push使用既有
+  repository admin bypass等待checks，沒有force push且完成後required checks實際全綠。
 - 未讀取或修改Keychain，未使用broker/model/data API或真實credential，未加入P2交易能力。

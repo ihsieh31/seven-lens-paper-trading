@@ -48,7 +48,10 @@
   `pg_catalog, public, pg_temp`與完整schema qualification、PUBLIC CREATE/TEMP/EXECUTE revoke、typed
   domain/audit payload registry、persisted JSON resource budgets、`SECURITY.md`與Risk Register lifecycle。
   真實PostgreSQL已驗證runtime正常repository path、direct DML／trigger／function／TEMP denial、temp
-  shadowing、stale fencing、catalog ACL與migration up/down/up；遠端CI證據待本次push後補記。
+  shadowing、stale fencing、catalog ACL與migration up/down/up；code commit
+  `e8543b69bfc6a6d2dd9a87837d9d46bb11afc406`的GitHub Actions run
+  [`31891905869`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31891905869)
+  亦通過：`quality-unit`為`440 passed, 33 deselected`，`postgres-integration`為`33 passed`。
 
 ## 尚未開始
 
