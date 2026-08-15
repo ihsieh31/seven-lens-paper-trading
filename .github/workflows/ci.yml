@@ -55,8 +55,6 @@ jobs:
     timeout-minutes: 20
     env:
       REQUIRE_POSTGRES_INTEGRATION: "1"
-      TEST_DATABASE_URL: >-
-        postgresql://seven_lens_ci:p1c3-disposable-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/seven_lens_p1
     services:
       postgres:
         # Docker Official Image, reviewed tag 16.15-alpine (Alpine 3.24).
@@ -110,4 +108,7 @@ jobs:
             exit 1
           fi
       - name: Run zero-skip PostgreSQL integration tests
+        env:
+          TEST_DATABASE_URL: >-
+            postgresql://seven_lens_ci:p1c3-disposable-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/seven_lens_p1
         run: uv run --locked pytest tests/integration -m integration -ra --tb=short
