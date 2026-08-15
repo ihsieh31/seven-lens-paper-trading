@@ -24,7 +24,13 @@ from seven_lens.application.job_service import (
     StaleLeaseError,
     transition_job_with_audit,
 )
-from seven_lens.domain.events import AuditEvent, DomainEvent
+from seven_lens.domain.events import (
+    AuditEvent,
+    DomainEvent,
+    JobCreatedPayload,
+    JobStatusTransitionAuditPayload,
+    JobTransitionReason,
+)
 from seven_lens.domain.jobs import JobSpec, JobStatus, LeaseDuration, LeaseGrant
 from seven_lens.domain.value_objects import (
     RunId,
@@ -75,7 +81,6 @@ def domain_event(
 ) -> DomainEvent:
     return DomainEvent.create(
         event_id=UUID(event_id),
-        event_type="job.created",
         schema_version=SCHEMA_VERSION,
         aggregate_type="job",
         aggregate_id=aggregate_id,
@@ -84,20 +89,26 @@ def domain_event(
         correlation_id=UUID("223e4567-e89b-12d3-a456-426614174001"),
         causation_id=None,
         occurred_at=OCCURRED_AT,
-        payload={"status": "PLANNED", "sequence": sequence},
+        payload=JobCreatedPayload(status=JobStatus.PLANNED, attempt_count=0),
         producer_version="seven-lens-tests/1.0",
     )
 
 
-def audit_event(audit_id: str, *, event_type: str = "job.audit") -> AuditEvent:
+def audit_event(
+    audit_id: str,
+    *,
+    target_status: JobStatus = JobStatus.RUNNING,
+) -> AuditEvent:
     return AuditEvent.create(
         audit_id=UUID(audit_id),
-        event_type=event_type,
         run_id=RUN_ID,
         correlation_id=UUID("223e4567-e89b-12d3-a456-426614174002"),
         causation_id=None,
         occurred_at=OCCURRED_AT,
-        payload={"status": "PLANNED", "source": "test"},
+        payload=JobStatusTransitionAuditPayload(
+            target_status=target_status,
+            reason_code=JobTransitionReason.SCHEDULED,
+        ),
         producer_version="seven-lens-tests/1.0",
     )
 
@@ -365,7 +376,10 @@ def test_expiry_takeover_increments_token_and_fences_stale_owner(
     assert released_at is not None
     assert release_reason == "EXPIRED_TAKEOVER"
 
-    stale_audit = audit_event("223e4567-e89b-12d3-a456-426614174050")
+    stale_audit = audit_event(
+        "223e4567-e89b-12d3-a456-426614174050",
+        target_status=JobStatus.FAILED,
+    )
     with pytest.raises(StaleLeaseError):
         transition_job_with_audit(
             PostgresUnitOfWork(migrated_postgres),

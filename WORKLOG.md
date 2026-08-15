@@ -290,3 +290,36 @@
 
 - P1 Core Gate已有獨立repository遠端證據並正式關閉。
 - 未使用repository secrets、Keychain、broker/model/data API或真實credential；未建立broker adapter、order/fill schema、策略、行情、排程、launchd或live path，也未開始P2 implementation。
+
+## 2026-08-15 — P1 foundation hardening報告查核與修復
+
+### 查核結論
+
+- 確認為目前P1/P2-entry authority問題：runtime/schema-owner未分離、privileged function search-path
+  defense不完整、audit/domain payload可任意擴張、persisted JSON無資源budgets、缺統一安全邊界文件與
+  Risk Register狀態規則。
+- 確認為P2-entry契約但非現存可利用path：config composition與runtime DB credential composition；
+  目前沒有service composition root或長駐runtime，先固定fail-closed契約，不虛構實作。
+- 未確認為漏洞：Keychain必須改為persistent-reference兩段查詢。Apple contract與現行exact query未
+  提供必須改寫的證據，因此保持現有fail-closed ambiguity detection。
+- Deferred：native Keychain smoke需建立／刪除disposable item且未獲該mutation授權；coverage與新增
+  security-static CI job屬獨立quality/supply-chain gate，不是本次可重現P1 exploit。
+
+### 修復內容
+
+- 新增migration 0002與runtime role provision/verify；owner與runtime分離，PUBLIC schema CREATE、database
+  TEMP與protected function EXECUTE撤銷，lease/status functions固定trusted search path並schema qualify。
+- event/audit只接受closed typed payload，event type由payload衍生；job service在telemetry/UoW前核對
+  target，PostgreSQL constraints獨立執行同一registry。
+- `JsonObject`加入depth、nodes、object/list width、key/string UTF-8與canonical serialized byte limits。
+- 新增`SECURITY.md`、ADR-016、risk lifecycle與fixed/deferred/assessed issue evidence；同步README、
+  architecture、operations、progress與handoff。
+
+### 本機證據
+
+- 完整locked gate：Ruff format/lint、Mypy `59 source files`、non-integration
+  `440 passed, 33 deselected`。
+- 真實digest-pinned PostgreSQL 16.15：第一輪32 tests中只有4個舊fixture/version expectation不相容；
+  更新為typed registry與migration version 2後通過。加入catalog ACL/proconfig斷言後最終為
+  `33 passed, 0 skipped`；runtime-role 13 cases一次通過。
+- 未讀取或修改Keychain，未使用broker/model/data API或真實credential，未加入P2交易能力。

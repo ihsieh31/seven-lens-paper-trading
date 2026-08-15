@@ -44,6 +44,11 @@
 - [x] P1-C3 已通過定點獨立驗收：官方 release／commit 與本機 RepoDigest 查核吻合；16 個對抗測試、Ruff、Mypy、`407 passed, 19 deselected`、真實 PostgreSQL 16.15 `19 passed, 0 skipped` 均通過。required mode 的 missing URL 與 SQLite 各自於 collection 前以 exit 4 fail closed；另一份排除 `.venv` 且使用全新空 uv cache 的副本也通過兩個一鍵命令，lock／volume hash 不變且 owned container 為空。
 - [x] 建立公開且獨立的 [`ihsieh31/seven-lens-paper-trading`](https://github.com/ihsieh31/seven-lens-paper-trading) repository；初始遠端 workflow 的 invalid-context 問題在獨立驗收中被發現並修正。
 - [x] GitHub Actions run [`31868962828`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31868962828) 在 commit `4e795ff1dc6d5b6bc51d4bd0e55149fda3e4cc61` 上通過：`quality-unit` 為 `407 passed, 19 deselected`，Ruff/Mypy/lock checks 全通過；`postgres-integration` 使用 PostgreSQL 16.15 且 `19 passed, 0 skipped`。P1 Core Gate 因此關閉。
+- [x] 完成P1 authority hardening：migration/runtime PostgreSQL roles分離、`SECURITY DEFINER`
+  `pg_catalog, public, pg_temp`與完整schema qualification、PUBLIC CREATE/TEMP/EXECUTE revoke、typed
+  domain/audit payload registry、persisted JSON resource budgets、`SECURITY.md`與Risk Register lifecycle。
+  真實PostgreSQL已驗證runtime正常repository path、direct DML／trigger／function／TEMP denial、temp
+  shadowing、stale fencing、catalog ACL與migration up/down/up；遠端CI證據待本次push後補記。
 
 ## 尚未開始
 
@@ -57,6 +62,10 @@
 P1-C3 沒有建立 hosted macOS job、OpenTelemetry/exporter/backend、broker adapter、Tavily/OpenAI
 client、資料下載、策略、下單、排程或 launchd。P1 Core Gate 已有遠端 CI 證據並關閉，但沒有
 擴張交易權限或進入 P2 implementation。
+
+本次hardening沒有修改native Keychain query、查詢／建立／刪除Keychain item、加入coverage threshold或
+第三個CI job，也沒有實作P2 config/DB credential composition；這些分別是未證實建議、需另行授權的
+native evidence gap，或後續quality/P2 composition工作包，詳見ADR-016與`ISSUES.md`。
 
 ## Gate 規則
 

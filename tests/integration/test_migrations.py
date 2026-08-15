@@ -41,13 +41,13 @@ def test_clean_apply_repeat_verify_and_schema_contract(test_database_url: str) -
     try:
         assert current_version(test_database_url) == 0
 
-        assert migrate(test_database_url) == 1
-        assert current_version(test_database_url) == 1
-        assert verify_schema(test_database_url) == 1
+        assert migrate(test_database_url) == 2
+        assert current_version(test_database_url) == 2
+        assert verify_schema(test_database_url) == 2
 
         # Applying an already-applied migration is idempotent and checksum-checked.
-        assert migrate(test_database_url) == 1
-        assert verify_schema(test_database_url) == 1
+        assert migrate(test_database_url) == 2
+        assert verify_schema(test_database_url) == 2
 
         with _connection(test_database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
@@ -99,7 +99,12 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
     _drop_all_migrations(test_database_url)
     try:
         assert current_version(test_database_url) == 0
-        assert migrate(test_database_url) == 1
+        assert migrate(test_database_url) == 2
+
+        assert rollback(test_database_url) == 1
+        assert current_version(test_database_url) == 1
+        with pytest.raises(MigrationError, match="migration version does not match"):
+            verify_schema(test_database_url)
 
         assert rollback(test_database_url) == 0
         assert current_version(test_database_url) == 0
@@ -107,10 +112,81 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
             verify_schema(test_database_url)
 
         # A restored/disposable database can be rebuilt exactly from the migration.
-        assert migrate(test_database_url) == 1
-        assert verify_schema(test_database_url) == 1
+        assert migrate(test_database_url) == 2
+        assert verify_schema(test_database_url) == 2
     finally:
         _drop_all_migrations(test_database_url)
+
+
+def test_privileged_schema_catalog_is_hardened(migrated_postgres: str) -> None:
+    privileged_functions = (
+        "acquire_job_lease",
+        "renew_job_lease",
+        "release_job_lease",
+        "transition_job_status",
+        "guard_job_instance_status_write",
+    )
+    protected_functions = (
+        *privileged_functions,
+        "domain_event_payload_is_valid",
+        "audit_event_payload_is_valid",
+    )
+    with _connection(migrated_postgres) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT p.proname, p.proconfig, pg_catalog.pg_get_functiondef(p.oid),
+                   EXISTS (
+                       SELECT 1
+                       FROM pg_catalog.aclexplode(
+                           COALESCE(p.proacl, pg_catalog.acldefault('f', p.proowner))
+                       ) AS privilege
+                       WHERE privilege.grantee = 0
+                         AND privilege.privilege_type = 'EXECUTE'
+                   ) AS public_execute
+            FROM pg_catalog.pg_proc AS p
+            JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'public' AND p.proname = ANY(%s)
+            ORDER BY p.proname
+            """,
+            (list(protected_functions),),
+        )
+        rows = cursor.fetchall()
+
+        assert {row[0] for row in rows} == set(protected_functions)
+        assert all(row[3] is False for row in rows)
+        by_name = {row[0]: row for row in rows}
+        for function_name in privileged_functions:
+            _, settings, definition, _ = by_name[function_name]
+            assert settings == ["search_path=pg_catalog, public, pg_temp"]
+            if function_name != "guard_job_instance_status_write":
+                assert "public.job_instances" in definition
+
+        cursor.execute(
+            """
+            SELECT
+                EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_namespace AS n,
+                         LATERAL pg_catalog.aclexplode(
+                             COALESCE(n.nspacl, pg_catalog.acldefault('n', n.nspowner))
+                         ) AS privilege
+                    WHERE n.nspname = 'public'
+                      AND privilege.grantee = 0
+                      AND privilege.privilege_type = 'CREATE'
+                ),
+                EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_database AS d,
+                         LATERAL pg_catalog.aclexplode(
+                             COALESCE(d.datacl, pg_catalog.acldefault('d', d.datdba))
+                         ) AS privilege
+                    WHERE d.datname = pg_catalog.current_database()
+                      AND privilege.grantee = 0
+                      AND privilege.privilege_type = 'TEMPORARY'
+                )
+            """
+        )
+        assert cursor.fetchone() == (False, False)
 
 
 def test_database_constraints_reject_invalid_identity_and_payload(
@@ -228,9 +304,10 @@ def test_audit_and_domain_event_ledgers_are_database_enforced_append_only(
                 audit_id, event_type, run_id, correlation_id, causation_id,
                 occurred_at, payload, producer_version
             ) VALUES (
-                '00000000-0000-0000-0000-000000000101', 'job_created', NULL,
+                '00000000-0000-0000-0000-000000000101', 'job.status_changed', NULL,
                 '00000000-0000-0000-0000-000000000120', NULL,
-                CURRENT_TIMESTAMP, '{"ok": true}', 'test'
+                CURRENT_TIMESTAMP,
+                '{"reason_code": "SCHEDULED", "target_status": "RUNNING"}', 'test'
             )
             """
         )
@@ -241,11 +318,11 @@ def test_audit_and_domain_event_ledgers_are_database_enforced_append_only(
                 aggregate_id, aggregate_sequence, run_id, correlation_id, occurred_at,
                 payload, producer_version
             ) VALUES (
-                '00000000-0000-0000-0000-000000000102', 'created', '1.0.0',
+                '00000000-0000-0000-0000-000000000102', 'job.created', '1.0.0',
                 'job', 'append-only-job', 1,
                 '00000000-0000-0000-0000-000000000110',
                 '00000000-0000-0000-0000-000000000120', CURRENT_TIMESTAMP,
-                '{"ok": true}'::jsonb, 'test'
+                '{"attempt_count": 0, "status": "PLANNED"}'::jsonb, 'test'
             )
             """
         )
@@ -285,7 +362,10 @@ def test_audit_and_domain_event_ledgers_are_database_enforced_append_only(
             "SELECT payload FROM audit_events "
             "WHERE audit_id = '00000000-0000-0000-0000-000000000101'"
         )
-        assert cursor.fetchone()[0] == {"ok": True}
+        assert cursor.fetchone()[0] == {
+            "reason_code": "SCHEDULED",
+            "target_status": "RUNNING",
+        }
 
 
 @pytest.mark.parametrize(
@@ -328,8 +408,9 @@ def test_domain_event_id_sequence_and_ordering_constraints_are_atomic(
             aggregate_id, aggregate_sequence, run_id, correlation_id, occurred_at,
             recorded_at,
             payload, producer_version
-        ) VALUES (%s, 'created', '1.0.0', 'job', 'sequence-job', %s,
-                  %s, %s, CURRENT_TIMESTAMP, %s, '{"ok": true}'::jsonb, 'test')
+        ) VALUES (%s, 'job.created', '1.0.0', 'job', 'sequence-job', %s,
+                  %s, %s, CURRENT_TIMESTAMP, %s,
+                  '{"attempt_count": 0, "status": "PLANNED"}'::jsonb, 'test')
     """
     run_id = "00000000-0000-0000-0000-000000000301"
     correlation_id = "00000000-0000-0000-0000-000000000310"

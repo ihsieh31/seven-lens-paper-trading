@@ -178,6 +178,16 @@ CREATED -> RISK_APPROVED -> OUTBOX_PENDING -> SUBMITTING
 - broker account/position mirrors、lots、NAV；
 - audit events、control commands、alerts、model calls。
 
+Migration/schema owner與application runtime是不同capabilities。owner只執行migration、disposable
+restore drill與runtime-role provisioning；runtime必須是外部建立、通過catalog proof的non-owner login，
+不得擁有schema CREATE、database TEMP、authoritative object ownership、direct lease/job mutation或
+function/trigger replacement權限。privileged functions使用`pg_catalog, public, pg_temp`固定search path並
+完整schema-qualify authoritative objects；細節見`SECURITY.md`與ADR-016。
+
+權威domain/audit ledger只接受registered typed payload，不保存raw LLM/web/evidence JSON；PostgreSQL
+constraint獨立執行同一registry。所有persisted `JsonObject`套用depth、node、width、key/string與final
+serialized byte budgets。大型raw evidence只能進未來另行驗收的content-addressed boundary。
+
 ### Parquet + DuckDB（研究）
 
 - point-in-time bars/factors；

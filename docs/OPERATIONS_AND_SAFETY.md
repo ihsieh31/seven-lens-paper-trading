@@ -204,3 +204,18 @@ Codex scheduled tasks 只能在獨立 worktree 或只讀模式執行測試、報
   `docker prune` 或停止其他 container。
 - `uv` 是 clean-machine 唯一 bootstrap prerequisite；verification script 不讀 `.env`、Keychain 或
   credential。workflow 檔存在只代表待啟用實作，不能替代獨立 repository 的遠端 required-job 證據。
+
+## 14. PostgreSQL authority與credential runbook
+
+- operator先以owner connection執行checksummed migration；owner DSN只存在於operator-controlled的
+  bounded composition，不進長駐process、argv、snapshot、log、telemetry、audit或exception。
+- runtime login由operator外部建立，且必須`LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE`、不是owner
+  member。credential不得寫入repository或database metadata。
+- owner呼叫`provision_runtime_role()`後，必須立即以`verify_runtime_role()`核對owner/runtime identity、
+  role flags、ownership與exact privilege matrix；任何不符停止部署／啟動。
+- schema/migration或grant變更必須跑真實PostgreSQL gate，包含catalog ACL、runtime direct-DML、
+  ALTER trigger、function replacement、TEMP relation、temp shadow、repository正常路徑與stale fencing。
+- 發現privilege drift時，先停止runtime writes並撤銷runtime role，再由owner核對catalog與migration
+  checksum；修復、全量PostgreSQL gate與authoritative-state reconciliation完成前不得恢復後續交易能力。
+- 目前沒有service composition root；P2不得在runtime DB exact secret ref、bounded reveal與startup proof
+  完成前加入常駐process。native Keychain smoke若會建立／刪除item，需另行授權且只能用disposable namespace。

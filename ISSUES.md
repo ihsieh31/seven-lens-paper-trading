@@ -84,3 +84,61 @@
 - 影響：安全 audit payload 可能無法寫入、lease 無法取得，或 fenced status transition 無法轉回 domain object；純單元測試與 SQLite substitute 都無法證明這些 PostgreSQL semantics。
 - 處置：補上 scalar-safe `ELSE`、完整限定 table column、讓 transition 回傳完整 job identity/state；並補強單一 open lease unique index、security-definer lease functions、固定 search path、function execute revoke 與 generic API-key pattern。
 - 驗證：PostgreSQL 16 container 上 migration integration 9/9、persistence/lease integration 9/9，完整 `uv run pytest -q` 242 tests 通過；up/down/up restore、append-only、rollback、concurrency、takeover 與 fencing 均由真實 PostgreSQL 執行。
+
+## CLOSED-011：PostgreSQL runtime authority與SECURITY DEFINER trust boundary不足
+
+- 嚴重度：Critical
+- 狀態：Closed（2026-08-15；控制需持續回歸）
+- 問題：P1 migration owner同時可作application connection，且privileged functions雖有固定search path，
+  仍未把`pg_catalog`放在trusted schema前、未明示`pg_temp`最後，也沒有runtime role catalog proof。
+- 處置：migration 0002完整schema-qualify authoritative objects，固定`pg_catalog, public, pg_temp`，
+  撤銷PUBLIC schema CREATE／database TEMP／protected EXECUTE；新增外部建立runtime login的bounded
+  provision與verify API，禁止owner membership、ownership、direct DML、trigger/function replacement與temp。
+- 驗證：真實PostgreSQL 16 runtime-role、catalog、temp-shadowing、stale fencing與repository integration tests。
+
+## CLOSED-012：權威event/audit接受任意或無資源上限JSON
+
+- 嚴重度：High
+- 狀態：Closed（2026-08-15；新增event type時重審）
+- 問題：原本application可建立任意`JsonObject` payload，資料庫只檢查JSON object／secret pattern，且
+  canonical JSON沒有depth、node、width、key/string/final byte budgets。
+- 處置：只允許typed `JobCreatedPayload`與`JobStatusTransitionAuditPayload`，event type由payload衍生；
+  application在任何telemetry/UoW前核對transition target，migration 0002以constraints獨立執行同一registry；
+  `JsonObject`加入各項固定資源上限與不回顯input的bounded failure。
+- 驗證：typed-boundary、resource-boundary、transaction-ordering與真實PostgreSQL constraint tests。
+
+## DEFERRED-013：macOS native Keychain smoke evidence
+
+- 嚴重度：Medium
+- 狀態：Deferred；P2 service composition前重審
+- 判斷：缺少native smoke是真實證據缺口，不是已證實的read-only adapter漏洞。現有fake tests不得冒充
+  native evidence；目前也沒有授權建立／刪除disposable Keychain item。
+- 條件：另行核准專用service/account namespace、建立與精確cleanup，且絕不查詢現有真實credential。
+
+## DEFERRED-014：coverage與security-static／supply-chain CI gate
+
+- 嚴重度：Medium
+- 狀態：Deferred；獨立quality工作包
+- 判斷：缺少coverage threshold、dependency audit、SBOM、license／secret scan是quality hardening gap，
+  但不是本次可重現的P1 authority exploit。現有ADR-015固定兩個required jobs，不能未定義工具、成本、
+  false-positive policy與branch-protection migration就靜默加入第三job。
+- 關閉條件：另立ADR與接受基線，證明不讀secret、不擴權、不降低既有zero-skip gates，並取得遠端CI證據。
+
+## DEFERRED-015：P2 config與runtime DB credential composition
+
+- 嚴重度：High
+- 狀態：Deferred；P2加入任何長駐process前的blocker
+- 判斷：目前不存在service composition root、runtime process或broker/database credential loader，因此不是
+  可利用的現存execution path；但不能等adapter寫完才定義。
+- 已固定契約：raw config只留在exact-schema parser edge，adapter只收typed config；runtime使用exact
+  secret ref與最窄reveal點；owner/runtime DSN不得進snapshot、argv、log、telemetry、audit或exception。
+- 關閉條件：P2 composition實作與adversarial tests通過，且runtime role proof在啟動前fail closed。
+
+## ASSESSED-016：Keychain必須改成persistent-reference兩段查詢
+
+- 嚴重度：Not confirmed
+- 狀態：Assessed（2026-08-15）
+- 判斷：目前query是exact generic-password service/account、`kSecMatchLimitAll`、return data並對0／1／多筆
+  fail closed；Apple文件允許match-all回傳多筆result，且generic-password service/account屬primary key。
+  未取得平台文件或native reproduction證明return-data + match-all不安全，因此不以推測修改native boundary。
+- 重審條件：Apple行為改變、OS/PyObjC升級、native ambiguous-result reproduction或官方文件明確要求。

@@ -10,7 +10,23 @@ from typing import NoReturn, cast
 type JsonScalar = str | int | float | bool | None
 type JsonValue = JsonScalar | list[JsonValue] | dict[str, JsonValue]
 
-_MAX_JSON_DEPTH = 32
+MAX_JSON_DEPTH = 32
+MAX_SERIALIZED_BYTES = 65_536
+MAX_TOTAL_NODES = 4_096
+MAX_OBJECT_MEMBERS = 256
+MAX_LIST_ITEMS = 512
+MAX_KEY_BYTES = 128
+MAX_STRING_BYTES = 16_384
+
+
+@dataclass(slots=True)
+class _JsonBudget:
+    nodes: int = 0
+
+    def consume_node(self) -> None:
+        self.nodes += 1
+        if self.nodes > MAX_TOTAL_NODES:
+            raise ValueError("persisted payload exceeds maximum total JSON nodes")
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,11 +38,17 @@ class JsonObject:
     def __post_init__(self) -> None:
         if type(self._canonical) is not str:
             raise ValueError("canonical JSON must be text")
+        _encoded_size(self._canonical, field="canonical JSON", maximum=MAX_SERIALIZED_BYTES)
         try:
             decoded = json.loads(self._canonical, parse_constant=_reject_json_constant)
         except (TypeError, ValueError, json.JSONDecodeError) as error:
             raise ValueError("canonical JSON must be valid and finite") from error
-        normalized = _normalize_json(decoded, depth=0, active_container_ids=set())
+        normalized = _normalize_json(
+            decoded,
+            depth=0,
+            active_container_ids=set(),
+            budget=_JsonBudget(),
+        )
         if not isinstance(normalized, dict):
             raise ValueError("persisted payload must be a JSON object")
         expected = json.dumps(
@@ -42,7 +64,12 @@ class JsonObject:
     @classmethod
     def from_value(cls, value: object) -> JsonObject:
         """Validate and snapshot an object using strict JSON-safe semantics."""
-        normalized = _normalize_json(value, depth=0, active_container_ids=set())
+        normalized = _normalize_json(
+            value,
+            depth=0,
+            active_container_ids=set(),
+            budget=_JsonBudget(),
+        )
         if not isinstance(normalized, dict):
             raise ValueError("persisted payload must be a JSON object")
         canonical = json.dumps(
@@ -52,10 +79,7 @@ class JsonObject:
             separators=(",", ":"),
             sort_keys=True,
         )
-        try:
-            canonical.encode("utf-8", errors="strict")
-        except UnicodeEncodeError as error:
-            raise ValueError("persisted payload strings must contain valid Unicode") from error
+        _encoded_size(canonical, field="persisted payload", maximum=MAX_SERIALIZED_BYTES)
         return cls(canonical)
 
     def to_dict(self) -> dict[str, JsonValue]:
@@ -80,18 +104,24 @@ def _normalize_json(
     *,
     depth: int,
     active_container_ids: set[int],
+    budget: _JsonBudget,
 ) -> JsonValue:
-    if depth > _MAX_JSON_DEPTH:
+    if depth > MAX_JSON_DEPTH:
         raise ValueError("persisted payload exceeds maximum JSON depth")
+    budget.consume_node()
     if value is None or type(value) in {bool, int, str}:
-        if type(value) is str and "\x00" in value:
-            raise ValueError("persisted payload strings must not contain NUL")
+        if type(value) is str:
+            if "\x00" in value:
+                raise ValueError("persisted payload strings must not contain NUL")
+            _encoded_size(value, field="persisted payload string", maximum=MAX_STRING_BYTES)
         return cast(JsonScalar, value)
     if type(value) is float:
         if not math.isfinite(value):
             raise ValueError("persisted payload numbers must be finite")
         return value
     if type(value) is dict:
+        if len(value) > MAX_OBJECT_MEMBERS:
+            raise ValueError("persisted payload object exceeds maximum members")
         container_id = _enter_container(value, active_container_ids)
         try:
             result: dict[str, JsonValue] = {}
@@ -101,15 +131,19 @@ def _normalize_json(
                 key = raw_key
                 if "\x00" in key:
                     raise ValueError("persisted payload object keys must not contain NUL")
+                _encoded_size(key, field="persisted payload object key", maximum=MAX_KEY_BYTES)
                 result[key] = _normalize_json(
                     nested_value,
                     depth=depth + 1,
                     active_container_ids=active_container_ids,
+                    budget=budget,
                 )
             return result
         finally:
             active_container_ids.remove(container_id)
     if type(value) is list:
+        if len(value) > MAX_LIST_ITEMS:
+            raise ValueError("persisted payload list exceeds maximum items")
         container_id = _enter_container(value, active_container_ids)
         try:
             return [
@@ -117,6 +151,7 @@ def _normalize_json(
                     item,
                     depth=depth + 1,
                     active_container_ids=active_container_ids,
+                    budget=budget,
                 )
                 for item in cast(list[object], value)
             ]
@@ -135,3 +170,13 @@ def _enter_container(value: object, active_container_ids: set[int]) -> int:
 
 def _reject_json_constant(value: str) -> NoReturn:
     raise ValueError(f"non-finite JSON constant: {value}")
+
+
+def _encoded_size(value: str, *, field: str, maximum: int) -> int:
+    try:
+        size = len(value.encode("utf-8", errors="strict"))
+    except UnicodeEncodeError as error:
+        raise ValueError("persisted payload strings must contain valid Unicode") from error
+    if size > maximum:
+        raise ValueError(f"{field} exceeds maximum UTF-8 bytes")
+    return size

@@ -133,7 +133,7 @@ class PostgresDomainEventRepository:
                     event.correlation_id,
                     event.causation_id,
                     event.occurred_at.value,
-                    Jsonb(event.payload.to_dict()),
+                    Jsonb(event.payload.to_json_object().to_dict()),
                     event.producer_version,
                 ),
             )
@@ -167,7 +167,7 @@ class PostgresAuditEventRepository:
                     event.correlation_id,
                     event.causation_id,
                     event.occurred_at.value,
-                    Jsonb(event.payload.to_dict()),
+                    Jsonb(event.payload.to_json_object().to_dict()),
                     event.producer_version,
                 ),
             )

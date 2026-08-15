@@ -135,3 +135,34 @@
   run `31868962828` 在 commit `4e795ff1dc6d5b6bc51d4bd0e55149fda3e4cc61` 上讓 `quality-unit` 與
   `postgres-integration` 均成功，後者使用 PostgreSQL 16.15 且為 `19 passed, 0 skipped`。P1 Core
   Gate 因此關閉；此決策不授權 P2 或任何交易能力。
+
+## ADR-016：P1 權威邊界補強與 P2 composition 前置契約
+
+- 日期：2026-08-15
+- 狀態：Accepted
+- PostgreSQL authority：migration/schema owner 與 runtime login 必須分離。owner 只執行 checksummed
+  migration、disposable restore drill 與 runtime role provisioning；長駐 process 不得取得 owner DSN。
+  runtime role 必須由 operator 外部建立，再以 `provision_runtime_role()` 配置 bounded grants，並以
+  `verify_runtime_role()` 證明非 owner、無 elevated flags／owner membership／schema CREATE／database
+  TEMP／直接 authoritative state mutation或物件 ownership。任一 drift 都 fail closed。
+- Privileged SQL：所有 lease/status `SECURITY DEFINER` functions 固定 `search_path = pg_catalog,
+  public, pg_temp`，authoritative relations／row types完整 schema qualification；`PUBLIC`不得擁有
+  protected function EXECUTE、public schema CREATE或database TEMPORARY。這些是 migration catalog
+  acceptance，不只依 source string。
+- Ledger payload：domain/audit event 改採封閉 typed payload registry，event type由payload決定；application
+  service在 telemetry/UoW前綁定 requested transition，PostgreSQL check constraint獨立執行同一 allowlist。
+  arbitrary raw JSON、exception、LLM/web content與 evidence不得直接寫入權威 ledger。
+- JSON budgets：所有 persisted `JsonObject` 固定限制depth、total nodes、object/list width、key/string
+  UTF-8 bytes與final canonical serialized bytes；錯誤訊息固定且不回顯payload。未來raw evidence需使用
+  另行設計的content-addressed boundary，不得藉由放寬ledger budget處理。
+- P2 composition：目前尚無service composition root或runtime DB credential source。P2在加入長駐process
+  前，必須只把raw config留在exact-schema parser edge，adapter只收typed config；另定義runtime DB
+  exact secret ref與最窄plaintext reveal點。owner/runtime DSN禁止進config snapshot、argv、log、telemetry、
+  audit或exception。
+- 驗收邊界：macOS Keychain現行exact service/account + `kSecMatchLimitAll`用於偵測ambiguous result；沒有
+  Apple文件或native reproduction證明必須改成兩段persistent-ref查詢，因此不把該建議當成已證實漏洞。
+  fake contract tests也不冒充native smoke；任何建立／刪除disposable Keychain item的smoke需另行授權。
+  coverage threshold與新增security-static CI job屬後續quality/supply-chain gate，不是本次已證實P1 exploit，
+  不得在未定義成本、工具、false-positive policy與required-check migration前靜默加入。
+- 理由：P1建立的資料庫、audit與secret邊界會直接承載P2；在加入broker能力前補齊可由真實PostgreSQL
+  證明的authority invariants，同時避免把未證實或屬後續composition/quality階段的要求誤報為現存漏洞。

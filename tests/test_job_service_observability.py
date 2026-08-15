@@ -24,7 +24,12 @@ from seven_lens.application.job_service import (
 )
 from seven_lens.application.ports.persistence import UnitOfWork
 from seven_lens.application.ports.telemetry import AttributeKey, MetricInstrument, MetricPoint
-from seven_lens.domain.events import AuditEvent, RecordedAuditEvent
+from seven_lens.domain.events import (
+    AuditEvent,
+    JobStatusTransitionAuditPayload,
+    JobTransitionReason,
+    RecordedAuditEvent,
+)
 from seven_lens.domain.jobs import JobInstance, JobSpec, JobStatus, LeaseGrant
 from seven_lens.domain.value_objects import RunId, TradingDate, UtcTimestamp
 from seven_lens.observability.context import TelemetryContext
@@ -61,12 +66,14 @@ def make_grant() -> LeaseGrant:
 def make_audit() -> AuditEvent:
     return AuditEvent.create(
         audit_id=UUID("323e4567-e89b-12d3-a456-426614174010"),
-        event_type="job.status_changed",
         run_id=RUN_ID,
         correlation_id=UUID("323e4567-e89b-12d3-a456-426614174011"),
         causation_id=None,
         occurred_at=NOW,
-        payload={"status": "RUNNING"},
+        payload=JobStatusTransitionAuditPayload(
+            target_status=JobStatus.RUNNING,
+            reason_code=JobTransitionReason.SCHEDULED,
+        ),
         producer_version="tests/1.0",
     )
 
@@ -245,6 +252,31 @@ def test_audit_and_telemetry_identity_mismatch_fails_before_all_side_effects(
     assert metrics.attempts == []
     assert unit_of_work.pending_job is None
     assert unit_of_work.pending_audit is None
+    assert unit_of_work.persisted_job.status is JobStatus.PLANNED
+    assert unit_of_work.persisted_audits == []
+
+
+def test_audit_target_mismatch_fails_before_telemetry_and_transaction() -> None:
+    events: list[tuple[str, object]] = []
+    facade, metrics, traces = make_telemetry(events)
+    unit_of_work = FakeUnitOfWork(events)
+    audit = replace(
+        make_audit(),
+        payload=JobStatusTransitionAuditPayload(
+            target_status=JobStatus.FAILED,
+            reason_code=JobTransitionReason.FAILURE,
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="audit payload does not match the requested job status transition",
+    ):
+        call_transition(unit_of_work, facade, audit_event=audit)
+
+    assert events == []
+    assert traces.start_attempts == []
+    assert metrics.attempts == []
     assert unit_of_work.persisted_job.status is JobStatus.PLANNED
     assert unit_of_work.persisted_audits == []
 

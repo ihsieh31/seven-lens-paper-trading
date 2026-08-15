@@ -1,5 +1,17 @@
 # Risk Register
 
+## 狀態與證據規則
+
+- `Open`：風險存在且控制尚未達驗收；必須保留 owner、下一個 gate與關閉條件。
+- `Mitigated`：已實作控制並有可重現驗收證據，但風險仍需在相關變更時回歸測試。
+- `Accepted`：在明確理由、owner與重審日期／觸發條件下接受 residual risk；不得只因修復困難使用。
+- `Deferred`：確認有改善空間，但不屬目前 gate或缺少另行授權；必須寫明 target gate與不提前實作理由。
+- `Closed`：風險來源已移除或已不再適用；需保存證據與日期。`Closed`不等於刪除歷史。
+
+每次狀態變更必須引用source/test/ADR或外部證據，並在控制或依賴、OS、PostgreSQL major、composition
+boundary、repository visibility／CI policy改變時重審。沒有真實平台證據時，不得把fake test寫成native或
+remote acceptance。
+
 | ID | 風險 | 可能性 | 衝擊 | 主要控制 | Owner | 狀態 |
 |---|---|---:|---:|---|---|---|
 | R-01 | LLM 幻覺或捏造來源 | 高 | 高 | 引用 schema、evidence verifier、無來源即棄權 | Research | Open |
@@ -17,3 +29,8 @@
 | R-13 | Live credential 誤用 | 低 | 極高 | 無 live adapter、Paper endpoint allowlist、啟動斷言 | Security | Open |
 | R-14 | 過度擬合七人權重 | 高 | 高 | blinded eval、ablation、walk-forward、權重正則化 | Validation | Open |
 | R-15 | 無人值守卻沒有人工緊急控制 | 中 | 極高 | `pause_entries`、`cancel_open_orders`、`flatten_paper`、kill switch | Ops | Open |
+| R-16 | Runtime誤用migration/schema-owner權限 | 中 | 極高 | 外建runtime login、bounded provisioning、startup privilege proof、owner DSN不進長駐process | Security/DB | Mitigated（ADR-016；PostgreSQL runtime-role adversarial tests） |
+| R-17 | `SECURITY DEFINER`被search path／temp relation shadowing利用 | 中 | 極高 | fixed `pg_catalog, public, pg_temp`、schema qualification、撤銷PUBLIC CREATE/TEMP/EXECUTE | Security/DB | Mitigated（migration 0002；catalog＋shadowing tests） |
+| R-18 | 任意或過大JSON污染權威event/audit ledger | 中 | 高 | typed payload registry、DB constraints、canonical JSON resource budgets | Domain/DB | Mitigated（ADR-016；unit＋PostgreSQL constraints） |
+| R-19 | macOS Keychain只有fake contract、沒有native disposable smoke evidence | 低 | 高 | production exact read fail closed；native smoke需專用namespace與另行授權 | Security/Ops | Deferred（P2 composition前重審；不得查詢現有真實item） |
+| R-20 | 缺少coverage threshold與security-static／supply-chain lane | 中 | 中 | 現有locked quality與PostgreSQL gates不變；另定義工具、基線、成本、false-positive policy | Quality/Security | Deferred（獨立quality工作包，不阻塞本次P1 authority修復） |

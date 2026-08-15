@@ -21,6 +21,7 @@
 - [七人蒸餾規格](docs/DISTILLATION_SPEC.md)
 - [TradingAgents 評估](docs/TRADINGAGENTS_ASSESSMENT.md)
 - [營運與安全](docs/OPERATIONS_AND_SAFETY.md)
+- [安全政策與信任邊界](SECURITY.md)
 - [開發路線圖與驗收](docs/ROADMAP_AND_ACCEPTANCE.md)
 - [來源與授權策略](docs/SOURCES.md)
 - [第一個開發 Prompt](docs/FIRST_IMPLEMENTATION_PROMPT.md)
@@ -98,5 +99,11 @@ P1-B/P1-C integration 必須使用真正的 PostgreSQL 16；沒有 SQLite 或 mo
 腳本使用 digest-pinned PostgreSQL `16.15-alpine`、明顯 fake credentials、random localhost port 與
 tmpfs data directory，不建立持久 volume，也不輸出 DSN。`REQUIRE_POSTGRES_INTEGRATION=1` 時，
 missing/non-PostgreSQL URL、缺 psycopg、連線失敗、server major 非 16 或任一 integration skip 均讓
-session 失敗。migration integration tests 會執行 initial migration 的 up/down/up restore drill；任何
+session 失敗。migration integration tests 會執行完整 migration chain 的 up/down/up restore drill；任何
 手動 `TEST_DATABASE_URL` 都只能指向專用 disposable database，絕不可指向共享或營運資料庫。
+
+Migration/schema owner 與 application runtime 必須是不同 PostgreSQL roles。owner 只用於 migration、
+disposable restore drill 與 `provision_runtime_role()`；長駐程式只能使用已通過
+`verify_runtime_role()` 的非 owner login。runtime 沒有 schema CREATE、database TEMP、直接 lease/job
+state mutation、trigger/function replacement或物件 ownership 權限；完整契約與未來 DSN composition
+邊界見 [SECURITY.md](SECURITY.md)。

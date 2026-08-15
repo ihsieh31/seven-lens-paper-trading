@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from seven_lens.application.ports.persistence import UnitOfWork
-from seven_lens.domain.events import AuditEvent, RecordedAuditEvent
+from seven_lens.domain.events import (
+    AuditEvent,
+    JobStatusTransitionAuditPayload,
+    RecordedAuditEvent,
+)
 from seven_lens.domain.jobs import JobInstance, JobStatus, LeaseGrant
 from seven_lens.observability.context import TelemetryContext, validate_telemetry_context
 from seven_lens.observability.failsafe import FailSafeTelemetry
@@ -32,6 +36,11 @@ def transition_job_with_audit(
 ) -> tuple[JobInstance, RecordedAuditEvent]:
     """Persist a fenced status transition and its audit record in one transaction."""
     _validate_audit_telemetry_identity(audit_event, telemetry_context)
+    if (
+        type(audit_event.payload) is not JobStatusTransitionAuditPayload
+        or audit_event.payload.target_status is not status
+    ):
+        raise ValueError("audit payload does not match the requested job status transition")
     observation = telemetry.start_job_transition(telemetry_context, status)
     failure_stage = JobTransitionOutcome.DATABASE_FAILURE
     try:

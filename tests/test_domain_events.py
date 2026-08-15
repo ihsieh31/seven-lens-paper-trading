@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
 import pytest
 
-from seven_lens.domain.events import AuditEvent, DomainEvent
+from seven_lens.domain.events import (
+    AuditEvent,
+    DomainEvent,
+    JobCreatedPayload,
+    JobStatusTransitionAuditPayload,
+    JobTransitionReason,
+)
+from seven_lens.domain.jobs import JobStatus
 from seven_lens.domain.json_values import JsonObject
 from seven_lens.domain.value_objects import RunId, SchemaVersion, UtcTimestamp
 
@@ -21,7 +29,6 @@ OCCURRED_AT = UtcTimestamp(datetime(2026, 8, 14, 12, 0, tzinfo=UTC))
 
 def make_domain_event(**overrides: object) -> DomainEvent:
     values: dict[str, object] = {
-        "event_type": "job.created",
         "schema_version": SCHEMA_VERSION,
         "aggregate_type": "job",
         "aggregate_id": "job-2026-08-14-open",
@@ -30,7 +37,7 @@ def make_domain_event(**overrides: object) -> DomainEvent:
         "correlation_id": CORRELATION_ID,
         "causation_id": CAUSATION_ID,
         "occurred_at": OCCURRED_AT,
-        "payload": {"status": "PLANNED", "attempt": 0},
+        "payload": JobCreatedPayload(status=JobStatus.PLANNED, attempt_count=0),
         "producer_version": "seven-lens-test/1.0",
     }
     values.update(overrides)
@@ -39,12 +46,14 @@ def make_domain_event(**overrides: object) -> DomainEvent:
 
 def make_audit_event(**overrides: object) -> AuditEvent:
     values: dict[str, object] = {
-        "event_type": "job.created",
         "run_id": RUN_ID,
         "correlation_id": CORRELATION_ID,
         "causation_id": CAUSATION_ID,
         "occurred_at": OCCURRED_AT,
-        "payload": {"status": "PLANNED", "attempt": 0},
+        "payload": JobStatusTransitionAuditPayload(
+            target_status=JobStatus.RUNNING,
+            reason_code=JobTransitionReason.SCHEDULED,
+        ),
         "producer_version": "seven-lens-test/1.0",
     }
     values.update(overrides)
@@ -52,16 +61,17 @@ def make_audit_event(**overrides: object) -> AuditEvent:
 
 
 def test_domain_event_create_validates_and_snapshots_normal_payload() -> None:
-    source_payload = {"status": "PLANNED", "nested": {"attempt": 0}}
+    source_payload = JobCreatedPayload(status=JobStatus.PLANNED, attempt_count=0)
 
     event = make_domain_event(payload=source_payload)
 
     assert event.event_type == "job.created"
     assert event.aggregate_sequence == 1
-    assert event.payload.to_dict() == source_payload
-    source_payload["status"] = "MUTATED"
-    assert event.payload.to_dict()["status"] == "PLANNED"
-    assert event.payload.to_json() == '{"nested":{"attempt":0},"status":"PLANNED"}'
+    assert event.payload is source_payload
+    assert event.payload.to_json_object().to_dict() == {
+        "attempt_count": 0,
+        "status": "PLANNED",
+    }
 
 
 def test_domain_event_create_generates_non_nil_id_when_omitted() -> None:
@@ -99,9 +109,6 @@ def test_json_object_direct_constructor_rejects_invalid_or_noncanonical_values(
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("event_type", ""),
-        ("event_type", "   "),
-        ("event_type", "x" * 201),
         ("aggregate_type", ""),
         ("aggregate_id", ""),
         ("aggregate_id", "x" * 501),
@@ -119,6 +126,18 @@ def test_json_object_direct_constructor_rejects_invalid_or_noncanonical_values(
 def test_domain_event_rejects_invalid_boundary_fields(field: str, value: object) -> None:
     with pytest.raises(ValueError):
         make_domain_event(**{field: value})
+
+
+def test_event_type_is_derived_from_and_bound_to_typed_payload() -> None:
+    event = make_domain_event()
+    audit = make_audit_event()
+
+    assert event.event_type == "job.created"
+    assert audit.event_type == "job.status_changed"
+    with pytest.raises(ValueError, match="event_type must match"):
+        replace(event, event_type="job.other")
+    with pytest.raises(ValueError, match="event_type must match"):
+        replace(audit, event_type="job.other")
 
 
 @pytest.mark.parametrize(
@@ -140,7 +159,12 @@ def test_domain_event_rejects_malformed_or_non_json_safe_payload(payload: object
         make_domain_event(payload=payload)
 
 
-def test_domain_event_rejects_cycles_and_excessive_nesting() -> None:
+def test_domain_event_rejects_untyped_payload_even_when_json_safe() -> None:
+    with pytest.raises(ValueError, match="typed domain"):
+        make_domain_event(payload={"status": "PLANNED", "attempt_count": 0})
+
+
+def test_json_object_rejects_cycles_and_excessive_nesting() -> None:
     cyclic: list[object] = []
     cyclic.append(cyclic)
 
@@ -149,31 +173,63 @@ def test_domain_event_rejects_cycles_and_excessive_nesting() -> None:
         deep = {"nested": deep}
 
     with pytest.raises(ValueError, match="cycle"):
-        make_domain_event(payload={"cycle": cyclic})
+        JsonObject.from_value({"cycle": cyclic})
     with pytest.raises(ValueError, match="depth"):
-        make_domain_event(payload=deep)
+        JsonObject.from_value(deep)
 
 
 def test_audit_event_accepts_safe_payload_and_snapshots_it() -> None:
-    event = make_audit_event(payload={"action": "acquire", "ok": True})
+    payload = JobStatusTransitionAuditPayload(
+        target_status=JobStatus.COMPLETE,
+        reason_code=JobTransitionReason.SCHEDULED,
+    )
+    event = make_audit_event(payload=payload)
 
     assert event.audit_id.int != 0
-    assert event.payload.to_dict() == {"action": "acquire", "ok": True}
+    assert event.payload.to_json_object().to_dict() == {
+        "reason_code": "SCHEDULED",
+        "target_status": "COMPLETE",
+    }
 
 
 @pytest.mark.parametrize(
     "payload",
     [
-        {"api_key": "sk-test-fake"},
-        {"nested": {"Authorization": "Bearer fake-token"}},
-        {"message": "token=sk-test-fake"},
-        {"message": "Basic ZmFrZS11c2VyOmZha2UtcGFzcw=="},
-        {"private_key": "-----BEGIN PRIVATE KEY-----"},
+        {"target_status": "RUNNING", "reason_code": "SCHEDULED"},
+        JsonObject.from_value({"target_status": "RUNNING", "reason_code": "SCHEDULED"}),
+        object(),
     ],
 )
-def test_audit_event_rejects_secret_bearing_payload(payload: object) -> None:
-    with pytest.raises(ValueError, match="secret"):
+def test_audit_event_rejects_untyped_payload(payload: object) -> None:
+    with pytest.raises(ValueError, match="typed audit"):
         make_audit_event(payload=payload)
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"status": JobStatus.RUNNING, "attempt_count": 0},
+        {"status": JobStatus.PLANNED, "attempt_count": 1},
+        {"status": JobStatus.PLANNED, "attempt_count": True},
+    ],
+)
+def test_job_created_payload_rejects_invalid_closed_schema(kwargs: dict[str, object]) -> None:
+    with pytest.raises(ValueError):
+        JobCreatedPayload(**kwargs)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"target_status": "RUNNING", "reason_code": JobTransitionReason.SCHEDULED},
+        {"target_status": JobStatus.RUNNING, "reason_code": "SCHEDULED"},
+    ],
+)
+def test_job_transition_audit_payload_rejects_wrong_types(
+    kwargs: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError):
+        JobStatusTransitionAuditPayload(**kwargs)  # type: ignore[arg-type]
 
 
 def test_audit_event_accepts_none_run_and_causation_ids() -> None:
