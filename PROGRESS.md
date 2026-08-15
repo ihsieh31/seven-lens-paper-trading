@@ -1,0 +1,62 @@
+# Progress
+
+## 狀態摘要
+
+- 專案階段：P1 — 專案骨架與權威狀態（P1-A、P1-B、P1-C1、P1-C2、P1-C3 均已通過本機獨立驗收；P1-C 本機交付完成）
+- 完成度定義：只以路線圖的可驗證交付物計算，不以主觀百分比計算。
+- 最近更新：2026-08-15
+- 下一個 gate：P1 Core Gate；目前尚未完成，不得視為可連線或可交易系統。
+
+## 已完成
+
+- [x] 確認新專案與工作區範圍。
+- [x] 確認只做七人委員策略、本人使用、Paper-only。
+- [x] 確認零付費資料與公開來源限制。
+- [x] 分析 TradingAgents 的實際 agent graph、state、portfolio manager 與訊號輸出。
+- [x] 核對 Alpaca Paper Trading 的模擬限制與 order update/reconciliation 能力。
+- [x] 核對 Tavily 免費額度與 rate limit，形成硬性資料預算。
+- [x] 將使用者持有的 7 個 Tavily 帳號納入條件式 account-pool 架構；現行條款下先建立合規 Gate。
+- [x] 搜尋七人現成 GitHub 蒸餾資產；判定沒有一套可直接作為生產依賴。
+- [x] 建立主企劃、架構、蒸餾、營運、安全、路線圖和來源規格。
+- [x] 建立獨立 Decision、Progress、Issue、Worklog、Risk 日誌。
+- [x] 完成 P1-A：Python 3.13 `src` package、`uv.lock`、ruff/mypy/pytest 嚴格基線。
+- [x] 完成 Paper-only typed config、精確 endpoint allowlist 與啟動 fail-closed 驗證。
+- [x] 完成 Tavily compliance domain、可稽核 evidence-record schema、per-account/global quota 與 usage/reset/cooldown schema；外部 verifier 尚不存在，因此 `AUTHORIZED_ACCOUNT_POOL` 固定 fail closed。
+- [x] 完成 RunId、TradingDate、UtcTimestamp、SchemaVersion，以及 redaction-first JSON logging 骨架。
+- [x] 修復獨立安全驗收發現：Basic／quoted credentials、非 JSON-safe values、mapping keys、cycle/depth 與安全 fallback；canonical UTC wire format 與 SchemaVersion 上限。
+- [x] P1-A 重新驗證：formatter、lint、mypy 全通過；128 個 normal/boundary/invalid/adversarial/fail-closed tests 通過。
+- [x] 完成 P1-B persistence-neutral repository/unit-of-work ports 與 psycopg 3 PostgreSQL adapter；domain/application ports 不依賴 PostgreSQL、psycopg、SQLAlchemy、Alembic 或 SQLite。
+- [x] 完成 checksummed initial up/down migration：`schema_metadata`、`schema_migrations`、`domain_events`、`audit_events`、`job_instances`、`job_leases`；沒有建立 broker/order/fill/position 表。
+- [x] 完成 database-stamped event envelope、aggregate contiguous sequence/idempotency、append-only domain/audit triggers，以及應用層＋DB 層 audit secret rejection。
+- [x] 完成 rollback-by-default unit of work 與 job status + audit 同 transaction service；audit insert 失敗時狀態同步 rollback。
+- [x] 完成 DB-clock atomic lease acquire/renew/release/expiry takeover、attempt count、fencing token、stale-owner write rejection、lease history 與 direct-field mutation guard。
+- [x] 完成 pure market clock port 與 deterministic fake，覆蓋 regular session、half-day、holiday/closed-day 及 open/close boundaries；沒有連接 Alpaca 或建立排程。
+- [x] P1-B 真實 PostgreSQL 16 驗證：18 個 migration/constraint/transaction/concurrency/restart integration tests 通過；完整 suite 242 tests 通過，formatter/lint/mypy/lock checks 全通過。
+- [x] 完成 P1-C1 implementation：typed `SecretRef`／`SecretValue`、persistence-neutral `SecretProvider`、capability-scoped exact lookup、Security.framework read-only macOS adapter 與 2 秒 spawned hard-timeout worker；沒有 env/argv/DB/fake fallback。
+- [x] P1-C1 agent 當時自測：72 個新增 fake-only tests、65 個既有 redaction/structured logging/broker/Tavily regression tests，以及 296 個完整 non-integration tests 通過；Ruff/Mypy/lock checks 通過，未查詢真實 Keychain；之後另行通過獨立驗收。
+- [x] P1-C1 已通過獨立驗收；secret boundary 狀態不再是 pending，但仍不代表整個 P1-C 或 P1 Core Gate 完成。
+- [x] 完成 P1-C2 implementation：canonical non-zero trace/span IDs、explicit immutable context、dependency-neutral typed recorder ports、封閉五 metric／兩 span registry、64-series guard、fail-safe facade、deterministic fakes，以及 secret lookup／transactional job transition instrumentation。
+- [x] P1-C2 agent 自測與單一驗收修復：79 個 telemetry tests；完整 non-integration `391 passed, 19 deselected`，真實 PostgreSQL 16 integration `19 passed, 0 skipped`；Ruff/Mypy通過。job transition現在於任何span/UoW/DB操作前綁定audit與telemetry的run/correlation identity；之後已通過獨立驗收。
+- [x] 完成 P1-C3 implementation：兩個 Ubuntu 24.04 GitHub Actions jobs、完整 SHA/digest pin、read-only/zero-secret policy、static integration marker、required PostgreSQL 16 preflight 與 skip-to-failure session gate。
+- [x] 完成 `verify_p1.sh` 與 `run_postgres_integration.sh`：uv-only bootstrap、locked checks、random localhost port、tmpfs、bounded readiness，以及 container ID/name/ownership label 三重核對 cleanup。
+- [x] P1-C3 agent 本機自測：workflow/gate/script 對抗測試 `16 passed`；non-integration `407 passed, 19 deselected`；真實 digest-pinned PostgreSQL `16.15` integration `19 passed, 0 skipped`；Ruff/Mypy/lock checks 通過，uv.lock hash 未變且沒有殘留 owned container 或 volume。狀態仍為 `implementation completed, pending independent acceptance`。
+- [x] P1-C3 clean-machine evidence：在排除專案 `.venv` 且使用全新空 uv cache 的隔離副本依序執行兩個一鍵命令；兩次 non-integration 均 `407 passed, 19 deselected`，PostgreSQL `19 passed, 0 skipped`，lock SHA-256 前後皆為 `79809edba36965084b7561d616b0f95902e28e8fd4da6b07f35c409b6b34626b`；volume set未變、owned container為空，隔離副本已精確移除。
+- [x] P1-C3 已通過定點獨立驗收：官方 release／commit 與本機 RepoDigest 查核吻合；16 個對抗測試、Ruff、Mypy、`407 passed, 19 deselected`、真實 PostgreSQL 16.15 `19 passed, 0 skipped` 均通過。required mode 的 missing URL 與 SQLite 各自於 collection 前以 exit 4 fail closed；另一份排除 `.venv` 且使用全新空 uv cache 的副本也通過兩個一鍵命令，lock／volume hash 不變且 owned container 為空。
+
+## 尚未開始
+
+- [ ] 將專案放入獨立 Seven-Lens repository 後，讓兩個 required GitHub Actions jobs 真正成功；未取得此證據前 P1 Core Gate 保持 Open。
+- [ ] 實作 Paper broker adapter、reconciliation 與故障注入測試。
+- [ ] 建立來源 manifest、raw corpus 與七套 doctrine cards。
+- [ ] 取得 Tavily 對同一 Customer 彙總使用 7 個免費帳號的書面／後台授權證據。
+- [ ] 實作量化預篩、committee workflow、portfolio optimizer 與風控。
+- [ ] 建立回測／walk-forward／shadow／paper 驗證鏈。
+- [ ] 啟用本機 launchd 與告警。
+
+P1-C3 沒有建立 hosted macOS job、OpenTelemetry/exporter/backend、broker adapter、Tavily/OpenAI
+client、資料下載、策略、下單、排程或 launchd。P1-C 本機交付已完成並通過獨立驗收；遠端 CI
+仍無證據，因此 P1 Core Gate 維持 Open。
+
+## Gate 規則
+
+任何 gate 只有在對應測試、報告與證據檔已保存時才算通過；「程式可以跑」不等於可無人值守。

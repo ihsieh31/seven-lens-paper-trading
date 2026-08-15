@@ -1,0 +1,57 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "seven-lens"
+version = "0.1.0"
+description = "Paper-only Alpaca trading system"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "psycopg[binary]>=3.2,<4",
+    "pyobjc-framework-Security>=12,<13; sys_platform == 'darwin'",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.16",
+    "pytest>=8.3",
+    "ruff>=0.11",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/seven_lens"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"migrations" = "seven_lens/infrastructure/sql_migrations"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = ["--strict-config", "--strict-markers"]
+markers = [
+    "integration: requires a disposable PostgreSQL 16 database from TEST_DATABASE_URL",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["src", "tests"]
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.13"
+files = ["src", "tests"]
+strict = true
+warn_unused_configs = true
+show_error_codes = true
+pretty = true
