@@ -182,6 +182,9 @@
   文件變更，必須保留，不得為符合baseline hash而還原。
 - `main` branch protection 採 strict required checks：`quality-unit`、`postgres-integration`；禁止
   force push 與 branch deletion，保留 repository admin 緊急 bypass。
+- 七位與本機語料規劃更新 commit `1d4d9bd31d993a5fb6803a8d08ff5deec04122e1` 已發布；GitHub Actions
+  run `31950919861` 的 `quality-unit` 與 `postgres-integration` 均成功。其 descendant 若只同步此
+  evidence，仍以 `origin/main` 與該 commit 自己的 CI 為準。
 - 本次交接更新是使用者明確要求的本機變更；若新 session 開始時唯一 dirty file 是
   `PROJECT_HANDOFF.md`，必須保留，不得當成未知修改還原。
 - 建立獨立 repository 前，它曾是另一個本機 repository 裡的未追蹤子目錄；歷史工作不得混入本專案。
@@ -656,7 +659,7 @@ P1-A 已通過獨立驗收。保留 Paper-only、Tavily authorized pool fail-clo
 
 ## 17. 給下一個 AI 的一句話狀態
 
-> P0、完整P1與authority hardening均已通過本機及獨立GitHub Actions驗收，P1 Core Gate保持關閉；hardening code commit `e8543b69bfc6a6d2dd9a87837d9d46bb11afc406`由run `31891905869`驗證，已發布的綠燈baseline `5b3cd501c7ef415cbb27c3e0b5762ecdb7a609ea`另由run `31892024588`驗證。七位已於2026-08-16改為Howard Marks、Muddy Waters Research、Aswath Damodaran、Serenity、Terry Smith、Michael Mauboussin與Lyn Alden；本機`skill/`約827 MB候選語料尚未審查且不得推到公開repository。現有系統仍沒有OpenTelemetry/exporter、API client、broker/order/fill表、排程或交易能力，也未查詢真實Keychain。下一步只先討論並定義P2安全工作包；到P3才先做語料SourceManifest／quarantine／授權與coverage審查，不得直接蒸餾或開始broker/order implementation。
+> P0、完整P1與authority hardening均已通過本機及獨立GitHub Actions驗收，P1 Core Gate保持關閉；hardening code commit `e8543b69bfc6a6d2dd9a87837d9d46bb11afc406`由run `31891905869`驗證，handoff baseline `5b3cd501c7ef415cbb27c3e0b5762ecdb7a609ea`由run `31892024588`驗證。七位已於2026-08-16改為Howard Marks、Muddy Waters Research、Aswath Damodaran、Serenity、Terry Smith、Michael Mauboussin與Lyn Alden；規劃commit `1d4d9bd31d993a5fb6803a8d08ff5deec04122e1`的run `31950919861`兩個required jobs均成功。本機`skill/`約827 MB候選語料尚未審查且不得推到公開repository。現有系統仍沒有OpenTelemetry/exporter、API client、broker/order/fill表、排程或交易能力，也未查詢真實Keychain。下一步只先討論並定義P2安全工作包；到P3才先做語料SourceManifest／quarantine／授權與coverage審查，不得直接蒸餾或開始broker/order implementation。
 
 ---
 

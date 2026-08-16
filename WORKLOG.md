@@ -337,3 +337,4 @@
 - 同步 README、Master Plan、Distillation Spec、Sources、Risk Register、Progress 與 Handoff；保留 doctrine-only、來源可追溯、反例／失效條件、held-out eval 與 `ABSTAIN` 邊界。
 - 只以檔案系統確認 `skill/` 約 827 MB、723 個非 `.DS_Store` 檔案及七位路徑存在；依使用者要求未開啟或審查語料內容，未判定來源、授權、完整性、重複、時效或可蒸餾性。
 - 因 repository 為公開且 `OPEN-002` 禁止未審核第三方全文再散布，`.gitignore` 排除 `skill/`；本輪只發布規劃與 handoff，正式 P3 先做 SourceManifest、quarantine、授權與 coverage 審查。
+- 規劃 commit `1d4d9bd31d993a5fb6803a8d08ff5deec04122e1` 已直接 push 到 `main`；GitHub Actions run [`31950919861`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31950919861) 的 `quality-unit` 與 `postgres-integration` 均成功。

@@ -19,6 +19,7 @@
 - [x] 搜尋七人現成 GitHub 蒸餾資產；判定沒有一套可直接作為生產依賴。
 - [x] 依使用者 2026-08-16 決定，將七位更新為 Howard Marks、Muddy Waters Research、Aswath Damodaran、Serenity、Terry Smith、Michael Mauboussin與Lyn Alden；同步主企劃、蒸餾規格、來源策略與 handoff。
 - [x] 確認本機 `skill/` 有七位候選語料（約 827 MB／723 個非 `.DS_Store` 檔案）；依使用者要求本輪不審查內容，且依再散布邊界排除於公開 Git repository。
+- [x] 七位與語料規劃 commit `1d4d9bd31d993a5fb6803a8d08ff5deec04122e1` 已發布；GitHub Actions run [`31950919861`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31950919861) 的 `quality-unit` 與 `postgres-integration` 均成功。
 - [x] 建立主企劃、架構、蒸餾、營運、安全、路線圖和來源規格。
 - [x] 建立獨立 Decision、Progress、Issue、Worklog、Risk 日誌。
 - [x] 完成 P1-A：Python 3.13 `src` package、`uv.lock`、ruff/mypy/pytest 嚴格基線。
