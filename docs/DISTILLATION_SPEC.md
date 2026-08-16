@@ -126,47 +126,48 @@ Sources: <ids>.
 
 ## 5. 七套蒸餾計畫
 
-### 5.1 Serenity
+本機 `skill/` 候選語料截至 2026-08-16 尚未做內容、來源、授權或完整性審查；存在不等於合格。正式 P3 必須先產生 SourceManifest 與 quarantine report，再開始 proposition extraction。
 
-- Domain：AI/semiconductor/optical/power supply chain、multi-hop BOM、qualification、capacity bottleneck。
-- 候選資產：`WOOK98/serenity-aleabitoreddit` 有 5,663 則貼文索引、evidence packet script 和 evidence hierarchy，可作 discovery candidate。
-- 不直接採用原因：查無 LICENSE；收集聲稱使用 authenticated access；track record/calibration 必須重算；技能含槓桿、micro-cap、options 等本專案禁止內容。
-- 行動：抽樣驗證 canonical X URLs、coverage/dedup、時間、刪文狀態；只移植有來源的方法論 proposition，自行建立 eval。
+### 5.1 Howard Marks
 
-### 5.2 Citrini Research
+- Domain：market cycles、risk、second-level thinking、investor psychology、contrarian discipline。
+- 候選語料：`skill/Howard Marks.pdf`；正式審查時回到 Oaktree 官方 memos 與可核對公開發表。
+- 注意：週期判斷必須有 `published_at`／`available_at`；不得把事後回顧寫回歷史 decision context。
 
-- Domain：theme formation、narrative lifecycle、second/third-order beneficiaries、reflexivity。
-- Primary sources：官方免費網站文章、免費公開社群貼文、公開訪談。
-- 注意：付費研究內容和被他人轉貼的訂閱內容一律排除；將「主題發現」與「估值／執行」分離。
+### 5.2 Muddy Waters Research
 
-### 5.3 SemiAnalysis / Dylan Patel
+- Domain：forensic accounting、disclosure quality、governance、related parties、asset/cash verification、fraud red flags。
+- 候選語料：`skill/Muddy_Waters/`；正式審查時逐項核對官方研究、filing、監管／法院文件與公司回應。
+- 注意：只作 long-only veto／risk lens；明確分離事實、指控、反駁與推論，不自動建立 short path。
 
-- Domain：AI infrastructure stack、semiconductor manufacturing、GPU/ASIC/networking/memory、capex/unit economics。
-- Primary sources：SemiAnalysis 免費文章、Dylan Patel 公開貼文、公開 podcast/interview、公司技術資料。
-- 注意：技術陳述須用公司、供應商或產業 primary source 交叉驗證；免費摘要不推定付費文章內容。
-
-### 5.4 Edwin Dorsey / The Bear Cave
-
-- Domain：forensic red flags、management incentives、promotion、related parties、unit economics、governance。
-- Primary sources：The Bear Cave 免費文章、Edwin Dorsey 官網、公開訪談與 X。
-- 注意：負面指控需區分已證實事實、作者指控與本系統推論；高風險內容需引用 filing/court/regulator/company response；只做 long-only filter，不轉為自動 short。
-
-### 5.5 Aswath Damodaran
+### 5.3 Aswath Damodaran
 
 - Domain：story-to-numbers、DCF、risk pricing、life cycle、optionality、terminal value。
-- Primary sources：NYU 教學頁、公開 lecture/slides/spreadsheets、blog、YouTube lectures。
+- 候選語料：`skill/aswath_damodaran/`；primary sources 包含 NYU 教學頁、公開 lecture/slides/spreadsheets、blog、YouTube lectures。
 - 注意：只萃取教學框架，不把某次估值的舊 input 當今日 fair value；估值結果必須展示假設敏感度而非單點精準值。
 
-### 5.6 Andy Constan / Damped Spring
+### 5.4 Serenity / @aleabitoreddit
 
-- Domain：central-bank liquidity、rates curve、Treasury/refunding、positioning、cross-asset flows。
-- Primary sources：Damped Spring 免費內容、公開 X、podcast/interview。
-- 注意：宏觀 regime 觀點時效極短；舊觀點不得轉成今日訊號；必須附 as-of 和 observable invalidators。
+- Domain：AI/semiconductor/optical/power supply chain、multi-hop BOM、qualification、capacity bottleneck。
+- 候選語料：`skill/serenity-aleabitoreddit-data/`。
+- 注意：正式審查時抽樣驗證 canonical X URL、coverage/dedup、時間、刪文狀態與擷取授權；只蒸餾有來源的方法論 proposition。
+
+### 5.5 Terry Smith / Fundsmith
+
+- Domain：quality compounders、ROIC、organic growth、reinvestment runway、balance-sheet discipline、capital allocation。
+- 候選語料：`skill/terry_smith_fundsmith/`；正式審查時核對 Fundsmith 官方 owners' manual、annual letters 與 shareholder materials。
+- 注意：把企業品質、可持續再投資與估值分開評估；過去績效或持倉不是未來推薦。
+
+### 5.6 Michael Mauboussin
+
+- Domain：expectations investing、base rates、competitive advantage、capital allocation、expected value、probabilistic decisions。
+- 候選語料：`skill/michael_mauboussin/`；正式審查時核對作者或任職機構的正式發布版本。
+- 注意：每個 base rate 必須記錄樣本、期間、分母與適用範圍；過時統計不得無條件沿用。
 
 ### 5.7 Lyn Alden
 
 - Domain：fiscal dominance、monetary systems、liquidity、energy、dollar system、long-cycle balance sheets。
-- Primary sources：Lyn Alden 官方免費文章/newsletter、公開 X、podcast/interview。
+- 候選語料：`skill/Lyn_Alden/`；primary sources 包含官方免費文章/newsletter、公開 X、podcast/interview。
 - 注意：長期 framework 與短期 market timing 分開評分；不得把宏觀正確直接映射為某個個股的短期買點。
 
 ## 6. 評估資料集

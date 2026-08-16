@@ -9,7 +9,7 @@
 - 每個美股交易日前開盤分析選股，開盤後執行主要再平衡。
 - 收盤前再次評估既有持倉與最優候選，允許第二次再平衡。
 - 不做當沖；正常持有期 10–60 個交易日，除風控退出外至少持有 5 個交易日。
-- 七位委員：Serenity、Citrini Research、SemiAnalysis / Dylan Patel、Edwin Dorsey / The Bear Cave、Aswath Damodaran、Andy Constan / Damped Spring、Lyn Alden。
+- 七位委員：Howard Marks、Muddy Waters Research、Aswath Damodaran、Serenity / `@aleabitoreddit`、Terry Smith / Fundsmith、Michael Mauboussin、Lyn Alden。
 - 僅使用免費公開內容與免費資料 API；LLM 費用不設上限。
 - 系統可無人值守，但任何資料、模型、帳務或券商狀態不明時一律停止新增風險。
 

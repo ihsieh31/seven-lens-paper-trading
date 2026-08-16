@@ -4,7 +4,7 @@
 
 - 專案階段：P1 — 專案骨架與權威狀態（P1-A、P1-B、P1-C1、P1-C2、P1-C3 與遠端 CI 均已通過獨立驗收；P1 Core Gate 已關閉）
 - 完成度定義：只以路線圖的可驗證交付物計算，不以主觀百分比計算。
-- 最近更新：2026-08-15
+- 最近更新：2026-08-16
 - 下一個 gate：P2 Safety Design Gate；尚未開始，且 P1 通過仍不得視為可連線或可交易系統。
 
 ## 已完成
@@ -17,6 +17,8 @@
 - [x] 核對 Tavily 免費額度與 rate limit，形成硬性資料預算。
 - [x] 將使用者持有的 7 個 Tavily 帳號納入條件式 account-pool 架構；現行條款下先建立合規 Gate。
 - [x] 搜尋七人現成 GitHub 蒸餾資產；判定沒有一套可直接作為生產依賴。
+- [x] 依使用者 2026-08-16 決定，將七位更新為 Howard Marks、Muddy Waters Research、Aswath Damodaran、Serenity、Terry Smith、Michael Mauboussin與Lyn Alden；同步主企劃、蒸餾規格、來源策略與 handoff。
+- [x] 確認本機 `skill/` 有七位候選語料（約 827 MB／723 個非 `.DS_Store` 檔案）；依使用者要求本輪不審查內容，且依再散布邊界排除於公開 Git repository。
 - [x] 建立主企劃、架構、蒸餾、營運、安全、路線圖和來源規格。
 - [x] 建立獨立 Decision、Progress、Issue、Worklog、Risk 日誌。
 - [x] 完成 P1-A：Python 3.13 `src` package、`uv.lock`、ruff/mypy/pytest 嚴格基線。
@@ -52,11 +54,14 @@
   `e8543b69bfc6a6d2dd9a87837d9d46bb11afc406`的GitHub Actions run
   [`31891905869`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31891905869)
   亦通過：`quality-unit`為`440 passed, 33 deselected`，`postgres-integration`為`33 passed`。
+  後續handoff/evidence commit `5b3cd501c7ef415cbb27c3e0b5762ecdb7a609ea`亦由GitHub Actions run
+  [`31892024588`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31892024588)驗證，
+  最終已發布`main`的兩個required jobs均為`success`。
 
 ## 尚未開始
 
 - [ ] 實作 Paper broker adapter、reconciliation 與故障注入測試。
-- [ ] 建立來源 manifest、raw corpus 與七套 doctrine cards。
+- [ ] 審查本機七位候選語料，建立 SourceManifest、quarantine／coverage 報告與七套 doctrine cards。
 - [ ] 取得 Tavily 對同一 Customer 彙總使用 7 個免費帳號的書面／後台授權證據。
 - [ ] 實作量化預篩、committee workflow、portfolio optimizer 與風控。
 - [ ] 建立回測／walk-forward／shadow／paper 驗證鏈。

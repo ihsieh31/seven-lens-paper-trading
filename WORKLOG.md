@@ -326,4 +326,14 @@
   Actions run [`31891905869`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31891905869)
   兩jobs均成功，遠端quality為`440 passed, 33 deselected`、PostgreSQL為`33 passed`。push使用既有
   repository admin bypass等待checks，沒有force push且完成後required checks實際全綠。
+- Handoff/evidence descendant `5b3cd501c7ef415cbb27c3e0b5762ecdb7a609ea`隨後直接push；GitHub
+  Actions run [`31892024588`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31892024588)
+  再次讓`quality-unit`與`postgres-integration`全綠，因此它是本輪已發布的最終CI baseline。
 - 未讀取或修改Keychain，未使用broker/model/data API或真實credential，未加入P2交易能力。
+
+## 2026-08-16 — 七位蒸餾對象與本機候選語料規劃更新
+
+- 依使用者決定，七位改為 Howard Marks、Muddy Waters Research、Aswath Damodaran、Serenity / `@aleabitoreddit`、Terry Smith / Fundsmith、Michael Mauboussin、Lyn Alden。
+- 同步 README、Master Plan、Distillation Spec、Sources、Risk Register、Progress 與 Handoff；保留 doctrine-only、來源可追溯、反例／失效條件、held-out eval 與 `ABSTAIN` 邊界。
+- 只以檔案系統確認 `skill/` 約 827 MB、723 個非 `.DS_Store` 檔案及七位路徑存在；依使用者要求未開啟或審查語料內容，未判定來源、授權、完整性、重複、時效或可蒸餾性。
+- 因 repository 為公開且 `OPEN-002` 禁止未審核第三方全文再散布，`.gitignore` 排除 `skill/`；本輪只發布規劃與 handoff，正式 P3 先做 SourceManifest、quarantine、授權與 coverage 審查。

@@ -14,3 +14,6 @@ htmlcov/
 build/
 dist/
 *.egg-info/
+
+# Local, unreviewed third-party distillation corpus. Keep out of the public repository.
+skill/

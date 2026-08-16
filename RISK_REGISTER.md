@@ -23,7 +23,7 @@ remote acceptance。
 | R-07 | X／公開資料缺漏或遭移除 | 高 | 中 | coverage metadata、cache、棄權、非即時依賴 | Data | Open |
 | R-08 | Tavily 額度用盡或七帳號彙總不被允許 | 中 | 高 | 合規 Gate；未確認只用 1,000；授權後 7,000 全域／每帳號 ledger；硬拒絕 PAYGO | Data | Open |
 | R-09 | 單台 Mac 斷電／睡眠 | 中 | 高 | launchd、heartbeat、missed-window NO_TRADE | Ops | Open |
-| R-10 | 策略集中於 AI／半導體敘事 | 高 | 高 | 相關性、sector cap、macro/valuation/red-team 委員 | Portfolio | Open |
+| R-10 | 七套 doctrine 仍可能形成共同盲點或風格集中 | 高 | 高 | 相關性、sector cap、base-rate／macro／valuation／forensic 交叉反駁 | Portfolio | Open |
 | R-11 | 公開人物被錯誤模仿或背書 | 中 | 高 | doctrine-only、日期／來源標記、禁止人格聲稱 | Governance | Open |
 | R-12 | 缺乏付費基本面導致錯誤估值 | 中 | 高 | SEC/IR primary sources、多源核對、confidence haircut | Research | Open |
 | R-13 | Live credential 誤用 | 低 | 極高 | 無 live adapter、Paper endpoint allowlist、啟動斷言 | Security | Open |

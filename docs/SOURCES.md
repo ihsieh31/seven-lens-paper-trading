@@ -52,56 +52,55 @@
 
 下列只代表 discovery 起點。每個內容仍需逐頁判斷是否免費、公開、可引用、是否為本人發表。
 
-### Serenity / @aleabitoreddit
+本機 `skill/` 已有七位候選語料；截至 2026-08-16 只確認路徑存在，尚未審查內容、來源、授權、完整性、重複、時間或可蒸餾性。該目錄約 827 MB，固定排除於公開 Git repository。以下是正式 P3 審查時的起點，不是已驗收清單。
 
-- [X profile](https://x.com/aleabitoreddit)
-- GitHub 候選：[WOOK98/serenity-aleabitoreddit](https://github.com/WOOK98/serenity-aleabitoreddit)
-- 另一候選：[0xagata-prog/serenity-skill](https://github.com/0xagata-prog/serenity-skill)
+### Howard Marks
 
-初步審核：WOOK98 版本有 evidence packet script、原始 status URL 和 evidence hierarchy，比單一 prompt 完整；但 repository root 查無 LICENSE，資料聲稱含 authenticated access，且績效數字與 corpus coverage 尚未由本專案獨立驗證。只能當 discovery candidate，不能原樣 vendoring。0xagata 版本有自動抓取／蒸餾與自報績效等高風險設計，同樣不直接採用。
+- 本機候選：`skill/Howard Marks.pdf`。
+- 計畫中的 primary sources：Oaktree 官方 memos、Howard Marks 公開文章、書面訪談與演講逐項進 manifest。
+- 週期與風險框架必須保留發布時間；不得把回顧性的市場判斷當成當時可得訊號。
 
-### Citrini Research
+### Muddy Waters Research
 
-- [Citrini Research 官方網站](https://www.citriniresearch.com/)
-- 本人免費公開頁面、X 貼文與公開訪談，逐項進 manifest。
-- 付費訂閱正文、未授權轉載與他人摘要不得作為蒸餾主體。
-
-### SemiAnalysis / Dylan Patel
-
-- [SemiAnalysis](https://semianalysis.com/)
-- [Dylan Patel 作者頁](https://semianalysis.com/dylan-patel/)
-- 免費文章、公開訪談與 X canonical posts；技術事實再以公司／供應商 primary sources 交叉驗證。
-
-### Edwin Dorsey / The Bear Cave
-
-- [Edwin Dorsey 官方介紹](https://edwindorsey.com/about/)
-- [The Bear Cave](https://thebearcave.substack.com/about)
-- 負面指控需同時查 SEC filing、監管／法院文件、公司回應，並區分事實、指控與推論。
+- 本機候選：`skill/Muddy_Waters/`。
+- 計畫中的 primary sources：Muddy Waters 官方研究、相關公司 filing／回應、監管與法院文件。
+- 做 long-only 排除與風險檢查；每項負面主張必須區分已證實事實、研究機構主張、公司反駁與本系統推論。
 
 ### Aswath Damodaran
 
+- 本機候選：`skill/aswath_damodaran/`。
 - [NYU Damodaran Online](https://pages.stern.nyu.edu/~adamodar/)
 - [Musings on Markets](https://aswathdamodaran.blogspot.com/)
 - 官方免費課程、slides、spreadsheets、blog 是主要蒸餾來源；舊估值 input 不當今日資料。
 
-### Andy Constan / Damped Spring
+### Serenity / @aleabitoreddit
 
-- [Damped Spring](https://dampedspring.com/)
-- [X profile](https://x.com/dampedspring)
-- 只使用免費公開內容；每個宏觀觀點需 `as_of`、可觀測機制和 invalidators。
+- 本機候選：`skill/serenity-aleabitoreddit-data/`。
+- [X profile](https://x.com/aleabitoreddit)
+- 正式審查時核對 canonical X URL、coverage、dedup、擷取方式、刪文狀態與授權；未審查前不得直接成為 doctrine evidence。
+
+### Terry Smith / Fundsmith
+
+- 本機候選：`skill/terry_smith_fundsmith/`。
+- 計畫中的 primary sources：Fundsmith 官方 owners' manual、annual letters、shareholder meeting materials 與 Terry Smith 公開訪談。
+- 將企業品質、再投資 runway 與買入估值分開；歷史持倉或績效不得直接當成未來訊號。
+
+### Michael Mauboussin
+
+- 本機候選：`skill/michael_mauboussin/`。
+- 計畫中的 primary sources：作者／任職機構正式發布的研究、書籍配套材料與公開演講訪談。
+- base rate、期望值與競爭優勢框架必須標記樣本定義、期間與適用邊界，避免把舊統計當成固定常數。
 
 ### Lyn Alden
 
+- 本機候選：`skill/Lyn_Alden/`。
 - [Lyn Alden 官方網站](https://lynalden.com/)
 - [X profile](https://x.com/LynAldenContact)
 - 官方免費文章/newsletter、公開訪談、X canonical posts；長期 framework 與短期 timing 分離。
 
 ## 6. GitHub 其他設計候選
 
-- `dzianisv/skills` 的 macro panel：可參考 source/timestamp、conductor 和多宏觀 lens 編排；不是本專案七人完整蒸餾。
-- `AsserHong/stock-skills` 的 trading debate：可參考 data gap/timestamp 與辯論結構；固定 prompt、價格目標與 action 輸出不適合作為 production dependency。
-- `hyhmrright/market-sages`：含 Damodaran 等 prompt/eval 示範，但規模小、偏角色扮演且依賴使用者貼入當前資料。
-- `SamPom100/valuation-agents`：有 Damodaran 相關候選內容，需另做 repository/license/source 完整稽核。
+- 舊版 discovery 候選紀錄不再代表目前七位名單；若正式 P3 仍想借鑑 retrieval/evidence packet 設計，必須重新做 repository、license、source 與 prompt-injection 稽核。
 
 結論：尚無「有名、完整、具授權、可追溯、含反例與 held-out eval」的一套 skill 能涵蓋七人。開源資產只當設計與 discovery 輸入。
 

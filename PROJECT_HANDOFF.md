@@ -63,12 +63,12 @@
 
 七套 doctrine：
 
-1. Serenity / `@aleabitoreddit`：AI、半導體、供應鏈瓶頸、多跳 BOM。
-2. Citrini Research：主題、敘事週期、第二／第三階影響。
-3. SemiAnalysis / Dylan Patel：AI infra、半導體技術經濟、產能與 capex。
-4. Edwin Dorsey / The Bear Cave：forensic accounting、治理、激勵與商模風險。
-5. Aswath Damodaran：story-to-numbers、估值、風險與 terminal assumptions。
-6. Andy Constan / Damped Spring：流動性、利率、positioning、跨資產資金流。
+1. Howard Marks：市場週期、風險、投資人心理與 second-level thinking。
+2. Muddy Waters Research：forensic accounting、揭露品質、治理與舞弊風險。
+3. Aswath Damodaran：story-to-numbers、估值、風險與 terminal assumptions。
+4. Serenity / `@aleabitoreddit`：AI、半導體、供應鏈瓶頸、多跳 BOM。
+5. Terry Smith / Fundsmith：高品質複利、資本報酬、再投資與資本配置。
+6. Michael Mauboussin：expectations investing、base rates、競爭優勢與機率決策。
 7. Lyn Alden：財政／貨幣 regime、能源、美元與長週期資產負債表。
 
 只蒸餾分析框架、證據偏好、反例、失效條件與 domain boundary；不模仿人格、語氣，不聲稱本人背書。
@@ -176,8 +176,10 @@
 - 獨立 public repository：[`ihsieh31/seven-lens-paper-trading`](https://github.com/ihsieh31/seven-lens-paper-trading)。
 - default branch 為 `main`；P1 authority hardening code commit為
   `e8543b69bfc6a6d2dd9a87837d9d46bb11afc406`，遠端run `31891905869`兩個required jobs均成功。
-  後續可有只同步handoff/evidence的descendant commit；新session應以`git status`、`git log`與
-  `origin/main`現況為準，不把舊hash當固定checkout要求。
+  已發布的handoff/evidence descendant與最終綠燈baseline為
+  `5b3cd501c7ef415cbb27c3e0b5762ecdb7a609ea`，run `31892024588`兩個required jobs亦成功。
+  新session仍應先以`git status`、`git log`與`origin/main`現況為準；若只有使用者要求的handoff
+  文件變更，必須保留，不得為符合baseline hash而還原。
 - `main` branch protection 採 strict required checks：`quality-unit`、`postgres-integration`；禁止
   force push 與 branch deletion，保留 repository admin 緊急 bypass。
 - 本次交接更新是使用者明確要求的本機變更；若新 session 開始時唯一 dirty file 是
@@ -222,7 +224,8 @@
 - 需求固定與範圍界定。
 - TradingAgents 實際程式架構評估。
 - Alpaca Paper、Tavily、OpenAI/Codex 官方能力與限制核對。
-- 七人公開來源與 GitHub 蒸餾候選初審。
+- 舊版七人公開來源與 GitHub 蒸餾候選初審；名單已於 2026-08-16 由使用者改為目前七位。
+- 本機 `skill/` 已存在目前七位候選語料，約 827 MB／723 個非 `.DS_Store` 檔案；本輪依使用者要求只做路徑與容量盤點，未審查內容、來源、授權、完整性或可蒸餾性。公開 repository 以 `.gitignore` 排除整個目錄。
 - 主企劃、架構、蒸餾、安全、營運、roadmap、sources、ADR、進度／問題／工作／風險日誌。
 
 ### P1-A — 安全專案骨架：完成並通過驗收
@@ -427,6 +430,8 @@ PostgreSQL `19 passed, 0 skipped`。lock hash前後一致、volume set未變、o
 - `OPEN-005`：蒸餾與歷史回測前視偏差，Critical。
 - `OPEN-006`：免費告警通道尚未選定。
 - `OPEN-007`：Tavily 七帳號彙總使用權尚未證實。
+
+目前七位本機候選語料不是已驗收 evidence：正式 P3 第一個動作是逐來源建立 SourceManifest、quarantine report、授權／再散布判定與 coverage gap；通過前不得進 doctrine proposition extraction，也不得把 `skill/` 推到公開 repository。
 
 P1-B 不應假裝解決這些問題；只在其範圍真的建立控制時更新。
 
@@ -651,7 +656,7 @@ P1-A 已通過獨立驗收。保留 Paper-only、Tavily authorized pool fail-clo
 
 ## 17. 給下一個 AI 的一句話狀態
 
-> P0、完整P1與authority hardening均已通過本機及獨立GitHub Actions驗收，P1 Core Gate保持關閉；hardening code commit為`e8543b69bfc6a6d2dd9a87837d9d46bb11afc406`，run `31891905869`的`quality-unit`與`postgres-integration`均成功。公開repository為`ihsieh31/seven-lens-paper-trading`，required checks維持strict。現有Keychain read-only secret boundary、explicit telemetry context、PostgreSQL owner/runtime分權、hardened SECURITY DEFINER、typed event/audit registry、bounded persisted JSON、audit/transaction/lease/fencing、zero-skip gate與clean-machine scripts；仍沒有OpenTelemetry/exporter、API client、broker/order/fill表、排程或交易能力，也未查詢真實Keychain。下一步只先討論並定義P2安全工作包，不得直接開始broker/order implementation。
+> P0、完整P1與authority hardening均已通過本機及獨立GitHub Actions驗收，P1 Core Gate保持關閉；hardening code commit `e8543b69bfc6a6d2dd9a87837d9d46bb11afc406`由run `31891905869`驗證，已發布的綠燈baseline `5b3cd501c7ef415cbb27c3e0b5762ecdb7a609ea`另由run `31892024588`驗證。七位已於2026-08-16改為Howard Marks、Muddy Waters Research、Aswath Damodaran、Serenity、Terry Smith、Michael Mauboussin與Lyn Alden；本機`skill/`約827 MB候選語料尚未審查且不得推到公開repository。現有系統仍沒有OpenTelemetry/exporter、API client、broker/order/fill表、排程或交易能力，也未查詢真實Keychain。下一步只先討論並定義P2安全工作包；到P3才先做語料SourceManifest／quarantine／授權與coverage審查，不得直接蒸餾或開始broker/order implementation。
 
 ---
 
@@ -675,9 +680,14 @@ P1-A 已通過獨立驗收。保留 Paper-only、Tavily authorized pool fail-clo
 
 目前權威狀態：P0、完整 P1 與 authority hardening 已完成，P1 Core Gate 保持關閉；public repository 是
 ihsieh31/seven-lens-paper-trading。main 必須包含hardening code commit
-e8543b69bfc6a6d2dd9a87837d9d46bb11afc406；GitHub Actions run 31891905869 的quality-unit與
-postgres-integration均成功，required checks仍為strict。其後若只有handoff/evidence descendant commit，
-以origin/main現況與該commit自己的CI為準，不要求HEAD永遠等於上述code commit。
+e8543b69bfc6a6d2dd9a87837d9d46bb11afc406；已發布的最終綠燈baseline為
+5b3cd501c7ef415cbb27c3e0b5762ecdb7a609ea。GitHub Actions runs 31891905869與31892024588的
+quality-unit／postgres-integration均成功，required checks仍為strict。先比較origin/main；若只有使用者
+要求的handoff文件變更，保留該變更，不因HEAD不同而還原或重跑整個P1。
+
+七位目前是Howard Marks、Muddy Waters Research、Aswath Damodaran、Serenity / @aleabitoreddit、
+Terry Smith / Fundsmith、Michael Mauboussin與Lyn Alden。本機skill/候選語料尚未審查且被排除於
+公開repository；到P3才先做SourceManifest、quarantine、授權／再散布與coverage審查。
 
 本次不要寫程式、不要修改文件、不要 stage／commit／push、不要建立 PR，也不要讀取 Keychain、
 索取或使用任何 credential、呼叫 Alpaca 或其他外部交易／資料 API。除非目前狀態與上述證據不符，
@@ -750,5 +760,8 @@ PUBLIC沒有schema CREATE、database TEMP或protected function EXECUTE。functio
 - GitHub Actions run [`31891905869`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31891905869)：
   `quality-unit`與`postgres-integration`均為`success`；遠端數字分別為`440 passed, 33 deselected`與
   `33 passed`。
+- 已發布handoff/evidence baseline：`5b3cd501c7ef415cbb27c3e0b5762ecdb7a609ea`；GitHub Actions run
+  [`31892024588`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31892024588)再次驗證最終
+  `main`，`quality-unit`與`postgres-integration`均為`success`。
 - 未讀取／修改Keychain，未使用broker/model/data API、repository secret或真實credential；沒有P2
   broker/order/fill、scheduler、launchd或live path。

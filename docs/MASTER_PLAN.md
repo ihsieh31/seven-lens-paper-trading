@@ -91,12 +91,12 @@
 
 | 方法論 | 主要任務 | 典型反問 |
 |---|---|---|
-| Serenity | AI／半導體多跳 BOM、上游瓶頸、認證週期 | 真正不可替代的 chokepoint 在哪？ |
-| Citrini Research | 主題交易、敘事演化、第二／第三階受益者 | 市場已定價第一階後，下一個傳導點在哪？ |
-| SemiAnalysis / Dylan Patel | AI infra、半導體技術經濟、capacity/capex | 技術路線、良率、產能與單位經濟是否支持敘事？ |
-| Edwin Dorsey / Bear Cave | forensic accounting、治理、促銷與激勵 | 什麼證據會揭露管理層、會計或商模風險？ |
+| Howard Marks | 市場週期、風險、投資人心理與 second-level thinking | 共識已反映什麼，而週期位置讓哪些風險被低估？ |
+| Muddy Waters Research | forensic accounting、揭露品質、治理與舞弊風險 | 哪些可核對證據會推翻管理層敘事或資產品質？ |
 | Aswath Damodaran | 故事到數字、估值、風險與 terminal assumptions | 目前價格要求公司成為什麼樣的企業？ |
-| Andy Constan / Damped Spring | 流動性、利率、positioning、跨資產 | 資金流與政策衝擊如何改變折現率及風險承擔？ |
+| Serenity / `@aleabitoreddit` | AI／半導體多跳 BOM、上游瓶頸、認證週期 | 真正不可替代的 chokepoint 在哪？ |
+| Terry Smith / Fundsmith | 高品質複利、資本報酬、再投資與資本配置 | 企業能否以高報酬率長期再投資而不依賴槓桿？ |
+| Michael Mauboussin | expectations investing、base rates、競爭優勢與機率決策 | 市價隱含哪些預期，base rate 與可逆證據是否支持？ |
 | Lyn Alden | 財政／貨幣 regime、能源、美元、長週期 | 宏觀資產負債表環境支持或破壞哪個現金流？ |
 
 ### 4.1 辯論協議
@@ -111,7 +111,7 @@
 ### 4.2 權重原則
 
 - 權重依「domain relevance × 過去校準 × 當前證據品質」決定，不是名氣或固定一人一票。
-- Bear Cave 類負面證據可觸發風險調查或否決，但一則疑點不等於自動做空。
+- Muddy Waters 類負面證據可觸發風險調查或否決，但一則疑點不等於自動做空。
 - 委員一致不代表正確；高度相關的同源資訊要做 correlation haircut。
 - 一位相關專家的 primary-source-backed 反例，可以勝過六個低相關、重複同一新聞的支持意見。
 - 權重只能從 held-out / forward evaluation 更新，且有上下限和版本紀錄。
