@@ -371,7 +371,7 @@ def test_workflow_commands_match_p1_c3_contract() -> None:
         "uv run --locked ruff check .",
         "uv run --locked mypy",
         'uv run --locked pytest -m "not integration" -ra --tb=short',
-        "uv run --locked pytest tests/integration -m integration -ra --tb=short",
+        'uv run --locked pytest tests/integration -m "integration and not live" -ra --tb=short',
     )
 
     assert all(command in workflow for command in required_commands)
@@ -380,3 +380,9 @@ def test_workflow_commands_match_p1_c3_contract() -> None:
     assert "SHOW server_version_num" in workflow
     assert "enable-cache: true" in workflow
     assert ".venv" not in workflow
+
+
+def test_postgres_integration_job_excludes_live_marker() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert 'pytest tests/integration -m "integration and not live" -ra --tb=short' in workflow
+    assert "SEVEN_LENS_P2E_LIVE" not in workflow

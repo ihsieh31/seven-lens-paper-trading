@@ -53,6 +53,7 @@
 - 狀態：Accepted
 - 決策：Codex 排程用於程式維護、測試、文件與離線蒸餾；交易時鐘由常駐 Python 服務、Alpaca 市場日曆與資料庫 job lease 控制。
 - 理由：桌面自動化依賴電腦和應用程式運行，不應作為券商工作流的唯一時鐘。
+- 補充（2026-08-19）：工作副本已移回 Codex；本 ADR 的排程隔離與權限邊界同樣約束 Codex Automations。
 
 ## ADR-009：長倉、無槓桿、正常時段、整股
 
@@ -166,3 +167,201 @@
   不得在未定義成本、工具、false-positive policy與required-check migration前靜默加入。
 - 理由：P1建立的資料庫、audit與secret邊界會直接承載P2；在加入broker能力前補齊可由真實PostgreSQL
   證明的authority invariants，同時避免把未證實或屬後續composition/quality階段的要求誤報為現存漏洞。
+
+## ADR-017：P2-A 執行 domain 契約、封閉狀態機與 deterministic client order id
+
+- 日期：2026-08-17
+- 狀態：Accepted
+- 決策：P2 第一個工作包只交付執行層資料契約與驗收 harness，不含任何網路 client：
+  `execution/orders.py` 以 exact-type frozen value objects 固化 Symbol、OrderSide、
+  OrderQuantity（整股）、Price/UsdAmount（Decimal 恰兩位小數、整數 cents 為唯一入口、
+  禁止浮點）、PriceCollar（offset 1..500 bps，provisional）與 OrderIntent／BrokerOrder／Fill。
+- 內部 order lifecycle（CREATED→…→FILLED/CANCELED，含 REJECTED/EXPIRED/UNKNOWN）與 broker
+  mirror lifecycle 各自為封閉轉移映射，Python 端以 exact enum 檢查，PostgreSQL 端以
+  IMMUTABLE `*_transition_is_valid` 函數與 guard trigger 獨立執行同一映射；UNKNOWN 只能經
+  `client_order_id` 查詢解析，狀態機不存在任何盲目重送邊。
+- `client_order_id` 固定為 `slv1-{strategy}-{trading_date}-{window}-t{target_version}-{symbol}
+  -{side}`；組合一致性、唯一性與欄位格式由 DB CHECK/UNIQUE 及 Python `__post_init__` 雙邊強制。
+  fills 表 append-only（trigger 禁止 UPDATE/DELETE）；order_intents/broker_orders 的 identity
+  欄位不可變，僅狀態與鏡像欄位可更新。
+- runtime role 擴充為：order_intents/broker_orders INSERT+UPDATE、fills 僅 INSERT；三表皆無
+  DELETE 權限，`verify_runtime_role()` 的 least-privilege 集合同步擴充。
+- fake broker（`execution/fake_broker.py`）是 P2 安全驗收面：per-client-order-id 一次性故障
+  plan（TIMEOUT_BEFORE_ACCEPT 不留單、TIMEOUT_AFTER_ACCEPT 留單、REJECT 可重播、partial fill
+  腳本）與 idempotency/conflict 檢查；真實 Alpaca Paper adapter（P2-E）僅做 read-only 驗證，
+  真實下單留待 P7 supervised 階段（2026-08-17 使用者核准）。
+- 理由：Idempotency、timeout 語意與帳本不可變性必須先以純本機、可 fault-inject 的契約固化，
+  才能讓後續 execution engine（P2-B）與 reconciliation（P2-C）在同一不變量上開發；
+  「API call 成功」不等於安全驗收。
+
+## ADR-018：P2-B~E 執行引擎、對帳、控制平面與 Paper adapter 的安全結構
+
+- 日期：2026-08-17
+- 狀態：Accepted
+- 決策（P2-B）：ExecutionEngine 只以 deterministic client_order_id 與 broker 互動；SUBMITTING
+  在任何 broker 呼叫前持久化（測試以 guard broker 當場斷言）；timeout 一律進 UNKNOWN，解析
+  只能查詢；唯一允許的重送是「broker 證明無此 id 且 cancel 窗口仍開」的同 id 重送；fills 以
+  execution_id 去重；參數矛盾的 broker order 拒絕記錄並抛出待對帳仲裁（fail closed、零副作用）。
+- 決策（P2-C）：對帳以 broker 自身 account/order/fill/position view 對本地權威表比較；
+  mismatch 分類封閉（NON_PAPER_ACCOUNT…POSITION_*）；reconciliation_runs 表 append-only 且
+  `mismatch_count = cardinality(mismatch_kinds)` 由 DB 保證；`Reconciler.run()` 在 MISMATCH 時
+  持久化證據並自動 pause_entries（記錄 PAUSE_ENTRIES 命令）。帳本投影（cash delta + FIFO lots）
+  只以本地 fills+mirrors 為輸入；oversell、未知 order、超界現金一律 fail closed。
+- 決策（P2-D）：control_commands 表 append-only、control_state 單例暫停旗標（暫停必帶 reason、
+  由 guard trigger 與 CHECK 強制）；resume 必須最新 reconciliation 為 CLEAN 否則 fail closed；
+  flatten 需明確 "FLATTEN_PAPER" 確認字串且先暫停，賣出意圖由本地帳本推導（limit 掛 collar 下界）。
+  composition root 關閉兩個 P2-entry blocker：exact-schema typed 設定邊界（application 層禁
+  urllib，DSN 組合移至 infrastructure）與 runtime DB password 的 exact SecretRef（新增
+  POSTGRES_RUNTIME_PASSWORD kind）＋單一 bounded reveal（RuntimeDsn 不洩漏 str/repr）。
+- 決策（P2-E）：AlpacaPaperAdapter 只接受 exact Paper endpoint，經可注入 transport（測試零網路）；
+  回應嚴格解析，未知欄位/狀態 fail closed；408/429/5xx 視為 outcome-unknown。依使用者決策，
+  真實 endpoint 僅授權 read-only 驗證，真實下單留 P7；list_open_orders 未做 >500 分頁（10 持倉
+  上限下不成立，列為已知邊界）。
+- 已知邊界（後續工作包）：order 狀態轉移未逐筆寫入 P1 typed audit event registry（order 表
+  guard + append-only fills + control_commands 即為可驗證軌跡；如需 event 化需擴充封閉 registry）；
+  engine/reconciler 尚未接 P1-C2 telemetry instrumentation；EXPIRED 與 in-flight submit 的極端
+  競態由 reconciliation（UNKNOWN_BROKER_ORDER→pause）涵蓋。
+- 理由：P2 的安全對象是「broker 與本地帳本可能分歧」本身；所有歧義一律落腳到可查證的
+  UNKNOWN/EXPIRED/MISMATCH 狀態與自動暫停，而不是猜測或重試。
+
+## ADR-019：Trade update consumer、NAV valuation 與 P2 收尾邊界
+
+- 日期：2026-08-17
+- 狀態：Accepted
+- 決策：新增 transport 中立的 `TradeUpdateConsumer`（`execution/trade_updates.py`）：重複
+  fill 以 execution id 冪等吸收；亂序狀態事件以 broker 時間戳判定 STALE、零副作用；未知
+  intent／鏡像／broker id 不符一律 UNKNOWN_ORDER 不猜測；不可表示狀態抛 typed error 交對帳
+  仲裁；無變化的重播事件分類為 DUPLICATE 而非 APPLIED。broker 端外部取消（本地仍在
+  ACKNOWLEDGED/PARTIALLY_FILLED）經 CANCEL_PENDING 合法路由至 CANCELED。
+- 決策：帳本新增 `account_valuation`（期初現金 + fills 現金效果 + 依供給價格的持倉市值）；
+  缺價格或超界 fail closed，不以零估值替代。
+- 範圍聲明：WebSocket 傳輸本體（連線、重連、心跳）屬 P6/P7 runtime bring-up；P2 交付消費
+  語意與冪等/亂序驗收。control shell CLI 同理延後：`SECURITY.md` 禁止 DSN 進 argv/env，
+  CLI 需完整 runtime credential 路徑（Keychain + RuntimeDsn），於 launchd 前置作業一併交付；
+  控制命令本身已可由程式路徑完整執行並通過真實 PostgreSQL 驗證。
+- 理由：P2 的可驗收對象是「事件消費的不變量」而非傳輸層；把傳輸延後到有真實憑證的階段，
+  避免在無金鑰環境偽造連線證據。
+
+## ADR-020：Window cutoff 語意——先仲裁歧義、先取消、絕不本地過期未知取消
+
+- 日期：2026-08-17
+- 狀態：Accepted
+- 決策：`expire_overdue` 不再對所有逾期 live 意圖盲目本地 EXPIRED。新的截止順序：
+  (1) SUBMITTING/UNKNOWN 先以 client_order_id 查詢解析——broker 仍持有的單不得與本地終態
+  分歧；(2) 無 broker 單的 CREATED/RISK_APPROVED/OUTBOX_PENDING 直接本地 EXPIRED；
+  (3) ACKNOWLEDGED/PARTIALLY_FILLED/CANCEL_PENDING 逾期時先向 broker 請求取消，僅在
+  mirror 結構性錯誤時本地 EXPIRED 交對帳；(4) 取消請求遭遇 transport error 時**絕不本地
+  過期**——已持久化的 CANCEL_PENDING 保留，訂單可能仍成交，交 recovery 與 reconciliation。
+  同一意圖在同一輪截止中只回報最終狀態一次。
+- 理由：本地 EXPIRED 是「我們不再行動」的聲明，不是「broker 單不存在」的證據；與 broker
+  狀態矛盾時必須以查詢與取消收斂，分歧只能由 reconciliation 顯式揭露（自動暫停）。
+
+## ADR-021：執行安全門檻補強——pause 內嵌引擎、雙時鐘、重複訂單解析、終態對帳
+
+- 日期：2026-08-17
+- 狀態：Accepted
+- 決策：獨立對抗審查（ISSUES.md OPEN-017/OPEN-018 與 ASSESSED-019）後的四項執行層決策：
+  1. `pause_entries` 不再只擋 operator shell：`ExecutionEngine` 注入 `control` state source，
+     `submit_from_outbox` 在 SUBMITTING 轉移與任何 broker 呼叫**之前**檢查
+     `entries_paused`，違反時抛 `ExecutionPausedError`（零副作用）；RISK_EXIT（緊急離場、
+     flatten）與 risk-reduction（cancel/expire/fills/resolve）一律不受 pause 影響；resume
+     不需重建 engine。composition 以 `build_execution_stack(..., control=...)` 注入同一個
+     control repository（reconciliation mismatch 自動暫停立即生效）。
+  2. `broker_orders` 雙時鐘：新增 `broker_updated_at`（broker 自身時間，trigger 保證只能
+     前進）與既有 DB 本地 `updated_at`（`statement_timestamp()`，稽核用）分離；domain
+     `BrokerOrder.updated_at` 一律為 broker 時間。`TradeUpdateConsumer` 的 STALE 基準改為
+     broker 時間，clock skew／事件回放不再把合法 broker 事件誤判 STALE 丟棄
+     （migration 0006）。
+  3. Alpaca 422/400（`client order id already exists`）不再一律分類為 REJECTED：
+     submit 對重複 id 改以 `GET /v2/orders:by_client_order_id` 查詢解析，參數一致回
+     `SubmitAccepted`（冪等 recovery），參數矛盾或查不到則維持
+     `ORDER_PARAMETERS_REJECTED`；follow-up GET 非 2xx 亦fail-soft回 rejection。
+  4. Reconciler 補齊兩個盲點：terminal intent（FILLED/CANCELED/EXPIRED/REJECTED）卻有
+     broker 仍開單 → 新增 `MismatchKind.INTENT_STATUS_MISMATCH`；terminal mirror 對照
+     broker 開單 → `STATUS_MISMATCH`（原實作只比較 open mirrors）。
+- 理由：pause 語意在 operator 層維持不變，但 outbox worker／任何引擎呼叫方都是同一入口，
+  必須在引擎層 fail closed 才不會出現「暫停後仍建立新 exposure」；時鐘混用會靜默丟失合法
+  broker 事件（STALE），是稽核與帳務正確性問題；重複 client id 是崩潰恢復的既有冪等契約，
+  422 分類為 REJECTED 會破壞 recovery；reconciliation 只比較 open mirrors 會漏報終態分歧，
+  而分歧正是 pause/reconciliation 存在的理由。
+- 證據：`tests/test_execution_pause_remediation.py`、`tests/integration/test_broker_order
+  _timestamps_postgres.py`（均先 red 後 green）、`tests/test_alpaca_paper_adapter.py`
+  `TestDuplicateClientOrderId`、`tests/test_reconciliation_and_ledger.py`
+  `TestTerminalIntentWithOpenBrokerOrder`、`tests/test_p1_c3_ci.py`
+  `test_postgres_integration_job_excludes_live_marker`；`verify_p1.sh --postgres`、
+  `run_postgres_integration.sh` 全綠；ci.yml 與本機 script 的 postgres job 一律
+  `-m "integration and not live"`（live 只能經 P2-E CLI 手動執行）。
+
+## ADR-022：P2 second remediation——broker 真值未知即不宣告終態、flatten 六步、資產閘與詳情對帳
+
+- 日期：2026-08-18
+- 狀態：Accepted（implementation completed, pending independent re-acceptance）
+- 決策：第二輪 remediation 的核心不變量——「broker truth 未知時不得自行宣告終態」——
+  落為以下六組決策（migration 0007 為其持久化載體）：
+  1. **UNKNOWN 語意**：deadline 後 `GET` 查無單的 SUBMITTING 不再轉 EXPIRED，改為
+     UNKNOWN（reconciliation/recovery 才收斂）；只有從未到過 broker 的
+     CREATED/RISK_APPROVED/OUTBOX_PENDING 可本地 EXPIRED。`expire_overdue` 取消路徑出現
+     transport/config 錯誤時保留 CANCEL_PENDING，絕不本地 EXPIRED。
+  2. **broker watermark 保守化**：0006 以本地 `updated_at` 回填的 broker_updated_at 是
+     過高 watermark 且不可復原 → 0007 全部清成 NULL（unknown），domain 讀 NULL 時以
+     submitted_at 作 lower bound：永不把合法 broker 事件誤判 STALE。回放同值
+     （status+filled_quantity 相等）→ DUPLICATE；同 timestamp 不同值 → 明確衝突錯誤。
+  3. **broker_orders SQL guard 完整化**：0006 的 trigger 允許非法轉移與 filled_quantity
+     倒退 → 0007 以「僅當兩端都非 NULL 才禁止倒退」取代單調 guard；新增
+     filled_quantity 永不倒退、FILLED 必需恰等 quantity、INSERT 側身份欄位 immutable 與
+     FILLED exact；status CHECK 擴為完整 Alpaca 15 態；`REVIEW_REQUIRED` 進入 intent
+     狀態機，六個 review broker 狀態一律收斂至 REVIEW_REQUIRED（永不自行猜終態）。
+  4. **flatten 六步**：確認 → 已暫停 → resolve SUBMITTING/UNKNOWN → 取消
+     ACK/PARTIALLY/CANCEL_PENDING → refresh 收斂 → **position view vs 本地 ledger
+     必須逐符號一致，否則 abort（零新單）** → 最後才以價格 seam（`FlattenPriceProvider`）
+     估價、以同一交易內原子遞增的 durable `flatten_generation` 作 target_version 下單。
+     重複 flatten 的 client order id 永不碰撞。
+  5. **資產閘**：`submit_from_outbox` 在任何狀態轉移前以 broker 自身 asset view
+     （`get_asset`）驗證 symbol 已知且可交易，未知/不可交易一律 fail-closed
+     （含 RISK_EXIT；flatten 在下單前對全部部位預檢）。
+  6. **詳情對帳**：`reconciliation_mismatches` 明細表逐條保存每筆 mismatch 的
+     kind+detail（ordinal 穩定、append-only）；closed-history pass 以
+     `list_recent_orders(since=前一輪 observed_at)` 重掃已關閉 broker 單，
+     補 UNKNOWN_BROKER_ORDER/STATUS_MISMATCH/MISSING_LOCAL_FILL 三類漏報；
+     `mismatch_kinds` CHECK 納入 `INTENT_STATUS_MISMATCH`；runtime role 僅增
+     INSERT/SELECT，仍無 DDL。
+- 理由：終態是「broker 已確認」的宣稱，本地以 clock 到期代替 broker 確認會製造
+  不可收斂的分歧（尤其 cancel 未決時）；watermark 過高會靜默丟失合法 broker 事件；
+  flatten 在未暫停/未取消/未對帳前下賣單會在緊急時擴大風險；每次 flatten 用固定
+  target_version 使重複 flatten 撞 id；對帳只存 kind 不存 detail 使證據不可稽核。
+- 證據：`tests/test_execution_engine.py`（TestPendingCancelCutoff、TestBrokerTerminal-
+  Recovery、TestDuplicateDelayedVisibility、TestAssetGate）、`tests/test_control_plane.py`
+  （flatten aborts/disagreement/price seam/generation 三連）、`tests/test_reconciliation_
+  and_ledger.py`（closed-history 四案）、`tests/test_session.py`、`tests/fakes/orders.py`
+  invariants；`scripts/run_postgres_integration.sh` 66 passed、`verify_p1.sh --postgres`
+  66 passed、non-integration 621 passed、ruff/mypy 92 檔全綠。
+
+## ADR-023：P2 獨立驗收修復與 Codex 回遷
+
+- 日期：2026-08-19
+- 狀態：Accepted implementation；重新 Open 的 gate 已由 ADR-024 驗收後 Closed
+- 決策：pause 必須同時約束初次提交與 SUBMITTING/UNKNOWN recovery；flatten 只有在所有
+  既有 broker order 均收斂後才能建立 sell intents；asset gate 除 known/tradable 外必須是
+  `US_EQUITY`；`REVIEW_REQUIRED` 永遠使 reconciliation 為 MISMATCH。Alpaca orders 依官方
+  `after_order_id` 分頁並按 broker `updated_at` 本地過濾；fills 使用 `page_token`、
+  `page_size`、`direction=asc` 與 `/activities/FILL`。
+- 證據：新增 6 個回歸案例；locked gate 627 passed / 74 deselected；真實 PostgreSQL 16
+  66 passed / 8 deselected；Ruff、mypy、lock 全綠。未讀 Keychain、未執行 live test、未
+  commit/push。
+
+## ADR-024：P2 全面再驗收——提交線性化、部分失敗稽核與 broker snapshot 合併
+
+- 日期：2026-08-19
+- 狀態：Accepted；P2 Gate Closed
+- 決策：非 risk-exit submission 必須在 `control_state` 的 PostgreSQL shared row lock 下讀取
+  pause 並跨越 broker submit，讓 concurrent pause UPDATE 只能在線性化提交完成後生效；控制
+  多筆 cancel/flatten 的部分失敗必須逐筆保留狀態、寫 `applied_at=NULL` 的 bounded
+  `PARTIAL_FAILURE` command、維持 pause 並拋 typed error。
+- reconciliation 的任何 `BrokerTransportError` 必須持久化 `BROKER_QUERY_FAILURE` 並自動
+  pause；open snapshot 與 recent history 以 broker `updated_at` 合併，較舊或同時間同狀態才
+  去重，同時間不同狀態必須繼續比較並產生 mismatch。Alpaca 單一資產使用
+  `/v2/assets/{symbol}`；open orders、fills 均 bounded pagination，fill 必須匹配 requested
+  broker order id，未知 broker status 維持 fail-closed。
+- 證據：Luna 三輪對抗重現最終無 validated blocker；Ruff/mypy 92 檔、637 non-integration、
+  69 PostgreSQL 16 integration、1 live GET-only acceptance 全綠。P2 關門不授權真實下單、
+  commit/push 或跳過 P3/P6/P7 gate。

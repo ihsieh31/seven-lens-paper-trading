@@ -41,13 +41,13 @@ def test_clean_apply_repeat_verify_and_schema_contract(test_database_url: str) -
     try:
         assert current_version(test_database_url) == 0
 
-        assert migrate(test_database_url) == 2
-        assert current_version(test_database_url) == 2
-        assert verify_schema(test_database_url) == 2
+        assert migrate(test_database_url) == 7
+        assert current_version(test_database_url) == 7
+        assert verify_schema(test_database_url) == 7
 
         # Applying an already-applied migration is idempotent and checksum-checked.
-        assert migrate(test_database_url) == 2
-        assert verify_schema(test_database_url) == 2
+        assert migrate(test_database_url) == 7
+        assert verify_schema(test_database_url) == 7
 
         with _connection(test_database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
@@ -58,16 +58,24 @@ def test_clean_apply_repeat_verify_and_schema_contract(test_database_url: str) -
                   AND table_name IN (
                       'schema_metadata', 'schema_migrations', 'domain_events',
                       'audit_events', 'job_instances', 'job_leases',
-                      'orders', 'fills', 'positions', 'broker_accounts'
+                      'order_intents', 'broker_orders', 'fills', 'reconciliation_runs',
+                      'control_commands', 'control_state',
+                      'orders', 'positions', 'broker_accounts'
                   )
                 ORDER BY table_name
                 """
             )
             assert [row[0] for row in cursor.fetchall()] == [
                 "audit_events",
+                "broker_orders",
+                "control_commands",
+                "control_state",
                 "domain_events",
+                "fills",
                 "job_instances",
                 "job_leases",
+                "order_intents",
+                "reconciliation_runs",
                 "schema_metadata",
                 "schema_migrations",
             ]
@@ -99,7 +107,32 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
     _drop_all_migrations(test_database_url)
     try:
         assert current_version(test_database_url) == 0
-        assert migrate(test_database_url) == 2
+        assert migrate(test_database_url) == 7
+
+        assert rollback(test_database_url) == 6
+        assert current_version(test_database_url) == 6
+        with pytest.raises(MigrationError, match="migration version does not match"):
+            verify_schema(test_database_url)
+
+        assert rollback(test_database_url) == 5
+        assert current_version(test_database_url) == 5
+        with pytest.raises(MigrationError, match="migration version does not match"):
+            verify_schema(test_database_url)
+
+        assert rollback(test_database_url) == 4
+        assert current_version(test_database_url) == 4
+        with pytest.raises(MigrationError, match="migration version does not match"):
+            verify_schema(test_database_url)
+
+        assert rollback(test_database_url) == 3
+        assert current_version(test_database_url) == 3
+        with pytest.raises(MigrationError, match="migration version does not match"):
+            verify_schema(test_database_url)
+
+        assert rollback(test_database_url) == 2
+        assert current_version(test_database_url) == 2
+        with pytest.raises(MigrationError, match="migration version does not match"):
+            verify_schema(test_database_url)
 
         assert rollback(test_database_url) == 1
         assert current_version(test_database_url) == 1
@@ -112,8 +145,8 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
             verify_schema(test_database_url)
 
         # A restored/disposable database can be rebuilt exactly from the migration.
-        assert migrate(test_database_url) == 2
-        assert verify_schema(test_database_url) == 2
+        assert migrate(test_database_url) == 7
+        assert verify_schema(test_database_url) == 7
     finally:
         _drop_all_migrations(test_database_url)
 

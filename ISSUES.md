@@ -142,3 +142,142 @@
   fail closed；Apple文件允許match-all回傳多筆result，且generic-password service/account屬primary key。
   未取得平台文件或native reproduction證明return-data + match-all不安全，因此不以推測修改native boundary。
 - 重審條件：Apple行為改變、OS/PyObjC升級、native ambiguous-result reproduction或官方文件明確要求。
+
+## CLOSED-017：ExecutionEngine 提交路徑未檢查 pause 狀態（pause bypass）
+
+- 嚴重度：Critical
+- 狀態：Closed（2026-08-17 修復並驗證；ADR-021）
+- 問題：`ExecutionEngine` 只注入 broker 與 clock（`src/seven_lens/application/execution_service.py`
+  `__init__`），`submit_from_outbox` 由 OUTBOX_PENDING 直接轉 SUBMITTING 並呼叫 broker，全程未讀
+  `ControlStateSnapshot.entries_paused`；`ControlPlane.assert_entries_allowed`（`control_service.py`）
+  只在 operator shell 路徑存在。因此 `pause_entries` 後 outbox worker 仍會送出全新 entry，違反
+  OPERATIONS_AND_SAFETY 的 PAUSED_ENTRIES 語意與「暫停後不得建立新 exposure 意圖」不變量。
+- 修復前證據：`tests/test_execution_pause_remediation.py` 全部案例 red（引擎缺少 `control`
+  依賴：`TypeError`/缺 `ExecutionPausedError`；paused 下 `submit_from_outbox` 回傳
+  `ACKNOWLEDGED` 且 broker 產生新 order 即缺陷存在）；RISK_REGISTER R-09/R-04 控制面缺口。
+- 處置：engine 注入 `control` state source（預設無 pause source＝不阻擋，既有呼叫點不變）；
+  `submit_from_outbox` 在 SUBMITTING 轉移／commit／broker 呼叫前檢查 pause，paused 且非
+  RISK_EXIT 抛 `ExecutionPausedError`（零副作用）；paused 下 cancel/expire/fills 維持可用；
+  resume 不需重建 engine；`build_execution_stack(..., control=...)` 注入同一 control
+  repository，reconciliation mismatch 自動暫停立即對引擎生效。
+- 驗證：`test_execution_pause_remediation.py` 5/5 綠（paused 阻擋零副作用、resume 恢復、
+  unpaused 正常、RISK_EXIT 放行、expire/cancel 不受影響）；靜態 gate 與
+  `verify_p1.sh --postgres` 全綠。
+
+## CLOSED-018：broker_orders 混用兩種時鐘（broker updated_at 被本地 DB 時間覆寫）
+
+- 嚴重度：High
+- 狀態：Closed（2026-08-17 修復並驗證；ADR-021；migration 0006）
+- 問題：`migrations/0003` 的 `broker_orders.guard_broker_order_write` trigger 把
+  `updated_at` 固定寫成 `statement_timestamp()`，`postgres.py` INSERT 亦未寫入 broker 的
+  `updated_at`；domain `BrokerOrder.updated_at` 語意是 broker 端事件時間，而
+  `TradeUpdateConsumer._apply_status` 以 `observed_at < mirror.updated_at` 判 STALE。真實
+  PostgreSQL 下 mirror.updated_at 是本地寫入時間：broker 時鐘偏差／事件回放時序下，合法 broker
+  事件被誤判 STALE 靜默丟棄；本地記錄時間與 broker 時間混在同一欄位無從稽核。
+- 修復前證據：`tests/integration/test_broker_order_timestamps_postgres.py` red（roundtrip
+  回讀 `updated_at` 為本地現在而非 broker 時間；clock-skew 事件被 STALE 丟棄）。
+- 處置：migration 0006 新增 `broker_orders.broker_updated_at`（broker 時間，`guard_broker_updated_at`
+  trigger 強制單調不倒退；backfill 用本地時間近似）與本地 `updated_at`（statement_timestamp）
+  分工；`record_broker_order`/`update_broker_order_status(+broker_observed_at)` 持久化 broker
+  時間，mapper 以 broker_updated_at 供給 domain；fake repo 同步語意；consumer 的 STALE 基準
+  改 broker 時間（`_apply_fill` 以 fill occurrence、`_apply_status` 以 observed_at）。
+- 驗證：`test_broker_order_timestamps_postgres.py` 2/2 綠（roundtrip 保留 broker 時間；
+  clock skew 下事件 APPLIED 不再 STALE）；migration 0006 在 `test_migrations.py` 完整
+  up/down/up cycle 綠；`run_postgres_integration.sh` 66 passed/8 deselected；
+  `verify_p1.sh --postgres` 全綠。
+
+## ASSESSED-019：CANCEL_PENDING→EXPIRED 與「不可表示終態」已由既有機制涵蓋
+
+- 嚴重度：Not confirmed
+- 狀態：Assessed（2026-08-17）
+- 判斷：Python 與 SQL 兩份狀態機映射已一致允許 CANCEL_PENDING→EXPIRED（`orders.py` 與
+  `0003` guard 逐對相等，`test_sql_transition_functions_match_the_python_maps` 強制）；
+  窗口截止四步（解析→取消→僅無單過期→transport error 停滯）由 ADR-020 涵蓋；SUBMITTING 遇
+  broker 終態以 `ExecutionStateError` fail closed 零副作用（ADR-018、round-2 對抗測試已鎖）。
+  本次審查對 A/E/F/G/H/N 各以 red reproduction 重新證明缺陷並全部修復（CLOSED-017、
+  CLOSED-018、F/H 於 `test_alpaca_paper_adapter.py`、G 於 `test_reconciliation_and_ledger.py`、
+  N 於 `test_p1_c3_ci.py`）；B/C/D 不再重述為獨立缺陷。
+- 重審條件：狀態機映射或截止語意被修改時重跑同等價整合測試。
+
+### A–N 清單第二輪重審（2026-08-18，第二輪 remediation）
+
+- 對 A–N 全部項目重跑一次對照：A（pause）維持閉合（本輪未改 submit 閘門語意，
+  `test_execution_pause_remediation.py` 5/5 仍綠）；B/C/D 維持不再重述；E（雙時鐘）
+  深化為 watermark 保守化（0007 清 NULL＋submitted_at lower bound，CLOSED-020/ADR-022）；
+  F（重複 id）深化為過期後查無單→UNKNOWN（`_resolve_duplicate` 404→
+  `DuplicateClientOrderIdUnknown`，`test_duplicate_id_with_missing_order_is_ambiguity_
+  not_rejection`）；G（終態對帳）深化為 closed-history pass（list_recent_orders
+  範圍掃描）；H（分頁）維持閉合；N（CI postgres job）維持閉合（integration 66/66）。
+  新發現並修復：deadline 後本地 EXPIRED 矛盾、filled_quantity 可倒退、flatten 未對帳
+  即下單、重複 flatten id 碰撞、對帳僅存 kind、未知資產仍下單（全部列入 CLOSED-020）。
+
+## CLOSED-020：broker 真值未知時引擎仍可能本地宣告終態（第二輪 remediation）
+
+- 嚴重度：High
+- 狀態：Closed（2026-08-18，resolved by design change + adversarial tests）
+- 問題：`expire_overdue` 對 SUBMITTING 超時一律本地 EXPIRED，等同在 broker 可能仍持有
+  訂單時自行宣告「已結束」；`broker_updated_at` 的 0006 backfill 用本地時間造成過高
+  watermark，可能把合法 broker 事件全程誤判 STALE 丟棄；`broker_orders` guard 未防
+  filled_quantity 倒退與 FILLED 數量不一致；flatten 在未確認 paused、未 resolve
+  歧義、未取消、未與 broker position view 對帳前就下賣單，且固定 target_version=1
+  使重複 flatten 的 client order id 碰撞。
+- 處置（對應 ADR-022）：
+  1. 引擎 spike：`resolve()` 重寫（deadline 後 GET 無單 → SUBMITTING 轉 UNKNOWN，已
+     UNKNOWN 保持）；`expire_overdue()` 只對從未到過 broker 的狀態本地 EXPIRED，
+     取消路徑含 transport error 一律保留 CANCEL_PENDING；`recover()` 修掉同一 sweep
+     重複 resolve。
+  2. watermark：0007 將 broker_updated_at 清成 NULL（unknown），domain 以 submitted_at
+     lower bound 讀取；trade updates 回放同值 → DUPLICATE，同 timestamp 不同值 →
+     明確衝突錯誤。
+  3. SQL guard：0007 新版 `guard_broker_order_write`／`guard_broker_order_insert`
+     （filled 不倒退、FILLED exact、身份 immutable、僅兩端非 NULL 才禁倒退），
+     status CHECK 完整 15 態，`REVIEW_REQUIRED` 收斂六個 review 狀態。
+  4. flatten 六步 + `FlattenPriceProvider` seam + durable `flatten_generation`
+     （`control_state` 新欄位，同交易原子遞增）＋ position 對帳不符即 abort。
+  5. 對帳明細：新增 `reconciliation_mismatches`（append-only、kind+detail、ordinal
+     穩定）；closed-history pass 以 `list_recent_orders(since=前一輪 observed_at)`
+     補終態漏報；`INTENT_STATUS_MISMATCH` 納入 SQL kinds CHECK。
+  6. 資產閘：`submit_from_outbox` 以 `get_asset` 驗證 symbol 已知且 tradable
+     （含 RISK_EXIT），flatten 下單前預檢全部部位。
+- 證據：`tests/test_execution_engine.py`（TestPendingCancelCutoff 4 案、
+  TestBrokerTerminalRecovery、TestDuplicateDelayedVisibility、TestAssetGate 3 案）、
+  `tests/test_control_plane.py`（flatten 5 新增案）、`tests/test_reconciliation_
+  and_ledger.py`（closed-history 4 案）、`tests/test_session.py`；`scripts/
+  run_postgres_integration.sh` 66 passed、`verify_p1.sh --postgres` 66 passed、
+  non-integration 621 passed、ruff/mypy 92 檔全綠；migration 0007 up/down 於
+  `test_migrations.py::test_migration_up_down_restore_cycle_is_explicit` 驗證。
+- 重審條件：獨立驗收重跑上列 gate 並審 0007 SQL 與 ADR-022 逐項對照。
+
+## CLOSED-021：cash/NAV 真實帳戶讀取（P2-E %08 cash & NAV）已由真實驗證覆蓋
+
+- 嚴重度：Low
+- 狀態：Closed（2026-08-18）
+- 問題：第二輪 planning 疑慮——P2-E 真實 read-only 證據中的 cash/equity 讀取是否
+  有格式/NAV 缺陷。
+- 判斷：P2-E 首次真實驗證（2026-08-17，operator 授權）已實測 `USDT`/`cash` 解析：
+  `cash 100000.00`、`equity 100000.00`（`_two_decimal_decimal` 正規化至恰 2dp，
+  exponent 異常仍 fail closed，詳 PROGRESS.md P2-E 節）；本 repo P2 範圍無 NAV 計算
+  元件（ledger 只輸出 cash_delta 與 lots，NAV valuation 屬後續工作包）；無程式碼缺陷。
+- 重審條件：P7 引入 NAV/portfolio valuation 時建立逐 tick 對帳。
+
+## CLOSED-022：P2 獨立驗收發現的 recovery、pagination、flatten 與 asset/review 缺陷
+
+- 嚴重度：Critical/High
+- 狀態：Closed（2026-08-19；ADR-023）
+- 問題與修復：pause race 可讓 recovery 重送新部位，已在 reservation 前後與 broker submit
+  前重查並停在 UNKNOWN；Alpaca orders/fills 改用官方 `after_order_id`/`page_token`；flatten
+  有任何未收斂 order 即 abort；asset gate 要求 US_EQUITY；REVIEW_REQUIRED 永遠產生
+  reconciliation mismatch。
+- 證據：新增 6 個對抗案例；locked gate 627 passed / 74 deselected；真實 PostgreSQL 16
+  66 passed / 8 deselected；Ruff/mypy/lock 全綠。
+
+## CLOSED-023：P2 全面再驗收的 concurrency、partial audit 與 reconciliation/fill 缺陷
+
+- 嚴重度：Critical/High
+- 狀態：Closed（2026-08-19；ADR-024；Luna 三輪對抗重現）
+- 問題與修復：pause check 與 broker submit 間的 TOCTOU 改由 PostgreSQL shared row lock
+  線性化；cancel/flatten 中途失敗寫 `applied_at=NULL` partial command；broker query failure
+  持久化 `BROKER_QUERY_FAILURE` 並 pause；open/history snapshot 以 timestamp+status 合併，
+  equal timestamp 不同狀態不去重；fills 加全域 cursor-cycle/bounded-page 與 order-id identity。
+- 證據：原四組 fault injection 與 equal-timestamp 重現均由 Luna 確認 closed；637 個
+  non-integration、69 個 PostgreSQL 16 integration、1 個真實 GET-only live acceptance 全綠。

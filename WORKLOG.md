@@ -338,3 +338,181 @@
 - 只以檔案系統確認 `skill/` 約 827 MB、723 個非 `.DS_Store` 檔案及七位路徑存在；依使用者要求未開啟或審查語料內容，未判定來源、授權、完整性、重複、時效或可蒸餾性。
 - 因 repository 為公開且 `OPEN-002` 禁止未審核第三方全文再散布，`.gitignore` 排除 `skill/`；本輪只發布規劃與 handoff，正式 P3 先做 SourceManifest、quarantine、授權與 coverage 審查。
 - 規劃 commit `1d4d9bd31d993a5fb6803a8d08ff5deec04122e1` 已直接 push 到 `main`；GitHub Actions run [`31950919861`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31950919861) 的 `quality-unit` 與 `postgres-integration` 均成功。
+
+## 2026-08-17 — 工作環境由 Codex 遷移至 ZCode
+
+- 使用者當時建立 ZCode 工作副本作為後續開發來源；Codex 原目錄未做任何修改。
+- 全文掃描確認文字檔中沒有指向 codex 目錄的絕對路徑；實際需要校正的是前瞻性文件將開發／自動化工具寫為 Codex 的說明。
+- 已將 `docs/MASTER_PLAN.md`（§1.2、§10）、`docs/OPERATIONS_AND_SAFETY.md`（§12）、`docs/ROADMAP_AND_ACCEPTANCE.md`（Automations 候選）、`docs/FIRST_IMPLEMENTATION_PROMPT.md`（使用方式與 approval 流程）與 `PROJECT_HANDOFF.md` §3.5 的工具引用由 Codex 改為 ZCode。
+- ADR-008 僅附加 2026-08-17 補充記錄遷移，原決策本文未改；WORKLOG 既有條目、`docs/SOURCES.md` 的 OpenAI／Codex 外部文件連結、`PROJECT_HANDOFF.md` 第 10 節 P0 歷史紀錄、git 歷史中的 `codex/p1-foundation-hardening` 分支名與 `skill/serenity-aleabitoreddit-data/sync_state.json` 的 automation note 均保留原文。
+- 未修改任何程式、測試、migration、workflow 或 CI；未 stage、commit 或 push；未觸碰 Keychain 或任何外部 API。
+
+## 2026-08-19 — P2 獨立驗收完成並回遷 Codex
+
+- 在 zcode 副本重跑 locked gate 與真實 PostgreSQL 16，進行對抗審查並修復 ADR-023 五類缺陷。
+- 最終證據：627 passed / 74 deselected；PostgreSQL 16 66 passed / 8 deselected；Ruff、mypy、
+  lock 全綠。
+- 將新程式、migration、測試及 P2 紀錄同步回 `/Users/zongen/Downloads/codex/trading`；
+  `.git`、`.env`、Keychain、`.venv`、cache 與 `skill/` 語料均未複製或讀取。
+- 本輪未 stage/commit/push，遠端 CI 尚未執行。
+
+## 2026-08-19 — 使用者重新打開 P2 Gate
+
+- 撤銷先前本機 gate closed 結論；627/66 測試結果降為歷史基線。
+- 啟動全面再驗收：Luna 對抗審核、真實 Alpaca Paper GET-only、控制/對帳/runtime role、
+  locked gate 與真實 PostgreSQL 16。全部缺陷修復並重驗前保持 Open。
+
+## 2026-08-19 — P2 全面再驗收完成，Gate Closed
+
+- Keychain 兩個 Alpaca Paper credential 可用；真實 endpoint 僅發 GET account/positions/
+  open-orders，回應為 PAPER、0 positions、0 open orders。另以 disposable PostgreSQL 16
+  與獨立非 owner runtime role 完成 GET-only reconciliation persistence，live 1/1 通過。
+- 官方契約與 Luna 對抗審核發現並修復：asset endpoint、open/fill pagination、錯單 fill、
+  pause TOCTOU、cancel/flatten partial audit、broker query failure fail-open、open/history
+  snapshot（含 equal timestamp 狀態衝突）。Luna 第三輪確認原四組 blocker 全部關閉。
+- 最終本機證據：Ruff/mypy 92 檔全綠；637 non-integration passed / 77 deselected；69
+  PostgreSQL 16 integration passed / 8 deselected；live acceptance 1 passed。
+- 權威工作副本與所有前瞻性路徑均為 `/Users/zongen/Downloads/codex/trading`。未送出或取消
+  真實委託，未 stage/commit/push，遠端 CI 尚未執行。
+
+## 2026-08-17 — P2-A 執行 domain 契約與 fake broker harness 實作
+
+- 依使用者核准方向開始 P2：P2-A（domain 契約）先行；P2-B/C/D 依賴序推進；P2-E 真實
+  Alpaca Paper 連線僅 read-only 驗證，真實下單留 P7；金鑰到需要時才由使用者存入 Keychain；
+  P2 階段以手動觸發 job 驗證，launchd 常駐留 P6 前。
+- 新增 `execution/orders.py`（封閉 typed domain、雙狀態機、deterministic
+  `slv1-…` client_order_id、collar bps 1..500 provisional）、`application/ports/broker.py`
+  （PaperBrokerPort 與錯誤分類）、`execution/fake_broker.py`（fault injection harness）、
+  `migrations/0003`（order_intents/broker_orders/fills 與 guard/append-only 強制），
+  並擴充 `verify_schema` 與 runtime role grants/verification；ADR-017 記錄決策。
+- 單元/行為測試覆蓋狀態機完整矩陣、exact-type 邊界、collar 數學、id 決定性、
+  timeout before/after accept、idempotent replay、conflict、partial fill 與 cancel/expire。
+- 本機自測：`verify_p1.sh` 全綠（Ruff、Mypy strict、non-integration `501 passed,
+  54 deselected`、offline lock check）；真實 disposable PostgreSQL 16 整合
+  `54 passed, 0 skipped`（含 21 個新增對抗測試）。
+- 發現並修復一個自我造成的安全缺陷：0003 down migration 初版漏列
+  `DELETE FROM schema_migrations WHERE version = 3`，使 `migrated_postgres` teardown 的
+  `while current_version: rollback` 無限循環（DROP IF EXISTS 冪等不報錯）。補列後重跑，
+  54 個整合測試 5.93 秒完成；容器由 script trap 精確清理，無殘留。
+- 未建立網路 client、真實 adapter、outbox worker、reconciliation、launchd 或 composition
+  root；未讀取 Keychain、未使用任何 API 憑證；未 stage、commit 或 push。P2-A 狀態為
+  implementation completed, pending independent acceptance。
+
+## 2026-08-17 — P2-B/C/D/E 實作、對抗式審查與修復
+
+- 完成 P2-B（repository/引擎）、P2-C（帳本投影/對帳/migration 0004）、P2-D（控制平面/
+  composition root/migration 0005/新增 POSTGRES_RUNTIME_PASSWORD secret kind）、P2-E
+  （Alpaca Paper adapter，injectable transport、零網路測試）。
+- 狀態機修正：SUBMITTING 新增 PARTIALLY_FILLED/FILLED 出邊（crash 後恢復時 broker 可能已成交）；
+  Python 與 SQL 兩側同步。
+- 對抗式審查發現並修復五項：reconciliation 缺 collect→persist→auto-pause 編排；resume 字串
+  比较；ledger 賣出現金上界；不可表示的 broker 終態竞態改為 typed fail-closed 零副作用；上述
+  各補對抗測試（mismatch 自動暫停、clean 不暫停、terminal race）。
+- 亦修復開發中自查問題：application 層誤引 urllib（P1 源不變量擋下，DSN 組合移至
+  infrastructure）、runtime role placeholder 計數、多處測試冪等/commit 順序錯誤。
+- 最終 gate：`verify_p1.sh` EXIT=0（non-integration 563 passed）；真實 PostgreSQL 16
+  `60 passed, 0 skipped`；`uv.lock` 未變；無容器殘留。ADR-018/PROGRESS 已更新。
+- 未接觸網路、Keychain 或任何真實憑證；P2-E 真實 endpoint 連線驗證依使用者決策待金鑰提供後
+  另行執行；未 stage/commit/push。P2-B~E 狀態為 implementation completed, pending
+  independent acceptance。
+
+## 2026-08-17 — P2 第二輪：ROADMAP 逐項比對補缺與第二輪對抗審查
+
+- 以 ROADMAP P2 驗收清單重新稽核，發現三項缺口並補齊：trade update consumer（含
+  duplicate/out-of-order 冪等、STALE/DUPLICATE/UNKNOWN_ORDER 分類、外部取消
+  CANCEL_PENDING 路由）、NAV valuation、reconciliation/control 的真實 PostgreSQL
+  整合測試（含 mismatch 自動暫停與 append-only 對抗）。
+- 新增 ADR-019：WS 傳輸與 control shell CLI 延後至 P6/P7 的範圍聲明（DSN 禁入 argv/env，
+  CLI 需完整 runtime credential 路徑）。
+- 第二輪對抗審查修復：重播事件分類、外部取消路由、fake repo updated_at 單調性；
+  各補對應測試。
+- 最終 gate 全綠：`verify_p1.sh` EXIT=0（575 passed non-integration）；真實 PostgreSQL 16
+  `63 passed, 0 skipped`；無殘留容器；未接觸網路、Keychain 或任何真實憑證；
+  未 stage/commit/push。
+
+## 2026-08-17 — P2 第三/四輪審查：window cutoff 安全語意修復與不變量補強
+
+- 確認 codex 原目錄工作樹乾淨（零修改）；所有編輯僅在 zcode 工作副本內。
+- 第三輪對抗審查發現真實缺陷：`expire_overdue` 盲目把逾期 ACKNOWLEDGED/UNKNOWN 本地
+  EXPIRED，不查 broker 也不取消，會留下活單與本地終態分歧。修復為 ADR-020 的四步截止
+  順序（解析→取消→僅無單過期→transport error 不過期），並新增四個窗口截止測試
+  （取消已接受單、無單過期、UNKNOWN 先解析、取消 transport failure 停於 CANCEL_PENDING）。
+- 新增永久不變量整合測試：對所有 (current,target) 狀態對，SQL transition 函數與 Python
+  封閉映射逐對相等（intent 與 broker 兩套映射），防止未來漂移。
+- 第四輪掃描：P2 檔案無 `del`/`type: ignore`/TODO/NotImplemented 殘留；PROGRESS 現況
+  段落與「尚未開始」清單更新至 P2 實作完成狀態。
+- 最終 gate：`verify_p1.sh` EXIT=0（Ruff、Mypy strict 85 檔、non-integration
+  `578 passed, 64 deselected`）；真實 PostgreSQL 16 `64 passed, 0 skipped`；無容器殘留。
+  未 stage/commit/push（等待使用者指示）。
+
+## 2026-08-17 — Handoff 與治理文件同步至 P2 實作完成狀態
+
+- 更新 `PROJECT_HANDOFF.md`： header 現況（P2 五包實作完成待獨立驗收、工作副本位置與
+  codex 唯讀最高指令）、§8 工作區（ZCode 副本、43 檔未 stage、push 待使用者同意、最後
+  已發布 commit `374d121`）、§10 新增 P2 完整交付與自測證據段落、§12 增列 R-15/R-16、
+  §17 一句話狀態改寫、§18 新 session Prompt 改為 P2 獨立定點驗收流程（含三個必重現
+  安全不變量）。P0/P1 歷史段落未改寫。
+- 更新 `SECURITY.md`：composition root 段落由「尚未存在、P2 需定義」改為現行契約
+  （exact-schema 解析邊界、POSTGRES_RUNTIME_PASSWORD exact ref、單一 bounded reveal、
+  application 層禁 urllib/網路 SDK）。
+- 更新 `docs/ROADMAP_AND_ACCEPTANCE.md`：P2 段落後新增 gate 現況（自測證據、待獨立
+  驗收、P2-E 待金鑰、WS/CLI 延後範圍）。
+- `RISK_REGISTER.md` 依規則新增 R-15（adapter 未經真實 endpoint 驗證，Deferred）與
+  R-16（order 事件軌跡方式，Accepted）；既有列未改寫。
+- 本輪僅文件變更；未動程式、未 stage/commit/push。
+
+## 2026-08-17 — P2 獨立對抗審查補強輪：五缺陷 red→green 修復與治理文件同步
+
+- 第二 session 以 ISSUES.md A–N 缺陷清單對 P2 交付做獨立對抗審查；先寫 reproduction、
+  確認 red、記錄證據後修復。五個真實缺陷全部修復並加防回歸測試（詳見
+  `PROGRESS.md`「P2 補強輪」與 `DECISIONS.md` ADR-021）：
+  A：engine 內嵌 pause 檢查（`ExecutionPausedError`、`build_execution_stack(control=...)`）；
+  E：migration 0006 broker_orders 雙時鐘（broker_updated_at + trigger 單調）＋consumer
+  STALE 基準修正；F：重複 client_order_id 以 by_client_order_id GET 解析回 SubmitAccepted；
+  H：fills after-cursor 分頁循環（100+ 全數回傳）；G：reconciler 補 terminal intent/
+  terminal mirror vs broker 開單兩盲點（`INTENT_STATUS_MISMATCH`＋第二趟全單掃描）；
+  N：CI postgres job（`-m "integration and not live"`）與本機 script 同步。
+- 先 red 後 green：pause 套件（收集期缺依賴、5/5）、timestamps（PG roundtrip 回讀本地
+  時間、2/2）、duplicate（重複回 SubmitRejected）、pagination（101 只回 100）、reconciler
+  （兩案 red）、CI 契約（red）——各確認 red 原因即缺陷本身。
+- PostgreSQL gate 除錯：0006 down migration 缺 `DELETE FROM schema_migrations`（rollback
+  後版本卡 6）與 NOT NULL 新欄位之 test fixture 未回填——修正後整合全綠。
+- 最終 gate：`verify_p1.sh --postgres` EXIT=0；Ruff format 90 檔、Ruff check、Mypy strict
+  90 檔全綠；non-integration `589 passed, 74 deselected`；真實 PostgreSQL 16
+  `66 passed, 8 deselected`；無容器殘留。未接觸網路、Keychain 或任何真實憑證。
+- 治理文件同步：DECISIONS.md 新增 ADR-021（pause 內嵌引擎、雙時鐘、重複解析、終態對帳，
+  附證據）；ISSUES.md OPEN-017→CLOSED-017、OPEN-018→CLOSED-018（附修復前證據與驗證），
+  ASSESSED-019 更新為「全部修復」；RISK_REGISTER.md R-15（adapter）以 P2-E 真實驗證 +
+  本輪整合證據更新為 Mitigated；PROGRESS.md 增補強輪段落（pending independent acceptance
+  維持不變）。
+- 未 stage/commit/push（等待使用者指示）。
+
+## 2026-08-18 — P2 second remediation：執行安全硬化（實際完成）
+
+- 第一輪規劃確認的核心不變量「broker truth 未知時不得自行宣告終態」全部落為實作
+  （詳 `PROGRESS.md`「P2 second remediation」與 `DECISIONS.md` ADR-022）：
+  1. 引擎：`resolve()` 重寫（deadline 後查無單→UNKNOWN）、`expire_overdue()` 只對未達
+     broker 的狀態 EXPIRED、取消路徑 transport 錯誤保留 CANCEL_PENDING、`recover()`
+     消除同 sweep 重複 resolve。
+  2. watermark：0007 清 NULL broker_updated_at、submitted_at lower bound、
+     DUPLICATE／equal-timestamp 衝突語意。
+  3. SQL guard：0007 完整 15 態 CHECK、filled 不倒退／FILLED exact／身份 immutable
+     （INSERT+UPDATE 側）、REVIEW_REQUIRED 收斂。
+  4. flatten 六步＋FlattenPriceProvider seam＋`flatten_generation`（同交易原子遞增）；
+     position 對帳不符即 abort（零新單）。
+  5. asset gate（submit 前 get_asset，含 RISK_EXIT；flatten 預檢）。
+  6. `reconciliation_mismatches` 明細表（append-only、ordinal+kind+detail）＋
+     closed-history pass（list_recent_orders since horizon）。
+  7. `domain/session.py`：America/New_York trading date；p2e CLI 同步、維持 GET-only。
+- PG integration 兩次紅燈均修正：SQL `chr(0)` 檢查違反 PG「null character not permitted」
+  （改用 domain 已驗證的 bounded text 檢查）；`_assert_runtime_privileges` placeholder
+  計數（2＋18 而非 2＋19）。
+- 最終 gate：`uv sync --python 3.13 --locked`/`uv lock --check` 綠；Ruff format/check
+  92 檔、Mypy strict 92 檔全綠；non-integration `621 passed, 74 deselected`；
+  `run_postgres_integration.sh` 與 `verify_p1.sh --postgres` 皆 `66 passed, 8 deselected`
+  （live marker 排除，`SEVEN_LENS_P2E_LIVE` 未設）；無容器殘留；未讀取 Keychain、
+  未使用任何 API 憑證。
+- 治理文件：DECISIONS.md ADR-022；ISSUES.md CLOSED-020/021；RISK_REGISTER.md
+  R-21～R-24（Mitigated）；PROGRESS.md 追加段落，gate 陳述為唯一寫法
+  "P2 second remediation implementation completed; pending independent re-acceptance."。
+- 未 stage/commit/push（等待使用者指示）。

@@ -32,6 +32,7 @@ _SECRET_KIND_ATTRIBUTES = {
     SecretKind.ALPACA_PAPER_KEY_ID: SecretKindAttribute.ALPACA_PAPER_KEY_ID,
     SecretKind.ALPACA_PAPER_SECRET_KEY: SecretKindAttribute.ALPACA_PAPER_SECRET_KEY,
     SecretKind.OPENAI_API_KEY: SecretKindAttribute.OPENAI_API_KEY,
+    SecretKind.POSTGRES_RUNTIME_PASSWORD: SecretKindAttribute.POSTGRES_RUNTIME_PASSWORD,
     SecretKind.TAVILY_API_KEY: SecretKindAttribute.TAVILY_API_KEY,
 }
 

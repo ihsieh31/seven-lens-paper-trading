@@ -111,4 +111,7 @@ jobs:
         env:
           TEST_DATABASE_URL: >-
             postgresql://seven_lens_ci:p1c3-disposable-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/seven_lens_p1
-        run: uv run --locked pytest tests/integration -m integration -ra --tb=short
+        # The `live` marker requires real Alpaca Paper credentials from the
+        # operator's Keychain and must never run on CI; it is exercised only
+        # by the explicit P2-E read-only verification CLI.
+        run: uv run --locked pytest tests/integration -m "integration and not live" -ra --tb=short

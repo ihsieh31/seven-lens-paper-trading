@@ -64,6 +64,24 @@ broker/order implementation 已開始。
 
 主責：Terra；Sol 負責 safety model與 release review；Luna 大量 event-sequence tests。
 
+P2 目前 gate 狀態（2026-08-19）：五個工作包（A~E）與 trade update consumer 已於 Codex
+工作副本實作完成並經多輪對抗式審查修復（ADR-017 ~ ADR-021）。補強輪以 ISSUES A–N 清單
+重現並修復五個真實缺陷（A pause bypass→CLOSED-017、E broker_orders 雙時鐘/migration
+0006→CLOSED-018、F 重複 client_order_id、H fills 分頁、G reconciler 終態對帳）並補
+N CI postgres job。P2-E 真實 read-only 驗證已於同日由 operator 授權執行（CLI 僅 GET、
+reconciliation CLEAN 持久化）。實作方自測證據：`verify_p1.sh` EXIT=0（non-integration
+589 passed, 74 deselected）與真實 PostgreSQL 16 整合 66 passed / 8 deselected
+（live 排除，含狀態機全對等價、mismatch 自動暫停、append-only 對抗與 0003–0007
+up/down/up）。2026-08-19 獨立驗收另發現並修復 pause recovery 重送、Alpaca 官方分頁
+參數、flatten 未收斂取消、非 US-equity asset gate 與 REVIEW_REQUIRED clean-run 五項缺陷；
+最終 locked gate 為 627 passed / 74 deselected，真實 PostgreSQL 16 為 66 passed /
+8 deselected。2026-08-19 使用者重新打開 P2 gate 後，完成真實 Alpaca Paper GET-only、
+獨立非 owner runtime role 持久化與 Luna 三輪對抗驗收；修復 pause TOCTOU、控制部分失敗
+稽核、reconciliation 失敗／快照競態、asset/open-order/fill 契約等缺陷。最終 Ruff/mypy
+全綠、non-integration 637 passed / 77 deselected、PostgreSQL 16 integration 69 passed /
+8 deselected、live acceptance 1 passed；P2 gate **Closed**。真實下單仍留 P7；WS 傳輸本體
+與 control shell CLI 依 ADR-019 延後至 P6/P7。
+
 ## P3 — 資料與七人蒸餾（6–10 週，可與 P2 部分並行）
 
 交付：

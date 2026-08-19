@@ -34,6 +34,10 @@ FAKE_SECRET = FAKE_SECRET_TEXT.encode()
             "seven-lens.paper-trading.alpaca-paper.secret-key",
         ),
         (SecretKind.OPENAI_API_KEY, "seven-lens.paper-trading.openai.api-key"),
+        (
+            SecretKind.POSTGRES_RUNTIME_PASSWORD,
+            "seven-lens.paper-trading.postgres.runtime-password",
+        ),
     ],
 )
 def test_primary_secret_references_have_fixed_mapping(kind: SecretKind, service: str) -> None:

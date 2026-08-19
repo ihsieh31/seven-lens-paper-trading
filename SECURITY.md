@@ -64,11 +64,23 @@ The application runtime uses a distinct externally created login role. Before us
 membership, cannot create schema/temp objects, cannot directly mutate protected state, and can
 execute only the approved functions. A failed proof stops startup or deployment.
 
-No runtime composition root exists yet. P2 must define an exact secret reference and bounded
-reveal point for the runtime credential before introducing a service process. Owner and runtime
-DSNs are never persisted as config snapshots and must not enter logs, telemetry, audit, exception
-messages, or command-line arguments. The current PostgreSQL integration DSN is disposable,
-fake, job-local test input only.
+The P2 composition root (`application/composition.py`) defines this contract: configuration is
+parsed once at the exact-schema edge into typed frozen values (no generic mapping bag), the
+runtime database password uses the exact `POSTGRES_RUNTIME_PASSWORD` secret reference, and
+`compose_runtime_dsn` in the infrastructure layer is the single bounded reveal point. The
+composed `RuntimeDsn` never discloses itself through `str` or `repr`. Owner and runtime DSNs
+are never persisted as config snapshots and must not enter logs, telemetry, audit, exception
+messages, or command-line arguments; application-layer code may not import `urllib` or any
+network/backend SDK. The current PostgreSQL integration DSN is disposable, fake, job-local
+test input only.
+
+The execution engine (`execution_service.py`) is the single submission entry point and
+enforces the pause contract in-process: `build_execution_stack(..., control=...)` injects
+the same control repository used by reconciliation, and `submit_from_outbox` checks
+`entries_paused` before any state transition, commit, or broker call, raising
+`ExecutionPausedError` with zero side effects when paused (except emergency RISK_EXIT
+flows). This guarantees a paused system cannot create new exposure even if outbox workers
+run; see ADR-021 and `tests/test_execution_pause_remediation.py`.
 
 ### SECURITY DEFINER functions
 

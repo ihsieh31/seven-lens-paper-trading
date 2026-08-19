@@ -187,7 +187,7 @@
 
 ## 12. Codex 自動化隔離
 
-Codex scheduled tasks 只能在獨立 worktree 或只讀模式執行測試、報告和蒸餾候選更新。它不能自動合併到當日交易 runtime，也不能接觸 broker credential。production artifact 只能由通過 release gate 的固定 commit/dependency lock 建置。
+Codex automations 只能在獨立 worktree 或只讀模式執行測試、報告和蒸餾候選更新。它不能自動合併到當日交易 runtime，也不能接觸 broker credential。production artifact 只能由通過 release gate 的固定 commit/dependency lock 建置。
 
 ## 13. P1 CI 與 clean-machine gate
 

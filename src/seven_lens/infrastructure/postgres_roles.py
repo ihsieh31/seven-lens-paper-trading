@@ -53,13 +53,25 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
         cursor.execute(
             sql.SQL(
                 "GRANT SELECT ON TABLE public.schema_metadata, public.schema_migrations, "
-                "public.domain_events, public.audit_events, public.job_instances TO {}"
+                "public.domain_events, public.audit_events, public.job_instances, "
+                "public.order_intents, public.broker_orders, public.fills, "
+                "public.reconciliation_runs, public.reconciliation_mismatches, "
+                "public.control_commands, "
+                "public.control_state TO {}"
             ).format(role)
         )
         cursor.execute(
             sql.SQL(
                 "GRANT INSERT ON TABLE public.domain_events, public.audit_events, "
-                "public.job_instances TO {}"
+                "public.job_instances, public.order_intents, public.broker_orders, "
+                "public.fills, public.reconciliation_runs, public.reconciliation_mismatches, "
+                "public.control_commands TO {}"
+            ).format(role)
+        )
+        cursor.execute(
+            sql.SQL(
+                "GRANT UPDATE ON TABLE public.order_intents, public.broker_orders, "
+                "public.control_state TO {}"
             ).format(role)
         )
         for signature in (
@@ -152,7 +164,10 @@ def _assert_authoritative_object_owner(cursor: psycopg.Cursor[object], owner_rol
             WHERE n.nspname = 'public'
               AND c.relname IN (
                   'schema_metadata', 'schema_migrations', 'domain_events',
-                  'audit_events', 'job_instances', 'job_leases'
+                  'audit_events', 'job_instances', 'job_leases',
+                  'order_intents', 'broker_orders', 'fills',
+                  'reconciliation_runs', 'reconciliation_mismatches',
+                  'control_commands', 'control_state'
               )
             UNION ALL
             SELECT pg_catalog.pg_get_userbyid(p.proowner) AS owner_name
@@ -161,7 +176,11 @@ def _assert_authoritative_object_owner(cursor: psycopg.Cursor[object], owner_rol
             WHERE n.nspname = 'public'
               AND p.proname IN (
                   'acquire_job_lease', 'renew_job_lease', 'release_job_lease',
-                  'transition_job_status', 'guard_job_instance_status_write'
+                  'transition_job_status', 'guard_job_instance_status_write',
+                  'order_status_transition_is_valid',
+                  'broker_order_status_transition_is_valid',
+                  'guard_order_intent_write', 'guard_broker_order_write',
+                  'guard_control_state_write'
               )
         ) AS owners
         """
@@ -208,20 +227,49 @@ def _assert_runtime_privileges(
             ),
             has_function_privilege(
                 %s, 'public.transition_job_status(text,text,bigint,text)', 'EXECUTE'
-            )
+            ),
+            has_table_privilege(%s, 'public.order_intents', 'INSERT,UPDATE'),
+            has_table_privilege(%s, 'public.order_intents', 'DELETE'),
+            has_table_privilege(%s, 'public.broker_orders', 'INSERT,UPDATE'),
+            has_table_privilege(%s, 'public.fills', 'INSERT'),
+            has_table_privilege(%s, 'public.fills', 'UPDATE,DELETE'),
+            has_table_privilege(%s, 'public.reconciliation_runs', 'INSERT'),
+            has_table_privilege(%s, 'public.reconciliation_runs', 'UPDATE,DELETE'),
+            has_table_privilege(%s, 'public.reconciliation_mismatches', 'INSERT'),
+            has_table_privilege(%s, 'public.reconciliation_mismatches', 'UPDATE,DELETE'),
+            has_table_privilege(%s, 'public.control_commands', 'INSERT'),
+            has_table_privilege(%s, 'public.control_commands', 'UPDATE,DELETE'),
+            has_table_privilege(%s, 'public.control_state', 'UPDATE'),
+            has_table_privilege(%s, 'public.control_state', 'INSERT,DELETE')
         """,
         (
             runtime_role,
             database_name,
-            runtime_role,
-            runtime_role,
-            runtime_role,
-            runtime_role,
-            runtime_role,
+            *([runtime_role] * 18),
         ),
     )
     row = cast(tuple[object, ...] | None, cursor.fetchone())
-    if row != (False, False, False, False, True, True):
+    if row != (
+        False,
+        False,
+        False,
+        False,
+        True,
+        True,
+        True,
+        False,
+        True,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+    ):
         raise PostgresRoleError(
             "runtime role privileges do not match the approved least-privilege set"
         )

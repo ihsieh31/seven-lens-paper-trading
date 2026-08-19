@@ -59,6 +59,7 @@ class SecretKindAttribute(StrEnum):
     ALPACA_PAPER_KEY_ID = "alpaca_paper_key_id"
     ALPACA_PAPER_SECRET_KEY = "alpaca_paper_secret_key"
     OPENAI_API_KEY = "openai_api_key"
+    POSTGRES_RUNTIME_PASSWORD = "postgres_runtime_password"
     TAVILY_API_KEY = "tavily_api_key"
 
 

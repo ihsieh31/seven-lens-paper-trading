@@ -25,6 +25,7 @@ class SecretKind(StrEnum):
     ALPACA_PAPER_KEY_ID = "ALPACA_PAPER_KEY_ID"
     ALPACA_PAPER_SECRET_KEY = "ALPACA_PAPER_SECRET_KEY"
     OPENAI_API_KEY = "OPENAI_API_KEY"
+    POSTGRES_RUNTIME_PASSWORD = "POSTGRES_RUNTIME_PASSWORD"
     TAVILY_API_KEY = "TAVILY_API_KEY"
 
 
@@ -32,6 +33,7 @@ _SERVICES: Final[dict[SecretKind, str]] = {
     SecretKind.ALPACA_PAPER_KEY_ID: "seven-lens.paper-trading.alpaca-paper.key-id",
     SecretKind.ALPACA_PAPER_SECRET_KEY: "seven-lens.paper-trading.alpaca-paper.secret-key",
     SecretKind.OPENAI_API_KEY: "seven-lens.paper-trading.openai.api-key",
+    SecretKind.POSTGRES_RUNTIME_PASSWORD: "seven-lens.paper-trading.postgres.runtime-password",
     SecretKind.TAVILY_API_KEY: "seven-lens.paper-trading.tavily.api-key",
 }
 type SecretRefIdentity = tuple[SecretKind, str, str]

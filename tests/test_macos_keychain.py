@@ -58,7 +58,7 @@ class FakeSecurity(ModuleType):
     kSecAttrAccount = "account"
     kSecReturnData = "return-data"
     kSecMatchLimit = "match-limit"
-    kSecMatchLimitAll = "all"
+    kSecMatchLimitOne = "one"
     kSecUseAuthenticationUI = "authentication-ui"
     kSecUseAuthenticationUIFail = "fail"
 
@@ -90,7 +90,7 @@ def test_pyobjc_bridge_builds_one_exact_read_only_noninteractive_query() -> None
             "service": "seven-lens.paper-trading.alpaca-paper.secret-key",
             "account": "primary",
             "return-data": True,
-            "match-limit": "all",
+            "match-limit": "one",
             "authentication-ui": "fail",
         }
     ]

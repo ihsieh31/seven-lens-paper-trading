@@ -6,13 +6,20 @@ database lease functions so PostgreSQL owns expiry, takeover history, and fencin
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from types import TracebackType
 from typing import Self, cast
+from urllib.parse import quote_plus
+from uuid import UUID
 
 import psycopg
 from psycopg.types.json import Jsonb
 
+from seven_lens.application.composition import RuntimeDatabaseConfig
+from seven_lens.application.ports.secrets import SecretProvider
 from seven_lens.domain.events import (
     AuditEvent,
     DomainEvent,
@@ -26,11 +33,63 @@ from seven_lens.domain.jobs import (
     LeaseDuration,
     LeaseGrant,
 )
-from seven_lens.domain.value_objects import TradingDate, UtcTimestamp
+from seven_lens.domain.value_objects import RunId, TradingDate, UtcTimestamp
+from seven_lens.execution.control import ControlCommandRecord, ControlStateSnapshot
+from seven_lens.execution.orders import (
+    BrokerOrder,
+    BrokerOrderStatus,
+    ClientOrderId,
+    Fill,
+    OrderIntent,
+    OrderIntentType,
+    OrderQuantity,
+    OrderSide,
+    OrderStatus,
+    Price,
+    PriceCollar,
+    Symbol,
+)
+from seven_lens.execution.reconciliation import (
+    MismatchKind,
+    ReconciliationMismatch,
+    ReconciliationResult,
+    ReconciliationStatus,
+)
 
 
 class PersistenceInvariantError(RuntimeError):
     """Raised when data returned by PostgreSQL violates a domain invariant."""
+
+
+class RuntimeDsn:
+    """A connection info string that never discloses itself by accident."""
+
+    __slots__ = ("_conninfo",)
+
+    def __init__(self, conninfo: str) -> None:
+        if type(conninfo) is not str or not conninfo.startswith("postgresql://"):
+            raise PersistenceInvariantError("runtime DSN must be a postgresql connection string")
+        self._conninfo = conninfo
+
+    def conninfo(self) -> str:
+        """The single bounded reveal point; callers must not log or store it."""
+        return self._conninfo
+
+    def __str__(self) -> str:
+        return "postgresql://<redacted>"
+
+    def __repr__(self) -> str:
+        return "RuntimeDsn(<redacted>)"
+
+
+def compose_runtime_dsn(config: RuntimeDatabaseConfig, provider: SecretProvider) -> RuntimeDsn:
+    """Resolve the scoped password and build the runtime connection string."""
+    password = provider.get_secret(config.password_ref)
+    return RuntimeDsn(
+        "postgresql://"
+        f"{quote_plus(config.user)}:{quote_plus(password.reveal_text())}"
+        f"@{config.host}:{config.port}/{config.dbname}?sslmode={config.sslmode}"
+    )
 
 
 class UnitOfWorkStateError(RuntimeError):
@@ -49,6 +108,9 @@ class PostgresUnitOfWork:
         self.domain_events = PostgresDomainEventRepository(self)
         self.audit_events = PostgresAuditEventRepository(self)
         self.jobs = PostgresJobRepository(self)
+        self.orders = PostgresOrderRepository(self)
+        self.reconciliations = PostgresReconciliationRepository(self)
+        self.control = PostgresControlRepository(self)
 
     def __enter__(self) -> Self:
         if self._connection is not None:
@@ -299,6 +361,477 @@ class PostgresJobRepository:
         return _job_instance(_row(row, "job status transition"))
 
 
+_INTENT_COLUMNS = (
+    "intent_id, client_order_id, strategy, trading_date, window_name, target_version,"
+    " symbol, side, quantity, intent_type, limit_price, collar_reference_price,"
+    " collar_offset_bps, earliest_submit_at, cancel_at, status, run_id, created_at"
+)
+_BROKER_ORDER_COLUMNS = (
+    "broker_order_id, client_order_id, symbol, side, quantity, filled_quantity,"
+    " limit_price, status, submitted_at, broker_updated_at, updated_at"
+)
+
+
+class PostgresOrderRepository:
+    """Order-intent, broker-mirror, and fill persistence under DB-enforced guards."""
+
+    def __init__(self, unit_of_work: PostgresUnitOfWork) -> None:
+        self._unit_of_work = unit_of_work
+
+    def add(self, intent: OrderIntent) -> OrderIntent:
+        """Create an intent; a duplicate client id must map to the identical intent."""
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                f"""
+                INSERT INTO order_intents (
+                    intent_id, client_order_id, strategy, trading_date, window_name,
+                    target_version, symbol, side, quantity, intent_type, limit_price,
+                    collar_reference_price, collar_offset_bps, earliest_submit_at,
+                    cancel_at, status, run_id
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (client_order_id) DO NOTHING
+                RETURNING {_INTENT_COLUMNS}
+                """,
+                (
+                    intent.intent_id,
+                    intent.client_order_id.value,
+                    intent.strategy,
+                    intent.trading_date.value,
+                    intent.window,
+                    intent.target_version,
+                    intent.symbol.value,
+                    intent.side.value,
+                    intent.quantity.value,
+                    intent.intent_type.value,
+                    intent.limit_price.value,
+                    intent.collar.reference.value,
+                    intent.collar.offset_bps,
+                    intent.earliest_submit_at.value,
+                    intent.cancel_at.value,
+                    intent.status.value,
+                    intent.run_id.value,
+                ),
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                self._unit_of_work._mark_write()
+                return _order_intent(_row(row, "order intent insert"))
+            existing = self.get(intent.client_order_id)
+        if existing is None or existing.intent_id != intent.intent_id:
+            raise PersistenceInvariantError("client order id is bound to a different order intent")
+        return existing
+
+    def get(self, client_order_id: ClientOrderId) -> OrderIntent | None:
+        """Load one intent by its deterministic client order id."""
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT {_INTENT_COLUMNS}
+                FROM order_intents
+                WHERE client_order_id = %s
+                """,
+                (client_order_id.value,),
+            )
+            row = cursor.fetchone()
+        return None if row is None else _order_intent(_row(row, "order intent lookup"))
+
+    def list_by_status(self, status: OrderStatus) -> tuple[OrderIntent, ...]:
+        """Load every intent currently in exactly this status."""
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT {_INTENT_COLUMNS}
+                FROM order_intents
+                WHERE status = %s
+                ORDER BY client_order_id
+                """,
+                (status.value,),
+            )
+            rows = cursor.fetchall()
+        return tuple(_order_intent(_row(row, "order intent lookup")) for row in rows)
+
+    def transition_status(self, client_order_id: ClientOrderId, target: OrderStatus) -> OrderIntent:
+        """Persist one guarded status transition; database triggers reject illegal maps."""
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                f"""
+                UPDATE order_intents SET status = %s
+                WHERE client_order_id = %s
+                RETURNING {_INTENT_COLUMNS}
+                """,
+                (target.value, client_order_id.value),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise PersistenceInvariantError("order intent disappeared during transition")
+        self._unit_of_work._mark_write()
+        return _order_intent(_row(row, "order intent transition"))
+
+    def record_broker_order(self, order: BrokerOrder) -> BrokerOrder:
+        """Insert or idempotently refresh the local mirror of a broker order."""
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                f"""
+                INSERT INTO broker_orders (
+                    broker_order_id, client_order_id, symbol, side, quantity,
+                    filled_quantity, limit_price, status, submitted_at, broker_updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (broker_order_id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    filled_quantity = EXCLUDED.filled_quantity,
+                    broker_updated_at = EXCLUDED.broker_updated_at
+                RETURNING {_BROKER_ORDER_COLUMNS}
+                """,
+                (
+                    order.broker_order_id,
+                    order.client_order_id.value,
+                    order.symbol.value,
+                    order.side.value,
+                    order.quantity.value,
+                    order.filled_quantity,
+                    order.limit_price.value,
+                    order.status.value,
+                    order.submitted_at.value,
+                    order.updated_at.value,
+                ),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise PersistenceInvariantError("broker order upsert did not return a row")
+        self._unit_of_work._mark_write()
+        return _broker_order(_row(row, "broker order upsert"))
+
+    def get_broker_order(self, client_order_id: ClientOrderId) -> BrokerOrder | None:
+        """Load the local mirror for one client order id."""
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT {_BROKER_ORDER_COLUMNS}
+                FROM broker_orders
+                WHERE client_order_id = %s
+                """,
+                (client_order_id.value,),
+            )
+            row = cursor.fetchone()
+        return None if row is None else _broker_order(_row(row, "broker order lookup"))
+
+    def get_broker_order_by_id(self, broker_order_id: str) -> BrokerOrder | None:
+        """Load the local mirror for one broker order id."""
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT {_BROKER_ORDER_COLUMNS}
+                FROM broker_orders
+                WHERE broker_order_id = %s
+                """,
+                (broker_order_id,),
+            )
+            row = cursor.fetchone()
+        return None if row is None else _broker_order(_row(row, "broker order lookup"))
+
+    def update_broker_order_status(
+        self,
+        broker_order_id: str,
+        status: BrokerOrderStatus,
+        filled_quantity: int,
+        *,
+        broker_observed_at: UtcTimestamp | None = None,
+    ) -> BrokerOrder:
+        """Refresh the mutable mirror columns under the guarded broker status map."""
+        observed_sql = ", broker_updated_at = %s" if broker_observed_at is not None else ""
+        observed_value = broker_observed_at.value if broker_observed_at is not None else None
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                f"""
+                UPDATE broker_orders SET status = %s, filled_quantity = %s{observed_sql}
+                WHERE broker_order_id = %s
+                RETURNING {_BROKER_ORDER_COLUMNS}
+                """,
+                (
+                    status.value,
+                    filled_quantity,
+                    observed_value,
+                    broker_order_id,
+                )
+                if broker_observed_at is not None
+                else (status.value, filled_quantity, broker_order_id),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise PersistenceInvariantError("broker order disappeared during refresh")
+        self._unit_of_work._mark_write()
+        return _broker_order(_row(row, "broker order refresh"))
+
+    def add_fill(self, fill: Fill) -> bool:
+        """Append one fill; a repeated broker execution id is an idempotent no-op."""
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO fills (
+                    execution_id, broker_order_id, quantity, price, occurred_at
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (execution_id) DO NOTHING
+                RETURNING fill_id
+                """,
+                (
+                    fill.execution_id,
+                    fill.broker_order_id,
+                    fill.quantity.value,
+                    fill.price.value,
+                    fill.occurred_at.value,
+                ),
+            )
+            row = cursor.fetchone()
+        inserted = row is not None
+        if inserted:
+            self._unit_of_work._mark_write()
+        return inserted
+
+    def list_fills(self, broker_order_id: str) -> tuple[Fill, ...]:
+        """Load fills for one broker order in recorded order."""
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT execution_id, broker_order_id, quantity, price, occurred_at
+                FROM fills
+                WHERE broker_order_id = %s
+                ORDER BY fill_id
+                """,
+                (broker_order_id,),
+            )
+            rows = cursor.fetchall()
+        return tuple(_fill(_row(row, "fill lookup")) for row in rows)
+
+    def list_open_broker_orders(self) -> tuple[BrokerOrder, ...]:
+        """Load every mirror whose broker status is not terminal."""
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT {_BROKER_ORDER_COLUMNS}
+                FROM broker_orders
+                WHERE status NOT IN ('FILLED', 'CANCELED', 'EXPIRED', 'REJECTED')
+                ORDER BY broker_order_id
+                """
+            )
+            rows = cursor.fetchall()
+        return tuple(_broker_order(_row(row, "broker order lookup")) for row in rows)
+
+    def list_all_broker_orders(self) -> tuple[BrokerOrder, ...]:
+        """Load every recorded broker order mirror."""
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT {_BROKER_ORDER_COLUMNS}
+                FROM broker_orders
+                ORDER BY broker_order_id
+                """
+            )
+            rows = cursor.fetchall()
+        return tuple(_broker_order(_row(row, "broker order lookup")) for row in rows)
+
+    def list_all_fills(self) -> tuple[Fill, ...]:
+        """Load the entire append-only fill ledger in recorded order."""
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT execution_id, broker_order_id, quantity, price, occurred_at
+                FROM fills
+                ORDER BY fill_id
+                """
+            )
+            rows = cursor.fetchall()
+        return tuple(_fill(_row(row, "fill lookup")) for row in rows)
+
+
+class PostgresReconciliationRepository:
+    """Append-only reconciliation runs; PostgreSQL owns the recorded timestamp."""
+
+    def __init__(self, unit_of_work: PostgresUnitOfWork) -> None:
+        self._unit_of_work = unit_of_work
+
+    def add(self, result: ReconciliationResult) -> UtcTimestamp:
+        """Insert one run and the verbatim detail of every mismatch."""
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO reconciliation_runs (
+                    run_id, trading_date, status, mismatch_count, mismatch_kinds,
+                    checked_orders, checked_fills, observed_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING recorded_at
+                """,
+                (
+                    result.run_id,
+                    result.trading_date.value,
+                    result.status.value,
+                    len(result.mismatches),
+                    [mismatch.kind.value for mismatch in result.mismatches],
+                    result.checked_orders,
+                    result.checked_fills,
+                    result.observed_at.value,
+                ),
+            )
+            row = _row(cursor.fetchone(), "reconciliation run insert")
+            for ordinal, mismatch in enumerate(result.mismatches, start=1):
+                cursor.execute(
+                    """
+                    INSERT INTO reconciliation_mismatches (run_id, ordinal, kind, detail)
+                    VALUES (%s, %s, %s, %s)
+                    """,
+                    (result.run_id, ordinal, mismatch.kind.value, mismatch.detail),
+                )
+        self._unit_of_work._mark_write()
+        return _timestamp(row[0], "recorded_at")
+
+    def latest(self) -> ReconciliationResult | None:
+        """Load the most recently recorded reconciliation run."""
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT run_id, trading_date, status, mismatch_count, mismatch_kinds,
+                       checked_orders, checked_fills, observed_at
+                FROM reconciliation_runs
+                ORDER BY recorded_at DESC, run_id DESC
+                LIMIT 1
+                """
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        return _reconciliation_result(_row(row, "reconciliation latest"))
+
+
+class PostgresControlRepository:
+    """Control state and the append-only operator command log."""
+
+    def __init__(self, unit_of_work: PostgresUnitOfWork) -> None:
+        self._unit_of_work = unit_of_work
+
+    def state(self) -> ControlStateSnapshot:
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT entries_paused, paused_reason, updated_at, flatten_generation
+                FROM control_state
+                WHERE singleton
+                """
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise PersistenceInvariantError("control state row is missing")
+        paused_reason = row[1]
+        if paused_reason is not None and type(paused_reason) is not str:
+            raise PersistenceInvariantError("database paused_reason must be text or null")
+        return ControlStateSnapshot(
+            entries_paused=_boolean(row[0], "entries_paused"),
+            paused_reason=paused_reason,
+            updated_at=_timestamp(row[2], "updated_at"),
+            flatten_generation=_integer(row[3], "flatten_generation"),
+        )
+
+    @contextmanager
+    def submission_guard(self) -> Iterator[ControlStateSnapshot]:
+        """Hold the pause row stable until the surrounding transaction commits."""
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT entries_paused, paused_reason, updated_at, flatten_generation
+                FROM control_state
+                WHERE singleton
+                FOR SHARE
+                """
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise PersistenceInvariantError("control state row is missing")
+        paused_reason = row[1]
+        if paused_reason is not None and type(paused_reason) is not str:
+            raise PersistenceInvariantError("database paused_reason must be text or null")
+        try:
+            yield ControlStateSnapshot(
+                entries_paused=_boolean(row[0], "entries_paused"),
+                paused_reason=paused_reason,
+                updated_at=_timestamp(row[2], "updated_at"),
+                flatten_generation=_integer(row[3], "flatten_generation"),
+            )
+        except BaseException:
+            self._unit_of_work.rollback()
+            raise
+        else:
+            # Release the row lock even when the control repository is backed
+            # by a dedicated UoW rather than the order-writing UoW.
+            self._unit_of_work.commit()
+
+    def bump_flatten_generation(self) -> int:
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE control_state
+                SET flatten_generation = flatten_generation + 1
+                WHERE singleton
+                RETURNING flatten_generation
+                """
+            )
+            row = _row(cursor.fetchone(), "control state flatten generation bump")
+        self._unit_of_work._mark_write()
+        return _integer(row[0], "flatten_generation")
+
+    def set_entries_paused(self, paused: bool, reason: str | None) -> ControlStateSnapshot:
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE control_state
+                SET entries_paused = %s, paused_reason = %s
+                WHERE singleton
+                RETURNING entries_paused, paused_reason, updated_at, flatten_generation
+                """,
+                (paused, reason),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            raise PersistenceInvariantError("control state row is missing")
+        paused_reason = row[1]
+        if paused_reason is not None and type(paused_reason) is not str:
+            raise PersistenceInvariantError("database paused_reason must be text or null")
+        self._unit_of_work._mark_write()
+        return ControlStateSnapshot(
+            entries_paused=_boolean(row[0], "entries_paused"),
+            paused_reason=paused_reason,
+            updated_at=_timestamp(row[2], "updated_at"),
+            flatten_generation=_integer(row[3], "flatten_generation"),
+        )
+
+    def add_command(self, record: ControlCommandRecord) -> UtcTimestamp | None:
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO control_commands (
+                    command_id, command, reason, actor, run_id, requested_at, applied_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING applied_at
+                """,
+                (
+                    record.command_id,
+                    record.command.value,
+                    record.reason,
+                    record.actor,
+                    record.run_id,
+                    record.requested_at.value,
+                    None if record.applied_at is None else record.applied_at.value,
+                ),
+            )
+            row = _row(cursor.fetchone(), "control command insert")
+        self._unit_of_work._mark_write()
+        if row[0] is None:
+            return None
+        return _timestamp(row[0], "applied_at")
+
+
 def _row(value: object, operation: str) -> tuple[object, ...]:
     row = cast(tuple[object, ...] | None, value)
     if row is None:
@@ -371,4 +904,106 @@ def _lease_grant(row: tuple[object, ...]) -> LeaseGrant:
         fencing_token=_integer(row[3], "fencing_token"),
         attempt_count=_integer(row[4], "attempt_count"),
         database_time=_timestamp(row[5], "database_time"),
+    )
+
+
+def _boolean(value: object, field_name: str) -> bool:
+    if type(value) is not bool:
+        raise PersistenceInvariantError(f"database {field_name} must be a boolean")
+    return value
+
+
+def _reconciliation_result(row: tuple[object, ...]) -> ReconciliationResult:
+    if len(row) != 8:
+        raise PersistenceInvariantError("reconciliation query returned an invalid column count")
+    kinds_raw = row[4]
+    if type(kinds_raw) is not list:
+        raise PersistenceInvariantError("database mismatch_kinds must be an array")
+    mismatches = tuple(
+        ReconciliationMismatch(kind=MismatchKind(kind), detail=kind) for kind in kinds_raw
+    )
+    return ReconciliationResult(
+        run_id=_uuid(row[0], "run_id"),
+        trading_date=_trading_date(row[1]),
+        status=ReconciliationStatus(_text(row[2], "status")),
+        mismatches=mismatches,
+        checked_orders=_integer(row[5], "checked_orders"),
+        checked_fills=_integer(row[6], "checked_fills"),
+        observed_at=_timestamp(row[7], "observed_at"),
+    )
+
+
+def _uuid(value: object, field_name: str) -> UUID:
+    if not isinstance(value, UUID):
+        raise PersistenceInvariantError(f"database {field_name} must be a UUID")
+    return value
+
+
+def _decimal(value: object, field_name: str) -> Decimal:
+    if type(value) is not Decimal:
+        raise PersistenceInvariantError(f"database {field_name} must be a numeric")
+    return value
+
+
+def _order_intent(row: tuple[object, ...]) -> OrderIntent:
+    if len(row) != 18:
+        raise PersistenceInvariantError("order intent query returned an invalid column count")
+    return OrderIntent(
+        intent_id=_uuid(row[0], "intent_id"),
+        client_order_id=ClientOrderId(_text(row[1], "client_order_id")),
+        strategy=_text(row[2], "strategy"),
+        trading_date=_trading_date(row[3]),
+        window=_text(row[4], "window_name"),
+        target_version=_integer(row[5], "target_version"),
+        symbol=Symbol(_text(row[6], "symbol")),
+        side=OrderSide(_text(row[7], "side")),
+        quantity=OrderQuantity(_integer(row[8], "quantity")),
+        intent_type=OrderIntentType(_text(row[9], "intent_type")),
+        limit_price=Price(_decimal(row[10], "limit_price")),
+        collar=PriceCollar(
+            reference=Price(_decimal(row[11], "collar_reference_price")),
+            offset_bps=_integer(row[12], "collar_offset_bps"),
+        ),
+        earliest_submit_at=_timestamp(row[13], "earliest_submit_at"),
+        cancel_at=_timestamp(row[14], "cancel_at"),
+        status=OrderStatus(_text(row[15], "status")),
+        run_id=RunId(_uuid(row[16], "run_id")),
+        created_at=_timestamp(row[17], "created_at"),
+    )
+
+
+def _broker_order(row: tuple[object, ...]) -> BrokerOrder:
+    if len(row) != 11:
+        raise PersistenceInvariantError("broker order query returned an invalid column count")
+    broker_watermark = row[9]
+    if broker_watermark is not None:
+        updated_at = _timestamp(broker_watermark, "broker_updated_at")
+    else:
+        # A NULL watermark means the broker timestamp is unknown (0007 cleared
+        # the suspect 0006 backfill).  The submitted_at lower bound can never
+        # fabricate a barrier that hides a real broker event.
+        updated_at = _timestamp(row[8], "submitted_at")
+    return BrokerOrder(
+        broker_order_id=_text(row[0], "broker_order_id"),
+        client_order_id=ClientOrderId(_text(row[1], "client_order_id")),
+        symbol=Symbol(_text(row[2], "symbol")),
+        side=OrderSide(_text(row[3], "side")),
+        quantity=OrderQuantity(_integer(row[4], "quantity")),
+        filled_quantity=_integer(row[5], "filled_quantity"),
+        limit_price=Price(_decimal(row[6], "limit_price")),
+        status=BrokerOrderStatus(_text(row[7], "status")),
+        submitted_at=_timestamp(row[8], "submitted_at"),
+        updated_at=updated_at,
+    )
+
+
+def _fill(row: tuple[object, ...]) -> Fill:
+    if len(row) != 5:
+        raise PersistenceInvariantError("fill query returned an invalid column count")
+    return Fill(
+        execution_id=_text(row[0], "execution_id"),
+        broker_order_id=_text(row[1], "broker_order_id"),
+        quantity=OrderQuantity(_integer(row[2], "quantity")),
+        price=Price(_decimal(row[3], "price")),
+        occurred_at=_timestamp(row[4], "occurred_at"),
     )

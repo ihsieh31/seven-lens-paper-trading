@@ -2,10 +2,10 @@
 
 ## 狀態摘要
 
-- 專案階段：P1 — 專案骨架與權威狀態（P1-A、P1-B、P1-C1、P1-C2、P1-C3 與遠端 CI 均已通過獨立驗收；P1 Core Gate 已關閉）
+- 專案階段：P2 — Alpaca Paper 執行安全已通過全面獨立驗收；Gate Closed。這不授權真實下單。
 - 完成度定義：只以路線圖的可驗證交付物計算，不以主觀百分比計算。
-- 最近更新：2026-08-16
-- 下一個 gate：P2 Safety Design Gate；尚未開始，且 P1 通過仍不得視為可連線或可交易系統。
+- 最近更新：2026-08-19
+- 下一個 gate：先討論 P3 SourceManifest／quarantine；WS/CLI 與真實下單仍分別留 P6/P7。
 
 ## 已完成
 
@@ -61,7 +61,10 @@
 
 ## 尚未開始
 
-- [ ] 實作 Paper broker adapter、reconciliation 與故障注入測試。
+- [ ] P2 獨立驗收（新 session 定點驗收：雙邊狀態機、0003–0005 對抗重現、mismatch 自動
+      暫停、runtime role 權限）。P2-E 真實 read-only 連線驗證已完成首次執行（2026-08-17，
+      見下方 P2-E 證據）。
+- [ ] WebSocket 傳輸本體與 control shell CLI（ADR-019 範圍聲明，P6/P7 bring-up）。
 - [ ] 審查本機七位候選語料，建立 SourceManifest、quarantine／coverage 報告與七套 doctrine cards。
 - [ ] 取得 Tavily 對同一 Customer 彙總使用 7 個免費帳號的書面／後台授權證據。
 - [ ] 實作量化預篩、committee workflow、portfolio optimizer 與風控。
@@ -79,3 +82,259 @@ native evidence gap，或後續quality/P2 composition工作包，詳見ADR-016�
 ## Gate 規則
 
 任何 gate 只有在對應測試、報告與證據檔已保存時才算通過；「程式可以跑」不等於可無人值守。
+
+## P2-A — 執行 domain 契約與 fake broker harness：implementation completed, pending independent acceptance
+
+2026-08-17 依使用者核准之 P2 方向（P2-E 僅 read-only 真實連線、金鑰需要時才提供、P2-A 先行、
+P2 手動觸發 job）完成第一個工作包：
+
+- `src/seven_lens/execution/orders.py`：封閉 typed domain（Symbol/Side/Quantity/Price/
+  UsdAmount/PriceCollar/ClientOrderId/OrderIntent/BrokerOrder/Fill）與雙狀態機
+  （內部 lifecycle 含 UNKNOWN 解析語意、broker mirror lifecycle）；詳見 ADR-017。
+- `src/seven_lens/application/ports/broker.py`：網路中立 PaperBrokerPort、封閉
+  RejectionReason、BrokerTransportError/QueryError/ConflictError 分類、PaperAccount
+  強制 PAPER 斷言。
+- `src/seven_lens/execution/fake_broker.py`：決定性 fake Paper broker 與一次性 fault plans
+  （timeout before/after accept、reject、partial/full fill 腳本、cancel/expire、
+  同 id 不同參數 fail-closed）。
+- `migrations/0003_execution_orders_{up,down}.sql`：order_intents（client_order_id UNIQUE +
+  組合 CHECK + identity immutable + 狀態轉移 guard）、broker_orders（FK 鏡像 + guard）、
+  fills（append-only trigger）；`verify_schema` 與 `provision/verify_runtime_role` 同步擴充。
+- 未建立任何網路 client、真實 adapter、outbox worker、reconciliation 或 launchd；未使用
+  Alpaca/Tavily/OpenAI 憑證；未 stage/commit/push。
+
+實作自測證據（2026-08-17 本機）：
+
+- `scripts/verify_p1.sh` 全綠：Ruff format/lint、Mypy strict 66 source files、
+  non-integration `501 passed, 54 deselected`、offline lock check 通過。
+- 真實 disposable PostgreSQL 16 container（`scripts/run_postgres_integration.sh`）：
+  `54 passed, 0 skipped`，含新增 21 個 execution schema 對抗測試（非法轉移、identity
+  不可變、組合鍵偽造、append-only UPDATE/DELETE、FK/UNIQUE、up/down/up restore）。
+- 過程中發現並修正：0003 down migration 初版漏列 `DELETE FROM schema_migrations WHERE
+  version = 3`，導致 fixture teardown 的 rollback 迴圈無限重複；補列後整合測試由懸死
+  轉為 5.93 秒完成。此缺陷已以真實 PostgreSQL 重跑關閉。
+
+依 gate 規則，上述為實作方自測證據；P2-A 需獨立驗收後才可標記關閉。
+
+## P2-B~E — 執行引擎、對帳、控制平面、Paper adapter：implementation completed, pending independent acceptance
+
+2026-08-17 同日完成（皆在 P2-A 契約之上，無網路呼叫、無真實憑證）：
+
+- P2-B：`OrderRepository` port + psycopg adapter（guard-backed 轉移、fills 冪等 ON CONFLICT）、
+  `ExecutionEngine`（SUBMITTING 先持久化、timeout→UNKNOWN、同 id 解析/重送、cancel/expire/recover）；
+  單元 18 案 + 真實 PostgreSQL 端到端。
+- P2-C：`execution/ledger.py`（cash delta + FIFO lots，fail closed）、`Reconciler.collect/run`
+  （mismatch 自動暫停）、migration 0004（reconciliation_runs，append-only、kinds CHECK）。
+- P2-D：`execution/control.py` + `ControlPlane`（pause/resume(CLEAN 門檻)/cancel/flatten/
+  shutdown）、migration 0005（control_commands/control_state）、`application/composition.py`
+  （exact-schema 設定、execution secret allowlist、Alpaca 憑證 all-or-nothing）；新增
+  POSTGRES_RUNTIME_PASSWORD SecretKind（含 telemetry attribute 與 service mapping）；
+  DSN 組合在 infrastructure（RuntimeDsn 不洩漏）。
+- P2-E：`infrastructure/alpaca_paper.py`（injectable transport、嚴格解析、408/429/5xx→
+  outcome-unknown、limit day order body）；測試全程零網路。
+
+對抗式審查（同日）發現並修復：Reconciler 缺持久化與自動暫停編排（補 `run()`）、resume 以字串
+比較（改 enum）、ledger 賣出現金無上界（補檢查）、broker 端不可表示狀態裸抛 DB 錯誤（改為
+ExecutionStateError 且零副作用）；各補對抗測試。已知邊界記錄於 ADR-018。
+
+最終自測證據（2026-08-17 本機）：`scripts/verify_p1.sh` 全綠（Ruff、Mypy strict 82 檔、
+non-integration `563 passed, 60 deselected`、offline lock check）；真實 disposable
+PostgreSQL 16 `60 passed, 0 skipped`；容器由 script trap 精確清理。未讀取 Keychain、未使用
+任何 API 憑證、未 stage/commit/push。依 gate 規則，P2-B~E 需獨立驗收後才可關閉。
+
+## P2 收尾（第二輪）：trade update consumer、NAV、整合驗證與第二輪對抗審查
+
+2026-08-17 第二輪以 ROADMAP P2 交付/驗收清單逐項比對後補齊：
+
+- `execution/trade_updates.py`：TradeUpdateConsumer（duplicate/out-of-order/unknown/
+  外部取消路由），驗收標準「duplicate/out-of-order WebSocket events idempotent」於本機
+  事件流層完成（WS 傳輸本體依 ADR-019 延後至 P6/P7）。
+- `execution/ledger.py` 新增 `account_valuation`（NAV = 期初現金 + fill 效果 + 市值；
+  缺價 fail closed）。
+- Engine 補 CANCEL_PENDING crash 恢復測試；repository 新增 `get_broker_order_by_id`。
+- 真實 PostgreSQL 整合新增：reconciliation run 持久化與 latest 排序、mismatch→自動
+  pause_entries 於真實 DB、control_commands append-only 對抗（UPDATE/DELETE 被 55000
+  拒絕）、control_state 單例與暫停-原因配對 CHECK。
+- 第二輪對抗審查修復：同狀態重播事件由 APPLIED 改判 DUPLICATE（零寫入）；外部取消經
+  CANCEL_PENDING 路由（consumer 與 engine 語意一致）；FakeOrderRepository 的
+  updated_at 隨變更單調前進以鏡像 DB trigger。
+- 最終 gate：`verify_p1.sh` EXIT=0（Ruff、Mypy strict 85 檔、non-integration
+  `575 passed, 63 deselected`）；真實 PostgreSQL 16 `63 passed, 0 skipped`；無容器殘留。
+  P2 全部工作包維持 implementation completed, pending independent acceptance。
+
+## P2-E 首次真實 read-only 驗證（2026-08-17，operator 授權執行）
+
+新增交付（不改任何核心程式碼以外的檔案；三個授權最小修復見下）：
+
+- `src/seven_lens/cli/p2e_readonly_verify.py`：GET-only stdlib HTTPS transport
+  （bounded 429 retry 尊重 Retry-After、timeout/5xx/畸形 body 一律
+  `BrokerTransportError` fail-closed、URL allowlist = Paper endpoint、request
+  journal 只記 method+path）；CLI 以 `ExecutionStackConfig.from_mapping` 解析設定、
+  `ScopedSecretProvider(execution_secret_refs())` + Keychain 解析憑證、
+  `compose_runtime_dsn(RuntimeDatabaseConfig)` 組 DSN；讀取 account/positions/
+  open orders/fills 後以 `Reconciler.run` 將 CLEAN/MISMATCH 結果寫入
+  `reconciliation_runs` 作為持久化證據；stdout 輸出人讀報告 + JSON，不洩漏 secret。
+- `tests/integration/test_p2e_readonly_live.py`：新增 `live` marker；offline
+  fail-closed transport 測試（in-process HTTP server 注入 429/503/畸形 body/
+  斷線/timeout，7 案零網路）＋ 需 `SEVEN_LENS_P2E_LIVE=1` 的真實驗證測試。
+- `pyproject.toml` 僅註冊 `live` marker。
+
+執行證據（2026-08-17，真實 Alpaca Paper 帳戶 + TLS-enabled disposable
+PostgreSQL 16.15）：
+
+- CLI exit=0；僅 GET：`/v2/account`、`/v2/positions`、
+  `/v2/orders?limit=500&status=open`（多次），無任何 POST/DELETE。
+- 帳戶 `PA3I3A3G8N70`（PAPER）：cash 100000.00、equity 100000.00；positions 0、
+  open orders 0、known fills 0；reconciliation CLEAN（run_id
+  `feda0ec8-b947-44d2-897c-29668b7d2453`，checked_orders=0、checked_fills=0）已
+  持久化於 `reconciliation_runs`（verified via psql）。
+- `pytest tests/integration -m integration`（TLS PG + live env）：
+  **72 passed, 0 skipped**；non-integration 578 passed；Ruff/Mypy strict 全綠。
+
+授權最小修復（P2-E 真實驗證暴露的既有缺陷；均經 operator 逐項授權）：
+
+1. `infrastructure/macos_keychain.py`：query `kSecMatchLimitAll` → `kSecMatchLimitOne`
+   （此 macOS 上 All+ReturnData 回 errSecParam -50；P1-C1 驗收僅 fake-based，從未
+   觸及真實 `SecItemCopyMatching`）；`_normalize_native_items` 支援 PyObjC NSData
+   （buffer protocol）正規化為 plain bytes。
+2. `infrastructure/alpaca_paper.py`：`_usd`/`_price` 以 `_two_decimal_decimal` 正規化
+   至恰好兩位小數（exponent<-2 或量化不相等仍 fail closed）；真實 API 回傳
+   `cash: "100000"`（整數）而 `UsdAmount`/`Price` 要求恰 2dp。
+3. 首次真實驗證執行後，macOS 曾彈 Keychain 授權視窗（operator 選 Always Allow），
+   後續 spawn child 讀取即時成功。
+
+執行後狀態：Keychain 已存入 Alpaca Paper key/secret 與 disposable runtime
+password（service 名同 `_SERVICES`，account=primary）；disposable PG 容器已清理。
+待 operator 決定：證據（本節）與程式碼變更是否 commit/push。
+
+## P2 補強輪（2026-08-17）：獨立對抗審查五缺陷修復——implementation completed, pending independent acceptance 維持不變
+
+依 ROADMAP 驗收要求對 P2 交付進行獨立對抗審查（第二 session、以 ISSUES.md A–N 缺陷清單逐項
+重現），五個真實缺陷先 red reproduction 證明、後修復並補防回歸測試：
+
+- **A（pause bypass，Critical，ISSUES CLOSED-017）**：`ExecutionEngine` 新增 `control`
+  state source；`submit_from_outbox` 在 SUBMITTING 轉移／commit／broker 呼叫前檢查
+  `entries_paused`，違反時抛 `ExecutionPausedError`（零副作用）；RISK_EXIT（緊急離場）放行、
+  risk-reduction（cancel/expire/fills）不受影響、resume 不需重建 engine。composition 以
+  `build_execution_stack(..., control=...)` 注入同一 control repository，reconciliation
+  mismatch 自動暫停立即生效。測試：`tests/test_execution_pause_remediation.py`（先 red：
+  缺依賴 TypeError／paused 下仍回 ACKNOWLEDGED，後 5/5 綠）。
+- **E（broker_orders 時鐘混用，High，ISSUES CLOSED-018）**：migration 0006 新增
+  `broker_orders.broker_updated_at`（broker 時間；`guard_broker_updated_at` trigger 強制單調
+  不倒退）與本地 `updated_at`（statement_timestamp，稽核）分工；repository／fake 同步；
+  `TradeUpdateConsumer` 的 STALE 基準改 broker 時間。測試：
+  `tests/integration/test_broker_order_timestamps_postgres.py`（先 red：roundtrip 回讀本地
+  時間／clock-skew 事件被 STALE 丟棄，後 2/2 綠）。
+- **F（重複 client_order_id 誤分類 REJECTED）**：Alpaca submit 遇 400/422 以
+  `GET /v2/orders:by_client_order_id` 解析：參數一致回 `SubmitAccepted`（冪等 recovery），
+  矛盾或查不到回 rejection；follow-up GET 非 2xx fail-soft。測試：`test_alpaca_paper_adapter.py`
+  `TestDuplicateClientOrderId`（先 red：重複回 `SubmitRejected`，後綠）。
+- **H（fills 分頁只取一頁）**：`list_fills` 改以 `after` cursor 循環取滿（`limit=100`、
+  execution_id 去重、non-advancing 拋 `BrokerTransportError`）。測試：
+  `test_alpaca_paper_adapter.py` `TestFillPagination`（先 red：101 fills 只回 100，後綠）。
+- **G（reconciler 漏報終態分歧）**：新增 `MismatchKind.INTENT_STATUS_MISMATCH`；terminal
+  intent（FILLED/CANCELED/EXPIRED/REJECTED）而 broker 仍開單→mismatch；第二趟掃
+  `list_all_broker_orders` 捕捉 terminal mirror vs broker 開單。測試：
+  `test_reconciliation_and_ledger.py`（先 red 兩案，後 17/17 綠）。
+- **N（CI 缺 PostgreSQL integration job）**：`.github/workflows/ci.yml` 新增 postgres job
+  （`uv run --locked pytest tests/integration -m "integration and not live"`）；本機
+  `scripts/run_postgres_integration.sh` 同步；live 只能經 P2-E CLI 手動執行。測試：
+  `test_p1_c3_ci.py::test_workflow_commands_match_p1_c3_contract`（先 red，後綠）。
+
+最終 gate（2026-08-17）：Ruff format/check 與 Mypy strict 90 檔全綠；non-integration
+`589 passed, 74 deselected`；真實 disposable PostgreSQL 16 integration
+`66 passed, 8 deselected`（live marker 排除，`SEVEN_LENS_P2E_LIVE` 未設）；`verify_p1.sh
+--postgres` EXIT=0、無容器殘留。未讀取 Keychain、未使用任何 API 憑證、未 stage/commit/push。
+依 gate 規則，P2 全部工作包維持 implementation completed, pending independent acceptance。
+
+## P2 second remediation（2026-08-18）：broker 真值未知即不宣告終態——implementation completed, pending independent re-acceptance
+
+依第二輪規劃（ADR-022、ISSUES CLOSED-020/021）完成執行安全硬化；migration 0007
+（up/down 成對）承載全部持久化變更：
+
+1. **引擎語意**（`execution_service.py`）：`resolve()` 重寫——deadline 後 GET 無單 →
+   SUBMITTING 轉 UNKNOWN（已 UNKNOWN 保持），絕不自行宣告終態；`expire_overdue()` 只對
+   從未到過 broker 的 CREATED/RISK_APPROVED/OUTBOX_PENDING 本地 EXPIRED，SUBMITTING/
+   UNKNOWN 一律 resolve，ACKNOWLEDGED/PARTIALLY_FILLED/CANCEL_PENDING 一律先取消、
+   transport/config 錯誤保留 CANCEL_PENDING 交 recovery/reconciliation；`recover()` 修正
+   同一 sweep 對同一 id 重複 resolve 的缺陷（snapshot both statuses、each id resolve 一次）。
+2. **watermark 保守化**（0007 + `postgres.py` + `trade_updates.py`）：0006 本地 backfill 的
+   broker_updated_at 全部清 NULL（unknown），domain 以 submitted_at 為 lower bound（永不
+   隱藏 broker 事件）；trade updates 回放同值 → DUPLICATE、同 timestamp 不同值 →
+   TradeUpdateError 明確衝突；stale 基準維持 < mirror.updated_at（NULL 時永不 STALE）。
+3. **broker_orders SQL guard 完整化**（0007）：filled_quantity 永不倒退、FILLED 恰等
+   quantity（INSERT+UPDATE 側）、身份欄位 immutable、`guard_broker_order_insert` 新增；
+   status CHECK 完整 15 態；`REVIEW_REQUIRED` 納入 intent 狀態機與六個 review broker
+   狀態收斂；0006 的「絕對單調不倒退」改為「僅當兩端皆非 NULL 才禁倒退」。
+4. **flatten 六步**（`control_service.py`）：確認 FLATTEN_PAPER → 已 paused → resolve
+   SUBMITTING/UNKNOWN → 取消 ACK/PARTIALLY/CANCEL_PENDING → apply_fills 收斂 →
+   **broker position view vs 本地 ledger 逐符號一致，否則 abort（零新單）** → 價格經
+   `FlattenPriceProvider` seam（預設 LedgerFlattenPriceProvider：本地最後成交價，零外部
+   依賴）→ `control_state.flatten_generation` 同交易原子遞增為 target_version（重複
+   flatten 永不碰撞 client order id）。
+5. **資產閘**（`execution_service.py`）：submit 前 `get_asset` 驗證 symbol 已知且
+   tradable，fail-closed（含 RISK_EXIT）；flatten 對全部部位預檢後才進 generation 與下單。
+6. **詳情對帳**（0007 + `reconciliation_service.py` + `postgres.py`）：新增 append-only
+   `reconciliation_mismatches`（run_id+ordinal+kind+detail，200 char bounded）；
+   closed-history pass 以 `list_recent_orders(since=前一輪 observed_at；無前輪則
+   trading_date 00:00 UTC)` 重掃已關閉 broker 單，補 UNKNOWN_BROKER_ORDER/
+   STATUS_MISMATCH/MISSING_LOCAL_FILL 三類漏報，逐單去重不上報已報告者；
+   `INTENT_STATUS_MISMATCH` 納入 SQL kinds CHECK；runtime role 僅增 INSERT/SELECT，
+   仍無 DDL。
+7. **P2-E 補強**：trading date 改 `America/New_York` 會話日（`domain/session.py`，
+   p2e CLI 同步）；`p2e_readonly_verify.py` 維持 GET-only（transport 非 GET 即失敗）。
+
+測試（本輪新增/改寫）：`tests/test_execution_engine.py`（TestPendingCancelCutoff 4 案、
+TestBrokerTerminalRecovery、TestDuplicateDelayedVisibility、TestAssetGate 3 案）、
+`tests/test_control_plane.py`（flatten abort/disagreement/price seam/generation 三連等
+5 案）、`tests/test_reconciliation_and_ledger.py`（closed-history 4 案）、
+`tests/test_session.py`（單元 5 案）；fake repos 與 `tests/fakes/orders.py` 同步
+filled/identity invariants；`tests/integration/test_execution_schema.py` 依完整狀態機
+改寫（ACCEPTED→REJECTED 現為合法、倒退 RECEIVED 仍禁）、`test_control_and_reconciliation_
+postgres.py` 新增明細表 roundtrip + append-only 驗證、`test_migrations.py` 版本循環
+6/7、`test_postgres_runtime_role.py` 驗證 reconciliation_mismatches 權限。
+
+最終 gate（2026-08-18）：`uv sync --python 3.13 --locked`/`uv lock --check` 綠；
+Ruff format/check 與 Mypy strict 92 檔全綠；non-integration `621 passed, 74 deselected`；
+真實 disposable PostgreSQL 16 integration `66 passed, 8 deselected`（live marker 排除，
+`SEVEN_LENS_P2E_LIVE` 未設）；`verify_p1.sh --postgres` EXIT=0、無容器殘留。
+未讀取 Keychain、未使用任何 API 憑證、未 stage/commit/push。
+依 gate 規則：**P2 second remediation implementation completed; pending independent
+re-acceptance.**
+
+## P2 獨立驗收與 Codex 回遷（2026-08-19）：歷史基線；gate 已重新 Open
+
+- 重跑 `scripts/verify_p1.sh` 與真實 disposable PostgreSQL 16 gate，先確認既有 621/66
+  基線，再以官方 Alpaca API 規格與對抗場景審查 recovery、flatten、asset、reconciliation。
+- 發現並修復五類缺陷：pause 後 recovery 仍可能重送、orders/fills 分頁參數錯誤、flatten
+  在 CANCEL_PENDING 未收斂時仍繼續、可交易非 US-equity 資產可通過、REVIEW_REQUIRED
+  可被下一次 clean reconciliation 靜默清除。
+- 新增 6 個回歸案例；最終 `verify_p1.sh` 為 627 passed / 74 deselected，Ruff、mypy、
+  lock 全綠；PostgreSQL 16 integration 為 66 passed / 8 deselected。
+- 已把 zcode 的新程式、migration、測試與 P2 文件同步回
+  `/Users/zongen/Downloads/codex/trading`，並恢復 Codex 路徑/工具文字。未讀 Keychain、未跑
+  live test、未 stage/commit/push；本輪遠端 CI 尚未執行。
+
+## P2 全面再驗收（2026-08-19）：重新 Open 後已 Closed
+
+- 使用者要求撤銷先前關門判定，使用已存於 macOS Keychain 的 Alpaca Paper credentials
+  執行真實 GET-only 驗證，並由 Luna worker 進行獨立對抗審核。
+- 關門條件：執行安全、PostgreSQL、控制平面、reconciliation、Paper endpoint read-only、
+  credential/路徑隔離與所有新增對抗案例均通過；發現問題必須修復後重跑完整 gate。
+- 明確排除：不送真實委託、不使用 POST/DELETE transport、不 commit/push。
+
+### 全面再驗收結論：Gate Closed
+
+- 真實 Keychain 的 Alpaca Paper key/secret 解析成功；只對 Paper endpoint 發出 GET。新增
+  `run_p2e_live_acceptance.sh`，以獨立非 owner runtime role 在 disposable PostgreSQL 16
+  持久化 reconciliation；live test 1/1 通過，未送單或取消。
+- 官方契約核對修復單一 asset 路徑、open orders 500 筆分頁、fill bounded pagination／
+  cursor cycle／order identity；未知 `held` 狀態維持 fail-closed。
+- Luna 首輪重現 pause TOCTOU、control partial failure、broker query failure、open/history
+  snapshot race 與 fill integrity；修復為 PostgreSQL `FOR SHARE` submission guard、partial
+  command `applied_at=NULL`、`BROKER_QUERY_FAILURE` 持久化並自動 pause，以及以 broker
+  timestamp+status 合併快照。第二輪發現 equal-timestamp 不同狀態仍可漏報，第三輪確認已
+  收斂為 `STATUS_MISMATCH`，原四組 blocker 全部 Closed。
+- 最終證據：Ruff format/check、mypy strict 92 檔全綠；non-integration 637 passed / 77
+  deselected；真實 PostgreSQL 16 integration 69 passed / 8 deselected；live acceptance
+  1 passed。P2 gate **Closed**；未 stage/commit/push，遠端 CI 尚未執行，真實下單仍留 P7。

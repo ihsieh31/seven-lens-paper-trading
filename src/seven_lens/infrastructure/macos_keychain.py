@@ -9,7 +9,7 @@ import sys
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from types import ModuleType
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from seven_lens.application.ports.secrets import (
     KeychainLocked,
@@ -74,7 +74,7 @@ class _SecurityModule(Protocol):
     kSecAttrAccount: object
     kSecReturnData: object
     kSecMatchLimit: object
-    kSecMatchLimitAll: object
+    kSecMatchLimitOne: object
     kSecUseAuthenticationUI: object
     kSecUseAuthenticationUIFail: object
 
@@ -107,7 +107,7 @@ class PyObjCKeychainBridge:
                 self._security.kSecAttrService: service,
                 self._security.kSecAttrAccount: account,
                 self._security.kSecReturnData: True,
-                self._security.kSecMatchLimit: self._security.kSecMatchLimitAll,
+                self._security.kSecMatchLimit: self._security.kSecMatchLimitOne,
                 self._security.kSecUseAuthenticationUI: (
                     self._security.kSecUseAuthenticationUIFail
                 ),
@@ -296,10 +296,14 @@ def _normalize_native_items(status: int, raw_result: object) -> tuple[bytes, ...
         return ()
     if raw_result is None:
         return ()
-    if type(raw_result) is bytes:
-        return (raw_result,)
+    if isinstance(raw_result, bytes):
+        return (bytes(raw_result),)
     if not isinstance(raw_result, Sequence) or isinstance(raw_result, (str, bytes, bytearray)):
-        return None
+        try:
+            converted = memoryview(cast(Any, raw_result)).tobytes()
+        except (TypeError, ValueError):
+            return None
+        return (converted,)
     normalized: list[bytes] = []
     for item in raw_result:
         if type(item) is bytes:

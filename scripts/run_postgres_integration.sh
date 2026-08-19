@@ -125,4 +125,4 @@ fi
 
 TEST_DATABASE_URL="postgresql://${postgres_user}:${postgres_password}@127.0.0.1:${host_port}/${postgres_database}" \
 REQUIRE_POSTGRES_INTEGRATION=1 \
-    uv run --locked pytest tests/integration -m integration -ra --tb=short
+    uv run --locked pytest tests/integration -m "integration and not live" -ra --tb=short
