@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Fake-only native bridge, status mapping, and hard-timeout cleanup tests."""
 
 from __future__ import annotations

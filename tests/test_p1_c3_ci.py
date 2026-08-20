@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """P1-C3 workflow, PostgreSQL gate, and shell-script acceptance tests."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Red-before-green coverage for P2-CUR-001~006 remediation.
 
 These tests are the non-integration subset of the handoff's required

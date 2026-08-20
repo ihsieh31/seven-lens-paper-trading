@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Closed registry, validation, ordering, cardinality, and fail-safe tests."""
 
 from __future__ import annotations

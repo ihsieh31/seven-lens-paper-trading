@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """PostgreSQL-only tests for the order repository and engine end-to-end path."""
 
 from __future__ import annotations

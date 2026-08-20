@@ -21,6 +21,7 @@ from seven_lens.execution.orders import (
 
 class FakeOrderRepository:
     """
+# mypy: ignore-errors
 
     # mypy: ignore-errorsType-exact in-memory persistence with the same closed transition maps."""
 

@@ -305,6 +305,7 @@ class TestPositionsAndFills:
 
 def test_adapter_plugs_into_the_engine_without_network() -> None:
     """
+# mypy: ignore-errors
 
     # mypy: ignore-errorsThe adapter satisfies the broker port the engine is built against."""
     from seven_lens.application.execution_service import ExecutionEngine

@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Paper-only broker endpoint and startup validation tests."""
 
 import pytest

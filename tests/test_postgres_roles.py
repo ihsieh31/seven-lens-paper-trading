@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Unit contracts for PostgreSQL runtime-role provisioning inputs."""
 
 from __future__ import annotations

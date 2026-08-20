@@ -64,8 +64,9 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
             sql.SQL(
                 "GRANT INSERT ON TABLE public.domain_events, public.audit_events, "
                 "public.job_instances, public.order_intents, public.broker_orders, "
-                "public.fills, public.reconciliation_runs, public.reconciliation_mismatches, "
-                "public.control_commands, public.account_baselines, public.account_baseline_revisions TO {}"
+                "public.fills, public.reconciliation_runs, "
+                "public.reconciliation_mismatches, public.control_commands, "
+                "public.account_baselines, public.account_baseline_revisions TO {}"
             ).format(role)
         )
         cursor.execute(

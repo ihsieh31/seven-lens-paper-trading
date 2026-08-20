@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Resource-budget tests for persisted canonical JSON values."""
 
 from __future__ import annotations

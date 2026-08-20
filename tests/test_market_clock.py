@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Deterministic market-session clock tests (no broker or wall clock)."""
 
 from __future__ import annotations

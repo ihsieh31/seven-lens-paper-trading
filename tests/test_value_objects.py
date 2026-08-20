@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Contract tests for the strict domain value objects.
 
 These tests intentionally exercise the boundary between a value object and

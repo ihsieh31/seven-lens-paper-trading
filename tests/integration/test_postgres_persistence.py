@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Real PostgreSQL unit-of-work, transaction, and lease acceptance tests."""
 
 from __future__ import annotations

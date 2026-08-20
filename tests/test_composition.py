@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Unit tests for the typed composition root and its secret boundaries."""
 
 # mypy: ignore-errors

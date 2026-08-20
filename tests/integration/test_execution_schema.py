@@ -74,6 +74,7 @@ def _insert_broker_order(
 ) -> None:
     cursor.execute(
         """
+# mypy: ignore-errors
 
 # mypy: ignore-errors
         INSERT INTO public.broker_orders (

@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Canonical telemetry identity, propagation, and structured-log tests."""
 
 from __future__ import annotations

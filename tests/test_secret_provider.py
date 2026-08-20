@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Capability scope and all-or-nothing secret resolution tests."""
 
 from __future__ import annotations

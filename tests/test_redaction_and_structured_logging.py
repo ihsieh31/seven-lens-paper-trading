@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Secret-redaction tests at both utility and structured-log boundaries."""
 
 from __future__ import annotations

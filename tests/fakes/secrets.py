@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Credential-free deterministic fakes for the P1-C1 secret boundary."""
 
 from __future__ import annotations

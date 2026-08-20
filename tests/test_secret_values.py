@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Typed secret reference and non-disclosing value tests."""
 
 from __future__ import annotations

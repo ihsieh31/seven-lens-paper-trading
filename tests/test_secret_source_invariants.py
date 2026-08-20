@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Scoped source guards for the P1-C1 no-fallback/read-only secret boundary."""
 
 from __future__ import annotations

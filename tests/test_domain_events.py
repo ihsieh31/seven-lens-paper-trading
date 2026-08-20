@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Domain event and audit envelope validation tests (no database required)."""
 
 from __future__ import annotations

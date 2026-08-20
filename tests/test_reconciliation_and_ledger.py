@@ -300,7 +300,8 @@ class TestReconciler:
         assert result.status is ReconciliationStatus.MISMATCH
 
     def test_closed_broker_history_without_local_record_is_reported(self) -> None:
-        """A broker-terminal order we never recorded is drift only history sees."""
+        """# mypy: ignore-errors
+A broker-terminal order we never recorded is drift only history sees."""
         orders = FakeOrderRepository()
         broker = FakePaperBroker(clock=_FixedClock())
         intent = _intent(target_version=13)

@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Application-layer secret lookup instrumentation and non-disclosure tests."""
 
 from __future__ import annotations

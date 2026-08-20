@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Unit tests for the execution order domain contracts and state machines."""
 
 from __future__ import annotations

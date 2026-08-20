@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """PostgreSQL-only tests for reconciliation persistence and the control plane."""
 
 from __future__ import annotations

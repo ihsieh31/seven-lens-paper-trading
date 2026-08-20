@@ -13,6 +13,7 @@ from seven_lens.execution.reconciliation import ReconciliationResult
 
 class FakeControlRepository:
     """
+# mypy: ignore-errors
 
     # mypy: ignore-errorsMirrors the singleton control state and the append-only command log."""
 

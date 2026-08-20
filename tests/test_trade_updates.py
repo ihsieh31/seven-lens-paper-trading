@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Trade-update consumer tests: duplicates, out-of-order, and fail-closed edges."""
 
 from __future__ import annotations

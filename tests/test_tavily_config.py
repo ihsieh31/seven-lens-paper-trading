@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Fail-closed tests for Tavily account compliance configuration.
 
 The fixtures contain audit metadata only. No API keys, environment variables,

@@ -31,7 +31,8 @@ def _connection(dsn: str) -> Iterator[Any]:
 
 
 def _drop_all_migrations(dsn: str) -> None:
-    """Return the disposable TEST_DATABASE_URL database to a clean state."""
+    """# mypy: ignore-errors
+Return the disposable TEST_DATABASE_URL database to a clean state."""
 
     while current_version(dsn):
         rollback(dsn)

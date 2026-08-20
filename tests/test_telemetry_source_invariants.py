@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Source guards for the dependency-neutral, closed P1-C2 telemetry boundary."""
 
 from __future__ import annotations

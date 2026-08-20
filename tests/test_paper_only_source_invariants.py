@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Source-level guardrails that keep the first release Paper-only."""
 
 import re

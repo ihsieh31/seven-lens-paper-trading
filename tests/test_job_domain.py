@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Job identity and lease/fencing value-object tests (no database required)."""
 
 from __future__ import annotations

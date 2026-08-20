@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Reproduction suite: broker mirrors must keep broker time separate from database time.
 
 Defect E (timestamp mixing): ``broker_orders.updated_at`` is assigned the

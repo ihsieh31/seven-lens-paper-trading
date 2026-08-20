@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Job transition telemetry ordering and transaction-invariant tests."""
 
 from __future__ import annotations

@@ -978,9 +978,12 @@ class PostgresAccountBaselineRepository:
             cursor.execute(
                 """
                 INSERT INTO account_baseline_revisions
-                    (account_id, opening_cash_cents, effective_at, cutoff_occurred_at, cutoff_execution_id, reason, actor)
+                    (account_id, opening_cash_cents, effective_at,
+                     cutoff_occurred_at, cutoff_execution_id, reason, actor)
                 VALUES (%s, %s, %s, NULL, NULL, 'genesis', 'system')
-                RETURNING revision_id, account_id, opening_cash_cents, effective_at, cutoff_occurred_at, cutoff_execution_id, reason, actor, created_at
+                RETURNING revision_id, account_id, opening_cash_cents,
+                    effective_at, cutoff_occurred_at, cutoff_execution_id,
+                    reason, actor, created_at
                 """,
                 (account_id, opening_cash_cents, effective_at.value),
             )
@@ -1024,9 +1027,12 @@ class PostgresAccountBaselineRepository:
             cursor.execute(
                 """
                 INSERT INTO account_baseline_revisions
-                    (account_id, opening_cash_cents, effective_at, cutoff_occurred_at, cutoff_execution_id, reason, actor)
+                    (account_id, opening_cash_cents, effective_at,
+                     cutoff_occurred_at, cutoff_execution_id, reason, actor)
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
-                RETURNING revision_id, account_id, opening_cash_cents, effective_at, cutoff_occurred_at, cutoff_execution_id, reason, actor, created_at
+                RETURNING revision_id, account_id, opening_cash_cents,
+                    effective_at, cutoff_occurred_at, cutoff_execution_id,
+                    reason, actor, created_at
                 """,
                 (
                     account_id,

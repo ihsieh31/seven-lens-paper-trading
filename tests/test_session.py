@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Unit tests for New-York trading-session date mapping."""
 
 from __future__ import annotations

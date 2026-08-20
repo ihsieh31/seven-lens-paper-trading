@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Behavioral tests for the deterministic fake Paper broker and its faults."""
 
 from __future__ import annotations

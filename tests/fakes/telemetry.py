@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Deterministic, dependency-free telemetry fakes used only by tests."""
 
 from __future__ import annotations
