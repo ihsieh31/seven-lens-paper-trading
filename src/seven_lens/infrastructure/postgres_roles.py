@@ -56,8 +56,8 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
                 "public.domain_events, public.audit_events, public.job_instances, "
                 "public.order_intents, public.broker_orders, public.fills, "
                 "public.reconciliation_runs, public.reconciliation_mismatches, "
-                "public.control_commands, "
-                "public.control_state, public.account_baselines, public.account_baseline_revisions TO {}"
+                "public.control_commands, public.control_state, "
+                "public.account_baselines, public.account_baseline_revisions TO {}"
             ).format(role)
         )
         cursor.execute(
@@ -71,7 +71,8 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
         )
         cursor.execute(
             sql.SQL(
-                "GRANT UPDATE ON TABLE public.order_intents, public.broker_orders, public.control_state TO {}"
+                "GRANT UPDATE ON TABLE public.order_intents, public.broker_orders, "
+                "public.control_state TO {}"
             ).format(role)
         )
         for signature in (

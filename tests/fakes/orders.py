@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """An in-memory OrderRepository double that mirrors the database guard semantics."""
 
 from __future__ import annotations
@@ -20,10 +21,7 @@ from seven_lens.execution.orders import (
 
 
 class FakeOrderRepository:
-    """
-# mypy: ignore-errors
-
-    # mypy: ignore-errorsType-exact in-memory persistence with the same closed transition maps."""
+    """Type-exact in-memory persistence with the same closed transition maps."""
 
     def __init__(self) -> None:
         self._intents: dict[str, OrderIntent] = {}

@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-# mypy: ignore-errors
 import pytest
 
 from fakes.orders import FakeOrderRepository

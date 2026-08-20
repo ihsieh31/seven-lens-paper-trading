@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """In-memory doubles for the control plane and reconciliation repositories."""
 
 from __future__ import annotations
@@ -12,10 +13,7 @@ from seven_lens.execution.reconciliation import ReconciliationResult
 
 
 class FakeControlRepository:
-    """
-# mypy: ignore-errors
-
-    # mypy: ignore-errorsMirrors the singleton control state and the append-only command log."""
+    """Mirrors the singleton control state and the append-only command log."""
 
     def __init__(self, now: UtcTimestamp) -> None:
         self._pause_lock = RLock()

@@ -9,7 +9,6 @@ locked non-integration gate.
 
 from __future__ import annotations
 
-# mypy: ignore-errors
 # ruff: noqa: E501, B017, I001
 
 import pytest

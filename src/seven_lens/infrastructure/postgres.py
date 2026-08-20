@@ -1056,7 +1056,8 @@ class PostgresAccountBaselineRepository:
         with self._unit_of_work._require_connection().cursor() as cursor:
             cursor.execute(
                 """
-                SELECT revision_id, account_id, opening_cash_cents, effective_at, cutoff_occurred_at, cutoff_execution_id, reason, actor, created_at
+                SELECT revision_id, account_id, opening_cash_cents, effective_at,
+                    cutoff_occurred_at, cutoff_execution_id, reason, actor, created_at
                 FROM account_baseline_revisions
                 WHERE account_id = %s
                 ORDER BY effective_at DESC, created_at DESC
@@ -1084,7 +1085,8 @@ class PostgresAccountBaselineRepository:
             cursor.execute(
                 """
                 SELECT DISTINCT ON (account_id)
-                    revision_id, account_id, opening_cash_cents, effective_at, cutoff_occurred_at, cutoff_execution_id, reason, actor, created_at
+                    revision_id, account_id, opening_cash_cents, effective_at,
+                    cutoff_occurred_at, cutoff_execution_id, reason, actor, created_at
                 FROM account_baseline_revisions
                 ORDER BY account_id, effective_at DESC, created_at DESC
                 """

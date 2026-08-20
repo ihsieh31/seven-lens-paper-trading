@@ -1,8 +1,6 @@
 # mypy: ignore-errors
 """Unit tests for the typed composition root and its secret boundaries."""
 
-# mypy: ignore-errors
-
 from __future__ import annotations
 
 import pytest

@@ -1,8 +1,8 @@
+# mypy: ignore-errors
 """Unit tests for the ledger projection and the reconciliation collector."""
 
 from __future__ import annotations
 
-# mypy: ignore-errors
 from dataclasses import replace
 from datetime import timedelta
 from uuid import uuid4
@@ -300,8 +300,7 @@ class TestReconciler:
         assert result.status is ReconciliationStatus.MISMATCH
 
     def test_closed_broker_history_without_local_record_is_reported(self) -> None:
-        """# mypy: ignore-errors
-A broker-terminal order we never recorded is drift only history sees."""
+        """A broker-terminal order we never recorded is drift only history sees."""
         orders = FakeOrderRepository()
         broker = FakePaperBroker(clock=_FixedClock())
         intent = _intent(target_version=13)

@@ -1,8 +1,8 @@
+# mypy: ignore-errors
 """PostgreSQL-only migration and schema-enforcement acceptance tests."""
 
 from __future__ import annotations
 
-# mypy: ignore-errors
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -31,8 +31,7 @@ def _connection(dsn: str) -> Iterator[Any]:
 
 
 def _drop_all_migrations(dsn: str) -> None:
-    """# mypy: ignore-errors
-Return the disposable TEST_DATABASE_URL database to a clean state."""
+    """Return the disposable TEST_DATABASE_URL database to a clean state."""
 
     while current_version(dsn):
         rollback(dsn)

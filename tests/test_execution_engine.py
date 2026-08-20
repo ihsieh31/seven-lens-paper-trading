@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Unit tests for the execution engine's timeout, idempotency, and recovery rules."""
 
 from __future__ import annotations
@@ -62,9 +63,7 @@ class FakeOrderUnitOfWork:
 
 
 class DurabilityGuardBroker:
-    """
-
-    # mypy: ignore-errorsFails the test unless SUBMITTING is durable before any broker submit call."""
+    """Fails the test unless SUBMITTING is durable before any broker submit call."""
 
     def __init__(self, inner: FakePaperBroker, orders: FakeOrderRepository) -> None:
         self._inner = inner

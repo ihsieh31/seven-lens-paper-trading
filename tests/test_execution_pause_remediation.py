@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Reproduction suite: paused entries must never reach the broker.
 
 Defect A (pause bypass): ``submit_from_outbox`` has no control-state
@@ -9,7 +10,6 @@ while emergency risk exits (RISK_EXIT) must stay available.
 
 from __future__ import annotations
 
-# mypy: ignore-errors
 import pytest
 
 from fakes.control import FakeControlRepository
