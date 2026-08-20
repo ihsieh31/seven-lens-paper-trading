@@ -33,11 +33,8 @@
 
 ## 目前狀態
 
-`P1-C1 — macOS Keychain secret boundary`、`P1-C2 — dependency-neutral metrics/traces` 與
-`P1-C3 — CI／zero-skip／clean-machine gate` 均已通過獨立驗收。專案已發布至
-[`ihsieh31/seven-lens-paper-trading`](https://github.com/ihsieh31/seven-lens-paper-trading)，遠端
-`quality-unit` 與 `postgres-integration` jobs 已真正成功，因此 P1 Core Gate 已關閉。尚未開始
-broker adapter、行情／研究 client、排程或任何委託能力；下一步是先定義並審核 P2 安全工作包。
+`P1-C1 — macOS Keychain secret boundary`、`P1-C2 — dependency-neutral metrics/traces`、
+`P1-C3 — CI／zero-skip／clean-machine gate` 已通過獨立驗收，P1 Core Gate 已關閉並有遠端 CI 證據。`P2 — Alpaca Paper 執行安全` 已於 2026-08-19 通過獨立驗收並經 2026-08-20 的 P2-CUR-001~006 remediation 重驗後再次 Closed：已交付 `AlpacaPaperAdapter`（Paper-only、嚴格解析、官方分頁）、`ExecutionEngine`（`client_order_id` 冪等、`SUBMITTING` 先持久化、timeout→`UNKNOWN` 並持久化 pause）、`TradeUpdateConsumer`（亂序/重播冪等）、`Reconciler`（`reconciliation_mismatches` 明細、closed-history、account 帳務）、`ControlPlane`（`pause`/`resume`/`cancel`/`flatten`）與 `account_baselines` 權威基線（migration 0008）。專案已發布至 [`ihsieh31/seven-lens-paper-trading`](https://github.com/ihsieh31/seven-lens-paper-trading)；遠端 `quality-unit` 與 `postgres-integration`（含 0008 與 runtime-role）全綠。`P2-E` 真實 Alpaca Paper read-only（GET-only）驗證已執行（見 `PROGRESS.md`）；真實下單仍留 `P7` supervised gate，WebSocket transport 與 control shell CLI 依 ADR-019 留 `P6/P7`。
 
 安全邊界：structured logging 只接受經 bounded redaction 轉成的 JSON-safe 值；cycle、過深、非字串 mapping key 或序列化異常會產生不含原始 fields 的固定 fallback audit event。Tavily `AUTHORIZED_ACCOUNT_POOL` 目前固定 fail closed，直到未來存在可獨立驗證外部授權的 verifier；使用者輸入的 reference、ticket 或 evidence record 不會自行升級權限。
 

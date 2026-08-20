@@ -146,10 +146,16 @@ class ControlPlane:
     def resume_entries(
         self, unit_of_work: _ControlUnitOfWork, *, actor: str
     ) -> ControlStateSnapshot:
-        """Fail closed unless the latest reconciliation run is CLEAN."""
+        """Fail closed unless latest reconciliation is CLEAN and no unresolved intent remains."""
         latest = unit_of_work.reconciliations.latest()
         if latest is None or latest.status is not ReconciliationStatus.CLEAN:
             raise ResumeBlockedError("resume requires a latest CLEAN reconciliation run")
+        # Defense-in-depth: a CLEAN run must not mask durable UNKNOWN/REVIEW_REQUIRED.
+        for status in (OrderStatus.UNKNOWN, OrderStatus.REVIEW_REQUIRED):
+            if unit_of_work.orders.list_by_status(status):
+                raise ResumeBlockedError(
+                    f"resume blocked while {status.value} intents remain unresolved"
+                )
         snapshot = unit_of_work.control.set_entries_paused(False, None)
         self._record(
             unit_of_work, ControlCommand.RESUME_ENTRIES, "resume after CLEAN reconciliation", actor

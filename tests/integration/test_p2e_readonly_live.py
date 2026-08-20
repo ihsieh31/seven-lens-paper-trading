@@ -64,7 +64,9 @@ class _FaultHandler(BaseHTTPRequestHandler):
             return
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b'{"account_number":"TEST7654321","cash":"1000.00","equity":"1000.00"}')
+        self.wfile.write(
+            b'{"account_number":"TEST7654321","cash":"1000.00","equity":"1000.00","buying_power":"1000.00"}'
+        )
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -171,7 +173,9 @@ def test_transport_retries_rate_limit_once_then_recovers(fault_server: str) -> N
             return
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b'{"account_number":"TEST1","cash":"1.00","equity":"1.00"}')
+        self.wfile.write(
+            b'{"account_number":"TEST1","cash":"1.00","equity":"1.00","buying_power":"1.00"}'
+        )
         return
 
     original = _FaultHandler.do_GET

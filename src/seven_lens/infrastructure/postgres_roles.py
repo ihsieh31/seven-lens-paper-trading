@@ -57,7 +57,7 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
                 "public.order_intents, public.broker_orders, public.fills, "
                 "public.reconciliation_runs, public.reconciliation_mismatches, "
                 "public.control_commands, "
-                "public.control_state TO {}"
+                "public.control_state, public.account_baselines TO {}"
             ).format(role)
         )
         cursor.execute(
@@ -65,13 +65,13 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
                 "GRANT INSERT ON TABLE public.domain_events, public.audit_events, "
                 "public.job_instances, public.order_intents, public.broker_orders, "
                 "public.fills, public.reconciliation_runs, public.reconciliation_mismatches, "
-                "public.control_commands TO {}"
+                "public.control_commands, public.account_baselines TO {}"
             ).format(role)
         )
         cursor.execute(
             sql.SQL(
                 "GRANT UPDATE ON TABLE public.order_intents, public.broker_orders, "
-                "public.control_state TO {}"
+                "public.control_state, public.account_baselines TO {}"
             ).format(role)
         )
         for signature in (
@@ -167,7 +167,7 @@ def _assert_authoritative_object_owner(cursor: psycopg.Cursor[object], owner_rol
                   'audit_events', 'job_instances', 'job_leases',
                   'order_intents', 'broker_orders', 'fills',
                   'reconciliation_runs', 'reconciliation_mismatches',
-                  'control_commands', 'control_state'
+                  'control_commands', 'control_state', 'account_baselines'
               )
             UNION ALL
             SELECT pg_catalog.pg_get_userbyid(p.proowner) AS owner_name
@@ -180,7 +180,7 @@ def _assert_authoritative_object_owner(cursor: psycopg.Cursor[object], owner_rol
                   'order_status_transition_is_valid',
                   'broker_order_status_transition_is_valid',
                   'guard_order_intent_write', 'guard_broker_order_write',
-                  'guard_control_state_write'
+                  'guard_control_state_write', 'guard_account_baseline_write'
               )
         ) AS owners
         """
@@ -240,12 +240,15 @@ def _assert_runtime_privileges(
             has_table_privilege(%s, 'public.control_commands', 'INSERT'),
             has_table_privilege(%s, 'public.control_commands', 'UPDATE,DELETE'),
             has_table_privilege(%s, 'public.control_state', 'UPDATE'),
-            has_table_privilege(%s, 'public.control_state', 'INSERT,DELETE')
+            has_table_privilege(%s, 'public.control_state', 'INSERT,DELETE'),
+            has_table_privilege(%s, 'public.account_baselines', 'INSERT,UPDATE'),
+            has_table_privilege(%s, 'public.account_baselines', 'DELETE'),
+            has_table_privilege(%s, 'public.account_baselines', 'SELECT')
         """,
         (
             runtime_role,
             database_name,
-            *([runtime_role] * 18),
+            *([runtime_role] * 21),
         ),
     )
     row = cast(tuple[object, ...] | None, cursor.fetchone())
@@ -269,6 +272,9 @@ def _assert_runtime_privileges(
         False,
         True,
         False,
+        True,
+        False,
+        True,
     ):
         raise PostgresRoleError(
             "runtime role privileges do not match the approved least-privilege set"

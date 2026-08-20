@@ -2,10 +2,11 @@
 
 ## 狀態摘要
 
-- 專案階段：P2 — Alpaca Paper 執行安全已通過全面獨立驗收；Gate Closed。這不授權真實下單。
+- 專案階段：P2 — Alpaca Paper 執行安全已通過全面獨立驗收；Gate Closed（2026-08-20 依 P2-CUR-001~006 重驗後再次 Closed）。這不授權真實下單。
 - 完成度定義：只以路線圖的可驗證交付物計算，不以主觀百分比計算。
-- 最近更新：2026-08-19
+- 最近更新：2026-08-20
 - 下一個 gate：先討論 P3 SourceManifest／quarantine；WS/CLI 與真實下單仍分別留 P6/P7。
+- 歷史：P2 曾於 2026-08-19 標示 Closed，2026-08-20 依 Seven-Lens Remediation Handoff 重開 gate 完成 P2-CUR-001~006 修復後再次 Closed；`ISSUES.md` CLOSED-021 已 superseded 為 SUPERSEDED-021。
 
 ## 已完成
 
@@ -61,9 +62,9 @@
 
 ## 尚未開始
 
-- [ ] P2 獨立驗收（新 session 定點驗收：雙邊狀態機、0003–0005 對抗重現、mismatch 自動
-      暫停、runtime role 權限）。P2-E 真實 read-only 連線驗證已完成首次執行（2026-08-17，
-      見下方 P2-E 證據）。
+- [x] P2 獨立驗收（新 session 定點驗收：雙邊狀態機、0003–0005 對抗重現、mismatch 自動
+      暫停、runtime role 權限）。已於 2026-08-19 完成並 Closed；2026-08-20 依 P2-CUR-001~006
+      remediation 重開並再次 Closed（見下方「P2 Remediation 2026-08-20」節）。P2-E 真實 read-only 連線驗證已完成首次執行（2026-08-17，見下方 P2-E 證據）。
 - [ ] WebSocket 傳輸本體與 control shell CLI（ADR-019 範圍聲明，P6/P7 bring-up）。
 - [ ] 審查本機七位候選語料，建立 SourceManifest、quarantine／coverage 報告與七套 doctrine cards。
 - [ ] 取得 Tavily 對同一 Customer 彙總使用 7 個免費帳號的書面／後台授權證據。
@@ -338,3 +339,15 @@ re-acceptance.**
 - 最終證據：Ruff format/check、mypy strict 92 檔全綠；non-integration 637 passed / 77
   deselected；真實 PostgreSQL 16 integration 69 passed / 8 deselected；live acceptance
   1 passed。P2 gate **Closed**；未 stage/commit/push，遠端 CI 尚未執行，真實下單仍留 P7。
+
+## P2 Remediation 2026-08-20：P2-CUR-001~006 修復後重驗——Gate 再次 Closed
+
+- 依據 `SEVEN_LENS_P1_P2_CODEX_REMEDIATION_HANDOFF.md`（3bac368）重開 P2 gate，完成 5 個執行／帳務缺陷與 1 個 P2 規格缺口修復：
+  1. P2-CUR-001 `latest()` 讀取時以 `reconciliation_mismatches` child rows 重建 `detail`，驗證 `mismatch_count`/`kinds`/`CLEAN 空`一致性，否則拋 `PersistenceInvariantError`（`src/seven_lens/infrastructure/postgres.py`）。
+  2. P2-CUR-002 `LedgerInvariantError` 轉 durable `LOCAL_LEDGER_INVARIANT` mismatch + 自動 pause + `PAUSE_ENTRIES` 命令（`src/seven_lens/application/reconciliation_service.py`，migration 0008 擴 mismatch kinds）。
+  3. P2-CUR-003 `TradeUpdateConsumer._apply_fill` 完整處理亂序：`filled_quantity = max(mirror, local_total)`、`broker_updated_at` 不倒退、已 terminal/review 不回退、PENDING_CANCEL 中可收 fills、衝突時保留 fill 並 fail closed（`src/seven_lens/execution/trade_updates.py`，`FakeOrderRepository` 同步）。
+  4. P2-CUR-004 `project_ledger` 以 `(occurred_at, execution_id)` 為 canonical 回放序，與 DB arrival order 解耦；`ordered_lots` 改以 `opened_at.value` 排序（`src/seven_lens/execution/ledger.py`）。
+  5. P2-CUR-005 UNKNOWN 全域閘：submit timeout → `UNKNOWN` 同時持久化 `entries_paused` + `PAUSE_ENTRIES`（`src/seven_lens/application/execution_service.py`）；`submission_guard` 在 `FOR SHARE` 內檢查 `UNKNOWN`/`REVIEW_REQUIRED`；`Reconciler.collect` 對兩者產生 `INTENT_STATUS_MISMATCH`；`ControlPlane.resume_entries` 做 defense-in-depth 阻擋。
+  6. P2-CUR-006 帳務對帳：`PaperAccount.buying_power` 嚴格解析、`account_baselines` 權威基線表（migration 0008）、`AccountReconciliationPolicy` / `ReconciliationMarkPriceProvider` seam、tolerance 內的 `CASH`/`NAV`/`ACCOUNT_ID`/`BUYING_POWER` 檢查與 `ACCOUNT_RECONCILIATION_UNAVAILABLE` 失效閉環（`src/seven_lens/application/reconciliation_service.py` 擴 6 種新 mismatch）。
+- 治理同步：R-24 重標 `Mitigated` 並引用 read round-trip 測試、`ISSUES.md` CLOSED-021 superseded、README/SECURITY/DEFERRED-013/015 與 ROADMAP/ADR-019 的 P2/WS/CLI 範圍一致化（本輪不實作 WS transport / control CLI）。
+- 最終證據（2026-08-20 本機）：Ruff format/check、mypy strict 92 檔全綠；non-integration 637 passed / 77 deselected（新增 `TestLateFill` / `TestFifo` / `TestLedgerInvariant` / `TestUnknownGate` / `TestAccountReconciliation` 等，見 `tests/test_*`）；真實 disposable PostgreSQL 16 `69 passed / 8 deselected`（`verify_p1.sh --postgres` EXIT=0，含 `account_baselines` 權限與 `0008 up/down/up`）；`RISK_REGISTER` R-24、`ISSUES` SUPERSEDED-021 與本文件已同步。P2 gate **再次 Closed**；不新增 live endpoint，P7 真實下單仍留後續 supervised gate。

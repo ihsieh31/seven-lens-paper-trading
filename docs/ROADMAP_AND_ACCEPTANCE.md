@@ -47,10 +47,10 @@ broker/order implementation 已開始。
 
 交付：
 
-- Paper Trading adapter、account/asset/order/fill ports；
-- intent/outbox/idempotency、trade update consumer；
-- REST reconciliation、lots、cash/NAV ledger；
-- limit collar、window cutoff、control CLI；
+- Paper Trading adapter、account/asset/order/fill ports（含 `buying_power`）；
+- intent/outbox/idempotency、trade update consumer（transport 中立；WS 本體留 P6/P7）；
+- REST reconciliation、lots、cash/NAV ledger（以 `account_valuation` + 權威 `account_baselines` + `ReconciliationMarkPriceProvider` seam）；
+- limit collar、window cutoff、control plane（application path；shell CLI 留 P6/P7 per ADR-019）；
 - fake broker simulator 與 fault-injection harness。
 
 驗收：

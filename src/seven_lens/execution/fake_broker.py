@@ -115,6 +115,11 @@ class FakePaperBroker:
         default_plan: FakeSubmitPlan | None = None,
         cash: UsdAmount | None = None,
         equity: UsdAmount | None = None,
+        buying_power: UsdAmount | None = None,
+        account_id: str = "fake-paper-primary",
+        cash_mismatch: bool = False,
+        equity_mismatch: bool = False,
+        buying_power_mismatch: bool = False,
         cancel_mode: FakeCancelMode = FakeCancelMode.IMMEDIATE,
         hidden_client_ids: set[str] | None = None,
         assets: Mapping[str, PaperAsset] | None = None,
@@ -125,6 +130,13 @@ class FakePaperBroker:
         self._default_plan = default_plan or FakeSubmitPlan(outcome=FakeSubmitOutcome.ACKNOWLEDGE)
         self._cash = cash if cash is not None else UsdAmount.from_cents(100_000_000)
         self._equity = equity if equity is not None else UsdAmount.from_cents(100_000_000)
+        self._buying_power = (
+            buying_power if buying_power is not None else UsdAmount.from_cents(100_000_000)
+        )
+        self._account_id = account_id
+        self._cash_mismatch = cash_mismatch
+        self._equity_mismatch = equity_mismatch
+        self._buying_power_mismatch = buying_power_mismatch
         self._cancel_mode = cancel_mode
         self._hidden_client_ids: set[str] = set(hidden_client_ids or ())
         self._assets: dict[str, PaperAsset] = dict(assets or {})
@@ -137,10 +149,11 @@ class FakePaperBroker:
 
     def account(self) -> PaperAccount:
         return PaperAccount(
-            account_id="fake-paper-primary",
+            account_id=self._account_id,
             environment=BrokerEnvironment.PAPER,
             cash=self._cash,
             equity=self._equity,
+            buying_power=self._buying_power,
         )
 
     def submit_order(self, intent: OrderIntent) -> SubmitResult:

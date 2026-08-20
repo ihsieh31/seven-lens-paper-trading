@@ -1,8 +1,7 @@
 # Security Policy and Trust Boundaries
 
-Seven-Lens is a personal, Paper-only trading research system under development. It is not
-currently able to connect to Alpaca, download market data, schedule work, or submit orders.
-Passing a foundation test does not authorize a later phase or establish production readiness.
+Seven-Lens is a personal, Paper-only trading research system under development. It can
+connect to Alpaca Paper read-only (GET-only, `P2-E` verified); real order submission is deferred to `P7` supervised gate and no live-money endpoint exists. Downloading market data, scheduling work, or submitting orders beyond the verified read-only path is not authorized. Passing a foundation test does not authorize a later phase or establish production readiness.
 
 ## Supported security scope
 
@@ -45,12 +44,7 @@ provider. The macOS adapter performs an exact read-only generic-password query w
 zero or multiple results, denial, timeout, malformed data, and backend failure are fatal. It has
 no environment, argv, database, shell, fake, or second-provider fallback.
 
-The native query deliberately uses exact service/account matching with `kSecMatchLimitAll` so
-ambiguity is detected. A two-step persistent-reference lookup is not treated as a required
-security control without platform evidence that the current exact query is unsafe. The fake
-contract suite does not constitute native Keychain smoke evidence. Any smoke test that creates
-or deletes an actual Keychain item is opt-in, must use a dedicated disposable namespace, and
-requires separate authorization before execution.
+The native query uses exact service/account matching with `kSecMatchLimitOne` (exact hit) and a hard 2-second spawned-worker timeout with UI disabled; the prior `kSecMatchLimitAll` was replaced after `P2-E` live verification exposed `errSecParam` on `ReturnData+MatchAll` (see `PROGRESS.md` `P2-E`). `NSData` normalization handles PyObjC bridging. The fake contract suite does not constitute native Keychain smoke evidence; real Keychain happy-path has been exercised via live `P2-E` read-only verification, but formal disposable adversarial smoke (locked/denied/malformed/timeout) remains deferred and requires a dedicated namespace and separate authorization before execution.
 
 ### PostgreSQL ownership and credentials
 

@@ -135,7 +135,8 @@ def verify_schema(dsn: str) -> int:
                    to_regclass('public.reconciliation_runs'),
                    to_regclass('public.reconciliation_mismatches'),
                    to_regclass('public.control_commands'),
-                   to_regclass('public.control_state')
+                   to_regclass('public.control_state'),
+                   to_regclass('public.account_baselines')
             """
         )
         tables = cast(tuple[object, ...] | None, cursor.fetchone())

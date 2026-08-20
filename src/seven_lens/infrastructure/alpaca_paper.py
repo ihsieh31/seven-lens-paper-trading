@@ -96,6 +96,7 @@ class AlpacaPaperAdapter:
             environment=BrokerEnvironment.PAPER,
             cash=_usd(payload, "cash"),
             equity=_usd(payload, "equity"),
+            buying_power=_usd(payload, "buying_power"),
         )
 
     def submit_order(self, intent: OrderIntent) -> SubmitResult:

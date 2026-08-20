@@ -115,6 +115,7 @@ class PaperAccount:
     environment: BrokerEnvironment
     cash: UsdAmount
     equity: UsdAmount
+    buying_power: UsdAmount
 
     def __post_init__(self) -> None:
         if (
@@ -129,6 +130,8 @@ class PaperAccount:
             raise ValueError("cash must be a UsdAmount")
         if not isinstance(self.equity, UsdAmount):
             raise ValueError("equity must be a UsdAmount")
+        if not isinstance(self.buying_power, UsdAmount):
+            raise ValueError("buying_power must be a UsdAmount")
 
 
 @dataclass(frozen=True, slots=True)

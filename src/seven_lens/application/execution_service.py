@@ -32,7 +32,7 @@ from seven_lens.application.ports.broker import (
 )
 from seven_lens.application.ports.persistence import OrderRepository
 from seven_lens.domain.value_objects import UtcTimestamp
-from seven_lens.execution.control import ControlStateSnapshot
+from seven_lens.execution.control import ControlCommandRecord, ControlStateSnapshot
 from seven_lens.execution.orders import (
     BrokerOrder,
     BrokerOrderStatus,
@@ -97,6 +97,10 @@ class _ControlStateSource(Protocol):
     def state(self) -> ControlStateSnapshot: ...
 
     def submission_guard(self) -> AbstractContextManager[ControlStateSnapshot]: ...
+
+    def set_entries_paused(self, paused: bool, reason: str | None) -> ControlStateSnapshot: ...
+
+    def add_command(self, record: ControlCommandRecord) -> UtcTimestamp | None: ...
 
 
 class _OrderUnitOfWork(Protocol):
@@ -325,7 +329,7 @@ class ExecutionEngine:
         self, unit_of_work: _OrderUnitOfWork, submitting: OrderIntent
     ) -> OrderIntent:
         try:
-            with self._entry_submission_guard(submitting):
+            with self._entry_submission_guard(submitting, unit_of_work):
                 return self._submit_while_guarded(unit_of_work, submitting)
         except ExecutionPausedError:
             # A pause can race with the durable SUBMITTING reservation.  Do not
@@ -336,10 +340,13 @@ class ExecutionEngine:
                     submitting.client_order_id, OrderStatus.UNKNOWN
                 )
                 unit_of_work.commit()
+                self._pause_for_reconciliation_required(submitting)
             return submitting
 
     @contextmanager
-    def _entry_submission_guard(self, intent: OrderIntent) -> Iterator[None]:
+    def _entry_submission_guard(
+        self, intent: OrderIntent, unit_of_work: _OrderUnitOfWork | None = None
+    ) -> Iterator[None]:
         """Linearize a new entry before a concurrent pause becomes visible."""
         if self._control is None or intent.intent_type is OrderIntentType.RISK_EXIT:
             yield
@@ -350,7 +357,49 @@ class ExecutionEngine:
                     "entries are paused; new intents cannot submit until a CLEAN "
                     "reconciliation resumes them"
                 )
+            if unit_of_work is not None and self._has_unresolved_intents(unit_of_work):
+                raise ExecutionPausedError(
+                    "reconciliation required; unresolved broker truth blocks new entries"
+                )
             yield
+
+    def _has_unresolved_intents(self, unit_of_work: _OrderUnitOfWork) -> bool:
+        """Return whether any durable UNKNOWN or REVIEW_REQUIRED blocks new exposure."""
+        for status in (OrderStatus.UNKNOWN, OrderStatus.REVIEW_REQUIRED):
+            if unit_of_work.orders.list_by_status(status):
+                return True
+        return False
+
+    def _pause_for_reconciliation_required(self, intent: OrderIntent) -> None:
+        """Durably block new entries after an ambiguous broker outcome."""
+        if self._control is None or intent.intent_type is OrderIntentType.RISK_EXIT:
+            return
+        try:
+            self._control.set_entries_paused(
+                True, "reconciliation required; ambiguous broker outcome"
+            )
+            # Best-effort audit; failure to record the command does not clear the pause.
+            try:
+                from uuid import uuid4
+
+                from seven_lens.execution.control import ControlCommand, ControlCommandRecord
+
+                now = self._clock()
+                self._control.add_command(
+                    ControlCommandRecord(
+                        command_id=uuid4(),
+                        command=ControlCommand.PAUSE_ENTRIES,
+                        reason="automatic pause on ambiguous broker outcome",
+                        actor="execution_engine",
+                        run_id=None,
+                        requested_at=now,
+                        applied_at=now,
+                    )
+                )
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def _submit_while_guarded(
         self, unit_of_work: _OrderUnitOfWork, submitting: OrderIntent
@@ -362,10 +411,12 @@ class ExecutionEngine:
                 submitting.client_order_id, OrderStatus.UNKNOWN
             )
             unit_of_work.commit()
+            self._pause_for_reconciliation_required(submitting)
             return unknown
         except BrokerConflictError as error:
             unit_of_work.orders.transition_status(submitting.client_order_id, OrderStatus.UNKNOWN)
             unit_of_work.commit()
+            self._pause_for_reconciliation_required(submitting)
             raise BrokerMirrorMismatchError(
                 "broker reports a conflicting order for our deterministic client id"
             ) from error

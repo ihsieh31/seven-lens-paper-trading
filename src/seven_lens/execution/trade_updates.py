@@ -19,6 +19,8 @@ from typing import Protocol
 
 from seven_lens.domain.value_objects import UtcTimestamp
 from seven_lens.execution.orders import (
+    REVIEW_BROKER_ORDER_STATUSES,
+    TERMINAL_BROKER_ORDER_STATUSES,
     BrokerOrder,
     BrokerOrderStatus,
     ClientOrderId,
@@ -28,6 +30,7 @@ from seven_lens.execution.orders import (
     OrderStatus,
     Price,
     assert_broker_order_transition,
+    broker_order_transition_allowed,
     order_transition_allowed,
 )
 
@@ -136,40 +139,98 @@ class TradeUpdateConsumer:
         if not inserted:
             unit_of_work.commit()
             return TradeUpdateOutcome.DUPLICATE
-        total = sum(
-            item.quantity.value for item in unit_of_work.orders.list_fills(mirror.broker_order_id)
-        )
-        if total > mirror.quantity.value:
-            raise TradeUpdateError("trade update fills exceed the recorded order quantity")
-        broker_target = mirror.status
-        if mirror.status is not BrokerOrderStatus.FILLED:
-            broker_target = (
-                BrokerOrderStatus.FILLED
-                if total == mirror.quantity.value
-                else BrokerOrderStatus.PARTIALLY_FILLED
+        try:
+            total = sum(
+                item.quantity.value
+                for item in unit_of_work.orders.list_fills(mirror.broker_order_id)
             )
-            assert_broker_order_transition(mirror.status, broker_target)
-        unit_of_work.orders.update_broker_order_status(
-            mirror.broker_order_id,
-            broker_target,
-            total,
-            broker_observed_at=fill.occurred_at,
-        )
-        intent = unit_of_work.orders.get(mirror.client_order_id)
-        if intent is not None:
-            intent_target = (
-                OrderStatus.FILLED
-                if broker_target is BrokerOrderStatus.FILLED
-                else OrderStatus.PARTIALLY_FILLED
+            # Never allow the derived filled_quantity to move backwards: broker may have
+            # reported a cumulative quantity already larger than our locally summed fills.
+            new_filled = mirror.filled_quantity if mirror.filled_quantity > total else total
+            if new_filled > mirror.quantity.value:
+                raise TradeUpdateError("trade update fills exceed the recorded order quantity")
+            # Broker watermark must never move backwards.  A late fill does not regress it.
+            if fill.occurred_at.value > mirror.updated_at.value:
+                new_observed: UtcTimestamp | None = fill.occurred_at
+            else:
+                new_observed = None
+            # Terminal and review mirrors must never regress due to a late fill.
+            if (
+                mirror.status in TERMINAL_BROKER_ORDER_STATUSES
+                or mirror.status in REVIEW_BROKER_ORDER_STATUSES
+            ):
+                broker_target = mirror.status
+            elif mirror.status is BrokerOrderStatus.PENDING_CANCEL:
+                broker_target = BrokerOrderStatus.PENDING_CANCEL
+            else:
+                if new_filled == mirror.quantity.value:
+                    candidate = BrokerOrderStatus.FILLED
+                elif new_filled > 0:
+                    candidate = BrokerOrderStatus.PARTIALLY_FILLED
+                else:
+                    candidate = mirror.status
+                if candidate is not mirror.status:
+                    if not broker_order_transition_allowed(mirror.status, candidate):
+                        raise TradeUpdateError(
+                            "fill update has no legal broker transition; "
+                            "reconciliation must arbitrate"
+                        )
+                    broker_target = candidate
+                else:
+                    broker_target = mirror.status
+            # If nothing about the mirror would change, keep the fill and return.
+            if (
+                broker_target is mirror.status
+                and new_filled == mirror.filled_quantity
+                and new_observed is None
+            ):
+                # Still check intent progression when the mirror stays put but the
+                # fill itself represents progress (e.g. pending cancel staying).
+                intent = unit_of_work.orders.get(mirror.client_order_id)
+                if intent is not None:
+                    # Late fill absorbed without mirror mutation is still APPLIED.
+                    pass
+                unit_of_work.commit()
+                return TradeUpdateOutcome.APPLIED
+            unit_of_work.orders.update_broker_order_status(
+                mirror.broker_order_id,
+                broker_target,
+                new_filled,
+                broker_observed_at=new_observed,
             )
-            if intent_target is not intent.status:
-                if not order_transition_allowed(intent.status, intent_target):
-                    raise TradeUpdateError(
-                        "fill update has no legal intent transition; reconciliation must arbitrate"
-                    )
-                unit_of_work.orders.transition_status(mirror.client_order_id, intent_target)
-        unit_of_work.commit()
-        return TradeUpdateOutcome.APPLIED
+            intent = unit_of_work.orders.get(mirror.client_order_id)
+            if intent is not None:
+                if broker_target is BrokerOrderStatus.FILLED:
+                    intent_target = OrderStatus.FILLED
+                elif broker_target is BrokerOrderStatus.PARTIALLY_FILLED:
+                    intent_target = OrderStatus.PARTIALLY_FILLED
+                elif broker_target is BrokerOrderStatus.PENDING_CANCEL:
+                    intent_target = OrderStatus.CANCEL_PENDING
+                else:
+                    intent_target = intent.status
+                if intent_target is not intent.status:
+                    if not order_transition_allowed(intent.status, intent_target):
+                        raise TradeUpdateError(
+                            "fill update has no legal intent transition; "
+                            "reconciliation must arbitrate"
+                        )
+                    unit_of_work.orders.transition_status(mirror.client_order_id, intent_target)
+            unit_of_work.commit()
+            return TradeUpdateOutcome.APPLIED
+        except TradeUpdateError:
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                unit_of_work.commit()
+            raise
+        except Exception as exc:
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                unit_of_work.commit()
+            raise TradeUpdateError(
+                "trade update cannot be applied fail-safely; reconciliation required"
+            ) from exc
 
     def _apply_status(
         self, unit_of_work: _ConsumerUnitOfWork, update: OrderStatusUpdate

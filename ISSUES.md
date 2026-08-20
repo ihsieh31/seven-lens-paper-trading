@@ -110,10 +110,9 @@
 ## DEFERRED-013：macOS native Keychain smoke evidence
 
 - 嚴重度：Medium
-- 狀態：Deferred；P2 service composition前重審
-- 判斷：缺少native smoke是真實證據缺口，不是已證實的read-only adapter漏洞。現有fake tests不得冒充
-  native evidence；目前也沒有授權建立／刪除disposable Keychain item。
-- 條件：另行核准專用service/account namespace、建立與精確cleanup，且絕不查詢現有真實credential。
+- 狀態：Deferred；P2 composition前重審（已於 P2-E 驗證真實 happy path）
+- 判斷：真實 Keychain happy path 已於 P2-E 使用並暴露／修復 native query 問題（`kSecMatchLimitOne`、`NSData` 正規化，見 `PROGRESS.md`）；正式 disposable adversarial smoke（locked/denied/malformed/timeout 等）仍為證據缺口。現有 fake tests 不得冒充 native evidence。
+- 條件：另行核准專用 service/account namespace、建立與精確 cleanup，且絕不查詢現有真實 credential；當前無授權建立／刪除 disposable item。
 
 ## DEFERRED-014：coverage與security-static／supply-chain CI gate
 
@@ -127,12 +126,11 @@
 ## DEFERRED-015：P2 config與runtime DB credential composition
 
 - 嚴重度：High
-- 狀態：Deferred；P2加入任何長駐process前的blocker
-- 判斷：目前不存在service composition root、runtime process或broker/database credential loader，因此不是
-  可利用的現存execution path；但不能等adapter寫完才定義。
-- 已固定契約：raw config只留在exact-schema parser edge，adapter只收typed config；runtime使用exact
-  secret ref與最窄reveal點；owner/runtime DSN不得進snapshot、argv、log、telemetry、audit或exception。
-- 關閉條件：P2 composition實作與adversarial tests通過，且runtime role proof在啟動前fail closed。
+- 狀態：Mitigated（2026-08-20；composition root 已交付，長駐 process 仍 deferred）
+- 判斷：原判斷「不存在 composition root」已過時。`application/composition.py` 已交付 exact-schema typed config、runtime DB `SecretRef`（`POSTGRES_RUNTIME_PASSWORD`）、`RuntimeDsn` 最窄 reveal、Paper endpoint allowlist 與 `build_execution_stack`（含 control 注入），並有 `tests/test_composition.py` 與 PostgreSQL runtime-role 整合驗證。現有 `control`/`broker`/`db` 邊界已可重現驗證，非「可利用的現存 execution path」已不再成立。
+- 已固定契約：raw config 只留在 exact-schema parser edge，adapter 只收 typed config；runtime 使用 exact secret ref 與最窄 reveal 點；owner/runtime DSN 不得進 snapshot、argv、log、telemetry、audit 或 exception。
+- 剩餘 deferred：長駐 process（launchd）與 startup privilege proof 仍屬 P6/P7 bring-up，不在本輪 P2 驗收範圍；composition root 本身已滿足 closure condition（見 ADR-018/021/024 與 PROGRESS.md P2-D 節）。
+- 關閉條件：原條件中「P2 composition 實作與 adversarial tests 通過」已滿足；長駐 process 啟動 proof 留後續 gate 重審。
 
 ## ASSESSED-016：Keychain必須改成persistent-reference兩段查詢
 
@@ -259,6 +257,15 @@
   exponent 異常仍 fail closed，詳 PROGRESS.md P2-E 節）；本 repo P2 範圍無 NAV 計算
   元件（ledger 只輸出 cash_delta 與 lots，NAV valuation 屬後續工作包）；無程式碼缺陷。
 - 重審條件：P7 引入 NAV/portfolio valuation 時建立逐 tick 對帳。
+
+## SUPERSEDED-021：CLOSED-021 的 cash/NAV 關閉理由不成立（P2-CUR-006）
+
+- 嚴重度：High
+- 狀態：Superseded（2026-08-20；P2-CUR-006）
+- 原判斷：CLOSED-021 認為 P2 無 NAV 元件、無程式碼缺陷，僅驗證 broker cash/equity wire parsing。
+- 再審結果：ROADMAP P2 明列 `cash/NAV ledger`；`ledger.py` 已有 `account_valuation`，但 `Reconciler.collect` 未使用，未建立 expected account id / authoritative opening cash baseline / mark price seam / buying power parse+tolerance；屬 CURRENT VERIFIED SPEC GAP。
+- 處置：新增 `PaperAccount.buying_power` 嚴格解析、`account_baselines` 權威基線表（migration 0008）、`AccountReconciliationPolicy` / `ReconciliationMarkPriceProvider` seam、4 類新 mismatch kinds（ACCOUNT_ID/CASH/NAV/BUYING_POWER + UNAVAILABLE）及 `LOCAL_LEDGER_INVARIANT`，並以 `--` 內 PostgreSQL roundtrip 與 fake 對抗測試覆蓋。CLOSED-021 僅代表 wire parsing，已被本 P2-CUR-006 全面對帳取代。
+- 重審條件：P2 帳務 gate 以新對帳契約與真實 PostgreSQL 整合重驗後關閉。
 
 ## CLOSED-022：P2 獨立驗收發現的 recovery、pagination、flatten 與 asset/review 缺陷
 

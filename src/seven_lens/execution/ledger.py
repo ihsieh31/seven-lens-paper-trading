@@ -99,11 +99,20 @@ def project_ledger(
     fills: tuple[Fill, ...],
     broker_orders: Mapping[str, BrokerOrder],
 ) -> LedgerProjection:
-    """Replay fills into cash and FIFO lots; every anomaly fails closed."""
+    """Replay fills into cash and FIFO lots; every anomaly fails closed.
+
+    Canonical replay order is the broker execution time ``occurred_at`` and,
+    within the same timestamp, the deterministic ``execution_id``.  This makes
+    the projection independent of database arrival order or caller iteration
+    order.
+    """
+    canonical_fills = tuple(
+        sorted(fills, key=lambda item: (item.occurred_at.value, item.execution_id))
+    )
     cash_cents = 0
     lots: list[OpenLot] = []
     seen_executions: set[str] = set()
-    for fill in fills:
+    for fill in canonical_fills:
         if fill.execution_id in seen_executions:
             raise LedgerInvariantError("duplicate execution id in fill ledger")
         seen_executions.add(fill.execution_id)
@@ -144,5 +153,5 @@ def project_ledger(
         lots = consumed
     if abs(cash_cents) > _MAX_ABS_CENTS:
         raise LedgerInvariantError("projected cash delta exceeds the allowed range")
-    ordered_lots = tuple(sorted(lots, key=lambda lot: (lot.symbol.value, str(lot.opened_at))))
+    ordered_lots = tuple(sorted(lots, key=lambda lot: (lot.symbol.value, lot.opened_at.value)))
     return LedgerProjection(cash_delta_cents=cash_cents, lots=ordered_lots)

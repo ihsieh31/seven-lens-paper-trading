@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from threading import Lock
+from threading import RLock
 
 from seven_lens.domain.value_objects import UtcTimestamp
 from seven_lens.execution.control import ControlCommandRecord, ControlStateSnapshot
@@ -15,7 +15,7 @@ class FakeControlRepository:
     """Mirrors the singleton control state and the append-only command log."""
 
     def __init__(self, now: UtcTimestamp) -> None:
-        self._pause_lock = Lock()
+        self._pause_lock = RLock()
         self._state = ControlStateSnapshot(entries_paused=False, paused_reason=None, updated_at=now)
         self.commands: list[ControlCommandRecord] = []
 

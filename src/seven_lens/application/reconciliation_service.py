@@ -22,14 +22,53 @@ from seven_lens.application.ports.persistence import (
 from seven_lens.config.broker import BrokerEnvironment
 from seven_lens.domain.value_objects import TradingDate, UtcTimestamp
 from seven_lens.execution.control import ControlCommand, ControlCommandRecord
-from seven_lens.execution.ledger import project_ledger
-from seven_lens.execution.orders import BrokerOrder, OrderStatus
+from seven_lens.execution.ledger import LedgerInvariantError, account_valuation, project_ledger
+from seven_lens.execution.orders import BrokerOrder, OrderStatus, Price, Symbol
 from seven_lens.execution.reconciliation import (
     MismatchKind,
     ReconciliationMismatch,
     ReconciliationResult,
     ReconciliationStatus,
 )
+
+
+class AccountReconciliationPolicy:
+    """Closed policy for expected account identity and tolerances."""
+
+    def __init__(
+        self,
+        *,
+        expected_account_id: str,
+        cash_tolerance_cents: int = 100,
+        nav_tolerance_cents: int = 100,
+    ) -> None:
+        if (
+            type(expected_account_id) is not str
+            or not expected_account_id.strip()
+            or len(expected_account_id) > 100
+        ):
+            raise ValueError("expected_account_id must be non-empty text up to 100 characters")
+        if type(cash_tolerance_cents) is not int or cash_tolerance_cents < 0:
+            raise ValueError("cash_tolerance_cents must be a non-negative integer")
+        if type(nav_tolerance_cents) is not int or nav_tolerance_cents < 0:
+            raise ValueError("nav_tolerance_cents must be a non-negative integer")
+        self.expected_account_id = expected_account_id
+        self.cash_tolerance_cents = cash_tolerance_cents
+        self.nav_tolerance_cents = nav_tolerance_cents
+
+
+class ReconciliationMarkPriceProvider(Protocol):
+    """Seam for NAV mark prices; implementations must not call the broker."""
+
+    def current_price(self, symbol: Symbol) -> Price: ...
+
+
+class _AccountBaselineRepository(Protocol):
+    def get_baseline(self, account_id: str) -> object | None: ...
+
+    def set_baseline(
+        self, account_id: str, opening_cash_cents: int, effective_at: UtcTimestamp
+    ) -> object: ...
 
 
 class _ReconciliationUnitOfWork(Protocol):
@@ -58,9 +97,18 @@ _TERMINAL_INTENT_STATUSES: frozenset[OrderStatus] = frozenset(
 class Reconciler:
     """Compare the broker's views with local authority; report, never repair."""
 
-    def __init__(self, *, broker: PaperBrokerPort, clock: Callable[[], UtcTimestamp]) -> None:
+    def __init__(
+        self,
+        *,
+        broker: PaperBrokerPort,
+        clock: Callable[[], UtcTimestamp],
+        account_policy: AccountReconciliationPolicy | None = None,
+        price_provider: ReconciliationMarkPriceProvider | None = None,
+    ) -> None:
         self._broker = broker
         self._clock = clock
+        self._account_policy = account_policy
+        self._price_provider = price_provider
 
     def run(
         self, unit_of_work: _ReconciliationUnitOfWork, trading_date: TradingDate
@@ -78,6 +126,22 @@ class Reconciler:
                     ReconciliationMismatch(
                         kind=MismatchKind.BROKER_QUERY_FAILURE,
                         detail="broker query failed during reconciliation",
+                    ),
+                ),
+                checked_orders=0,
+                checked_fills=0,
+                observed_at=self._clock(),
+            )
+        except LedgerInvariantError as error:
+            detail = str(error)[:200] if str(error).strip() else "ledger invariant failure"
+            # Bound detail without leaking secrets.
+            detail = detail.replace("\x00", "")[:200].strip() or "ledger invariant failure"
+            result = ReconciliationResult.create(
+                trading_date=trading_date,
+                mismatches=(
+                    ReconciliationMismatch(
+                        kind=MismatchKind.LOCAL_LEDGER_INVARIANT,
+                        detail=detail,
                     ),
                 ),
                 checked_orders=0,
@@ -129,6 +193,8 @@ class Reconciler:
                     detail="broker account does not assert PAPER",
                 )
             )
+        # Account identity, buying power, and cash/NAV are checked later after
+        # ledger projection, but a missing PAPER environment is already a mismatch.
         checked_orders = 0
         checked_fills = 0
         orders = unit_of_work.orders
@@ -140,6 +206,15 @@ class Reconciler:
                 ReconciliationMismatch(
                     kind=MismatchKind.INTENT_STATUS_MISMATCH,
                     detail=review_intent.client_order_id.value,
+                )
+            )
+        # UNKNOWN is also an unresolved broker truth: a CLEAN reconciliation must
+        # never silently clear the pause while such an intent exists.
+        for unknown_intent in orders.list_by_status(OrderStatus.UNKNOWN):
+            mismatches.append(
+                ReconciliationMismatch(
+                    kind=MismatchKind.INTENT_STATUS_MISMATCH,
+                    detail=unknown_intent.client_order_id.value,
                 )
             )
         local_mirrors = orders.list_open_broker_orders()
@@ -295,6 +370,137 @@ class Reconciler:
                         detail=symbol.value,
                     )
                 )
+        # Account reconciliation: identity, cash, NAV, buying power.
+        if self._account_policy is not None:
+            if account.account_id != self._account_policy.expected_account_id:
+                mismatches.append(
+                    ReconciliationMismatch(
+                        kind=MismatchKind.ACCOUNT_ID_MISMATCH,
+                        detail=account.account_id[:100],
+                    )
+                )
+            # Buying power is typed and strictly parsed; a missing or malformed
+            # value would have already raised BrokerTransportError and become
+            # BROKER_QUERY_FAILURE.  Here we ensure it is at least present and
+            # non-negative; a future ADR will define the portable expected-BP formula.
+            try:
+                buying_power_cents = account.buying_power.cents
+                if buying_power_cents < 0:
+                    mismatches.append(
+                        ReconciliationMismatch(
+                            kind=MismatchKind.BUYING_POWER_MISMATCH,
+                            detail=str(buying_power_cents)[:200],
+                        )
+                    )
+            except Exception:
+                mismatches.append(
+                    ReconciliationMismatch(
+                        kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
+                        detail="buying power unavailable",
+                    )
+                )
+            baseline = None
+            baseline_error = False
+            try:
+                baseline_repo = getattr(unit_of_work, "account_baselines", None)
+                if baseline_repo is not None:
+                    baseline = baseline_repo.get_baseline(account.account_id)
+            except Exception:
+                baseline_error = True
+                mismatches.append(
+                    ReconciliationMismatch(
+                        kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
+                        detail="baseline query failed",
+                    )
+                )
+            if not baseline_error and baseline is None:
+                mismatches.append(
+                    ReconciliationMismatch(
+                        kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
+                        detail="missing opening cash baseline",
+                    )
+                )
+            elif baseline is not None:
+                try:
+                    opening_cash_cents = int(baseline.opening_cash_cents)
+                    expected_cash = opening_cash_cents + projection.cash_delta_cents
+                    broker_cash = account.cash.cents
+                    if abs(broker_cash - expected_cash) > self._account_policy.cash_tolerance_cents:
+                        mismatches.append(
+                            ReconciliationMismatch(
+                                kind=MismatchKind.CASH_MISMATCH,
+                                detail=f"expected {expected_cash} got {broker_cash}",
+                            )
+                        )
+                except Exception:
+                    mismatches.append(
+                        ReconciliationMismatch(
+                            kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
+                            detail="cash reconciliation unavailable",
+                        )
+                    )
+                # NAV reconciliation requires mark prices for every open lot.
+                try:
+                    if self._price_provider is None:
+                        if projection.positions:
+                            mismatches.append(
+                                ReconciliationMismatch(
+                                    kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
+                                    detail="missing mark price provider",
+                                )
+                            )
+                        else:
+                            # No positions: NAV is just expected cash; compare to equity.
+                            opening_cash_cents = int(baseline.opening_cash_cents)
+                            expected_nav = opening_cash_cents + projection.cash_delta_cents
+                            broker_equity = account.equity.cents
+                            if (
+                                abs(broker_equity - expected_nav)
+                                > self._account_policy.nav_tolerance_cents
+                            ):
+                                mismatches.append(
+                                    ReconciliationMismatch(
+                                        kind=MismatchKind.NAV_MISMATCH,
+                                        detail=f"expected {expected_nav} got {broker_equity}",
+                                    )
+                                )
+                    else:
+                        prices: dict[Symbol, Price] = {}
+                        for sym in projection.positions:
+                            price = self._price_provider.current_price(sym)
+                            if not isinstance(price, Price):
+                                raise ValueError(f"missing price for {sym.value}")
+                            prices[sym] = price
+                        opening_cash_cents = int(baseline.opening_cash_cents)
+                        nav = account_valuation(
+                            projection,
+                            opening_cash_cents=opening_cash_cents,
+                            prices=prices,
+                        )
+                        broker_equity = account.equity.cents
+                        if abs(broker_equity - nav) > self._account_policy.nav_tolerance_cents:
+                            mismatches.append(
+                                ReconciliationMismatch(
+                                    kind=MismatchKind.NAV_MISMATCH,
+                                    detail=f"expected {nav} got {broker_equity}",
+                                )
+                            )
+                except ValueError as ve:
+                    # Missing price or valuation input is explicitly unavailable, not CLEAN.
+                    detail = str(ve)[:200] if str(ve).strip() else "valuation input missing"
+                    mismatches.append(
+                        ReconciliationMismatch(
+                            kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
+                            detail=detail,
+                        )
+                    )
+                except Exception:
+                    mismatches.append(
+                        ReconciliationMismatch(
+                            kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
+                            detail="nav reconciliation unavailable",
+                        )
+                    )
         return ReconciliationResult.create(
             trading_date=trading_date,
             mismatches=tuple(mismatches),

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import TracebackType
@@ -111,6 +112,7 @@ class PostgresUnitOfWork:
         self.orders = PostgresOrderRepository(self)
         self.reconciliations = PostgresReconciliationRepository(self)
         self.control = PostgresControlRepository(self)
+        self.account_baselines = PostgresAccountBaselineRepository(self)
 
     def __enter__(self) -> Self:
         if self._connection is not None:
@@ -688,7 +690,7 @@ class PostgresReconciliationRepository:
         return _timestamp(row[0], "recorded_at")
 
     def latest(self) -> ReconciliationResult | None:
-        """Load the most recently recorded reconciliation run."""
+        """Load the most recently recorded reconciliation run with verified detail."""
         with self._unit_of_work._require_connection().cursor() as cursor:
             cursor.execute(
                 """
@@ -700,9 +702,65 @@ class PostgresReconciliationRepository:
                 """
             )
             row = cursor.fetchone()
-        if row is None:
-            return None
-        return _reconciliation_result(_row(row, "reconciliation latest"))
+            if row is None:
+                return None
+            parent = _row(row, "reconciliation latest")
+            run_id = _uuid(parent[0], "run_id")
+            mismatch_count = _integer(parent[3], "mismatch_count")
+            kinds_raw = parent[4]
+            if type(kinds_raw) is not list:
+                raise PersistenceInvariantError("database mismatch_kinds must be an array")
+            status = ReconciliationStatus(_text(parent[2], "status"))
+            cursor.execute(
+                """
+                SELECT ordinal, kind, detail
+                FROM reconciliation_mismatches
+                WHERE run_id = %s
+                ORDER BY ordinal
+                """,
+                (run_id,),
+            )
+            child_rows = cursor.fetchall()
+            if len(child_rows) != mismatch_count:
+                raise PersistenceInvariantError(
+                    "reconciliation parent mismatch_count does not match child rows"
+                )
+            child_kinds: list[str] = []
+            mismatches: list[ReconciliationMismatch] = []
+            for index, child in enumerate(child_rows, start=1):
+                c_row = _row(child, "reconciliation mismatch")
+                if len(c_row) != 3:
+                    raise PersistenceInvariantError(
+                        "reconciliation mismatch query returned an invalid column count"
+                    )
+                ordinal = _integer(c_row[0], "ordinal")
+                if ordinal != index:
+                    raise PersistenceInvariantError(
+                        "reconciliation mismatch ordinal must be contiguous from 1"
+                    )
+                kind_text = _text(c_row[1], "kind")
+                detail = _text(c_row[2], "detail")
+                child_kinds.append(kind_text)
+                mismatches.append(
+                    ReconciliationMismatch(kind=MismatchKind(kind_text), detail=detail)
+                )
+            if child_kinds != kinds_raw:
+                raise PersistenceInvariantError(
+                    "reconciliation parent mismatch_kinds does not match child rows"
+                )
+            if (status is ReconciliationStatus.CLEAN) is bool(mismatches):
+                raise PersistenceInvariantError(
+                    "reconciliation status does not match mismatch presence"
+                )
+            return ReconciliationResult(
+                run_id=run_id,
+                trading_date=_trading_date(parent[1]),
+                status=status,
+                mismatches=tuple(mismatches),
+                checked_orders=_integer(parent[5], "checked_orders"),
+                checked_fills=_integer(parent[6], "checked_fills"),
+                observed_at=_timestamp(parent[7], "observed_at"),
+            )
 
 
 class PostgresControlRepository:
@@ -830,6 +888,92 @@ class PostgresControlRepository:
         if row[0] is None:
             return None
         return _timestamp(row[0], "applied_at")
+
+
+@dataclass(frozen=True, slots=True)
+class AccountBaseline:
+    """Authoritative opening cash for one Paper account."""
+
+    account_id: str
+    opening_cash_cents: int
+    effective_at: UtcTimestamp
+    created_at: UtcTimestamp
+    updated_at: UtcTimestamp
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.account_id) is not str
+            or not self.account_id.strip()
+            or len(self.account_id) > 100
+        ):
+            raise ValueError("account_id must be non-empty text up to 100 characters")
+        if type(self.opening_cash_cents) is not int or self.opening_cash_cents < 0:
+            raise ValueError("opening_cash_cents must be a non-negative integer")
+        if not isinstance(self.effective_at, UtcTimestamp):
+            raise ValueError("effective_at must be a UtcTimestamp")
+        if not isinstance(self.created_at, UtcTimestamp):
+            raise ValueError("created_at must be a UtcTimestamp")
+        if not isinstance(self.updated_at, UtcTimestamp):
+            raise ValueError("updated_at must be a UtcTimestamp")
+
+
+class PostgresAccountBaselineRepository:
+    """Persistence for the explicit opening-cash baseline."""
+
+    def __init__(self, unit_of_work: PostgresUnitOfWork) -> None:
+        self._unit_of_work = unit_of_work
+
+    def set_baseline(
+        self, account_id: str, opening_cash_cents: int, effective_at: UtcTimestamp
+    ) -> AccountBaseline:
+        if type(account_id) is not str or not account_id.strip() or len(account_id) > 100:
+            raise ValueError("account_id must be non-empty text up to 100 characters")
+        if type(opening_cash_cents) is not int or opening_cash_cents < 0:
+            raise ValueError("opening_cash_cents must be a non-negative integer")
+        if not isinstance(effective_at, UtcTimestamp):
+            raise ValueError("effective_at must be a UtcTimestamp")
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO account_baselines (account_id, opening_cash_cents, effective_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (account_id) DO UPDATE SET
+                    opening_cash_cents = EXCLUDED.opening_cash_cents,
+                    effective_at = EXCLUDED.effective_at
+                RETURNING account_id, opening_cash_cents, effective_at, created_at, updated_at
+                """,
+                (account_id, opening_cash_cents, effective_at.value),
+            )
+            row = _row(cursor.fetchone(), "account baseline upsert")
+        self._unit_of_work._mark_write()
+        return _account_baseline(_row(row, "account baseline upsert"))
+
+    def get_baseline(self, account_id: str) -> AccountBaseline | None:
+        if type(account_id) is not str or not account_id.strip():
+            raise ValueError("account_id must be non-empty text")
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT account_id, opening_cash_cents, effective_at, created_at, updated_at
+                FROM account_baselines
+                WHERE account_id = %s
+                """,
+                (account_id,),
+            )
+            row = cursor.fetchone()
+        return None if row is None else _account_baseline(_row(row, "account baseline lookup"))
+
+    def list_baselines(self) -> tuple[AccountBaseline, ...]:
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT account_id, opening_cash_cents, effective_at, created_at, updated_at
+                FROM account_baselines
+                ORDER BY account_id
+                """
+            )
+            rows = cursor.fetchall()
+        return tuple(_account_baseline(_row(row, "account baseline lookup")) for row in rows)
 
 
 def _row(value: object, operation: str) -> tuple[object, ...]:
@@ -1006,4 +1150,16 @@ def _fill(row: tuple[object, ...]) -> Fill:
         quantity=OrderQuantity(_integer(row[2], "quantity")),
         price=Price(_decimal(row[3], "price")),
         occurred_at=_timestamp(row[4], "occurred_at"),
+    )
+
+
+def _account_baseline(row: tuple[object, ...]) -> AccountBaseline:
+    if len(row) != 5:
+        raise PersistenceInvariantError("account baseline query returned an invalid column count")
+    return AccountBaseline(
+        account_id=_text(row[0], "account_id"),
+        opening_cash_cents=_integer(row[1], "opening_cash_cents"),
+        effective_at=_timestamp(row[2], "effective_at"),
+        created_at=_timestamp(row[3], "created_at"),
+        updated_at=_timestamp(row[4], "updated_at"),
     )

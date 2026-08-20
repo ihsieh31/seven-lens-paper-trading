@@ -41,13 +41,13 @@ def test_clean_apply_repeat_verify_and_schema_contract(test_database_url: str) -
     try:
         assert current_version(test_database_url) == 0
 
-        assert migrate(test_database_url) == 7
-        assert current_version(test_database_url) == 7
-        assert verify_schema(test_database_url) == 7
+        assert migrate(test_database_url) == 8
+        assert current_version(test_database_url) == 8
+        assert verify_schema(test_database_url) == 8
 
         # Applying an already-applied migration is idempotent and checksum-checked.
-        assert migrate(test_database_url) == 7
-        assert verify_schema(test_database_url) == 7
+        assert migrate(test_database_url) == 8
+        assert verify_schema(test_database_url) == 8
 
         with _connection(test_database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
@@ -107,7 +107,12 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
     _drop_all_migrations(test_database_url)
     try:
         assert current_version(test_database_url) == 0
-        assert migrate(test_database_url) == 7
+        assert migrate(test_database_url) == 8
+
+        assert rollback(test_database_url) == 7
+        assert current_version(test_database_url) == 7
+        with pytest.raises(MigrationError, match="migration version does not match"):
+            verify_schema(test_database_url)
 
         assert rollback(test_database_url) == 6
         assert current_version(test_database_url) == 6
@@ -145,8 +150,8 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
             verify_schema(test_database_url)
 
         # A restored/disposable database can be rebuilt exactly from the migration.
-        assert migrate(test_database_url) == 7
-        assert verify_schema(test_database_url) == 7
+        assert migrate(test_database_url) == 8
+        assert verify_schema(test_database_url) == 8
     finally:
         _drop_all_migrations(test_database_url)
 
