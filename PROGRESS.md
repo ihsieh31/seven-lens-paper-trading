@@ -2,11 +2,11 @@
 
 ## 狀態摘要
 
-- 專案階段：P2 — Alpaca Paper 執行安全已通過全面獨立驗收；Gate Closed（2026-08-20 依 P2-CUR-001~006 重驗後再次 Closed）。這不授權真實下單。
+- 專案階段：P2 Gate Reopened — final acceptance in progress。ACC-001~008 已在本機修復並以 fresh locked/real-PostgreSQL gates 驗證；ACC-009 等待 exact final-commit remote CI。這不授權真實下單。
 - 完成度定義：只以路線圖的可驗證交付物計算，不以主觀百分比計算。
 - 最近更新：2026-08-20
-- 下一個 gate：先討論 P3 SourceManifest／quarantine；WS/CLI 與真實下單仍分別留 P6/P7。
-- 歷史：P2 曾於 2026-08-19 標示 Closed，2026-08-20 依 Seven-Lens Remediation Handoff 重開 gate 完成 P2-CUR-001~006 修復後再次 Closed；`ISSUES.md` CLOSED-021 已 superseded 為 SUPERSEDED-021。
+- 下一個 gate：先完成 final commit 的遠端 `quality-unit`／`postgres-integration`；通過後才關閉 P2 並討論 P3 SourceManifest／quarantine。WS/CLI 與真實下單仍分別留 P6/P7。
+- 歷史：P2 曾於 2026-08-19 及 P2-CUR 修復後標示 Closed；2026-08-20 依 final remediation ACC-001~009 再次重開。歷史 Closed 紀錄保留，但不是目前狀態。
 
 ## 已完成
 
@@ -332,7 +332,7 @@ re-acceptance.**
 - 官方契約核對修復單一 asset 路徑、open orders 500 筆分頁、fill bounded pagination／
   cursor cycle／order identity；未知 `held` 狀態維持 fail-closed。
 - Luna 首輪重現 pause TOCTOU、control partial failure、broker query failure、open/history
-  snapshot race 與 fill integrity；修復為 PostgreSQL `FOR SHARE` submission guard、partial
+  snapshot race 與 fill integrity；當時修復為 PostgreSQL `FOR SHARE` submission guard（後由 ADR-026 升級為 `FOR UPDATE`）、partial
   command `applied_at=NULL`、`BROKER_QUERY_FAILURE` 持久化並自動 pause，以及以 broker
   timestamp+status 合併快照。第二輪發現 equal-timestamp 不同狀態仍可漏報，第三輪確認已
   收斂為 `STATUS_MISMATCH`，原四組 blocker 全部 Closed。
@@ -347,14 +347,14 @@ re-acceptance.**
   2. P2-CUR-002 `LedgerInvariantError` 轉 durable `LOCAL_LEDGER_INVARIANT` mismatch + 自動 pause + `PAUSE_ENTRIES` 命令（`src/seven_lens/application/reconciliation_service.py`，migration 0008 擴 mismatch kinds）。
   3. P2-CUR-003 `TradeUpdateConsumer._apply_fill` 完整處理亂序：`filled_quantity = max(mirror, local_total)`、`broker_updated_at` 不倒退、已 terminal/review 不回退、PENDING_CANCEL 中可收 fills、衝突時保留 fill 並 fail closed（`src/seven_lens/execution/trade_updates.py`，`FakeOrderRepository` 同步）。
   4. P2-CUR-004 `project_ledger` 以 `(occurred_at, execution_id)` 為 canonical 回放序，與 DB arrival order 解耦；`ordered_lots` 改以 `opened_at.value` 排序（`src/seven_lens/execution/ledger.py`）。
-  5. P2-CUR-005 UNKNOWN 全域閘：submit timeout → `UNKNOWN` 同時持久化 `entries_paused` + `PAUSE_ENTRIES`（`src/seven_lens/application/execution_service.py`）；`submission_guard` 在 `FOR SHARE` 內檢查 `UNKNOWN`/`REVIEW_REQUIRED`；`Reconciler.collect` 對兩者產生 `INTENT_STATUS_MISMATCH`；`ControlPlane.resume_entries` 做 defense-in-depth 阻擋。
+  5. P2-CUR-005 UNKNOWN 全域閘（歷史實作，lock 後由 ADR-026 升級為 `FOR UPDATE`）：submit timeout → `UNKNOWN` 同時持久化 `entries_paused` + `PAUSE_ENTRIES`（`src/seven_lens/application/execution_service.py`）；當時 `submission_guard` 在 `FOR SHARE` 內檢查 `UNKNOWN`/`REVIEW_REQUIRED`；`Reconciler.collect` 對兩者產生 `INTENT_STATUS_MISMATCH`；`ControlPlane.resume_entries` 做 defense-in-depth 阻擋。
   6. P2-CUR-006 帳務對帳：`PaperAccount.buying_power` 嚴格解析、`account_baselines` 權威基線表（migration 0008）、`AccountReconciliationPolicy` / `ReconciliationMarkPriceProvider` seam、tolerance 內的 `CASH`/`NAV`/`ACCOUNT_ID`/`BUYING_POWER` 檢查與 `ACCOUNT_RECONCILIATION_UNAVAILABLE` 失效閉環（`src/seven_lens/application/reconciliation_service.py` 擴 6 種新 mismatch）。
 - 治理同步：R-24 重標 `Mitigated` 並引用 read round-trip 測試、`ISSUES.md` CLOSED-021 superseded、README/SECURITY/DEFERRED-013/015 與 ROADMAP/ADR-019 的 P2/WS/CLI 範圍一致化（本輪不實作 WS transport / control CLI）。
 - 最終證據（2026-08-20 本機）：Ruff format/check、mypy strict 92 檔全綠；non-integration 637 passed / 77 deselected（新增 `TestLateFill` / `TestFifo` / `TestLedgerInvariant` / `TestUnknownGate` / `TestAccountReconciliation` 等，見 `tests/test_*`）；真實 disposable PostgreSQL 16 `69 passed / 8 deselected`（`verify_p1.sh --postgres` EXIT=0，含 `account_baselines` 權限與 `0008 up/down/up`）；`RISK_REGISTER` R-24、`ISSUES` SUPERSEDED-021 與本文件已同步。P2 gate **再次 Closed**；不新增 live endpoint，P7 真實下單仍留後續 supervised gate。
 
-## P2 最終修復進行中（2026-08-20）：Gate Reopened — ACC-001~009
+## P2 最終修復（2026-08-20）：本機完成，Gate Reopened 等待 remote CI
 
-- 依據 `SEVEN_LENS_P2_FINAL_REMEDIATION_AGENT_PROMPT.md`（HEAD `0f8281b`）重開 P2 gate，最終驗收判定 **P2 必須維持 Reopened，不得宣告 P2 Complete**，阻塞項見 `ISSUES.md` OPEN-P2-ACC-001~009：
+- 原始重開判定：依據 `SEVEN_LENS_P2_FINAL_REMEDIATION_AGENT_PROMPT.md`（HEAD `0f8281b`）重開 P2 gate；當時 ACC-001~009 尚未完成，因此不得宣告 P2 Complete：
   1. ACC-001 併發新單可同時越過 broker 邊界（`FOR SHARE` 可共存）；
   2. ACC-002 baseline cutoff 的 NAV 錯誤丟失 cutoff 前已建倉且仍持有的部位；
   3. ACC-003 runtime role 可任意 INSERT 新 baseline revision 取得權威；
@@ -366,4 +366,8 @@ re-acceptance.**
   9. ACC-009 缺完整回歸、真實 PG 併發／重啟／遷移／權限等證據。
 - 本輪依建議順序修復 001→007，最後執行完整 Ruff/mypy/pytest 非整合 + `run_postgres_integration.sh` + `verify_p1.sh --postgres` 並同步治理；完成前不宣告 P2 Closed。
 - 本機 fresh regression（2026-08-20）：`uv lock --check --offline`、Ruff format/check、mypy strict、non-integration `672 passed, 90 deselected`、PostgreSQL 16 `82 passed, 8 deselected`、`verify_p1.sh` 與 `verify_p1.sh --postgres` 均 exit 0。新 PG evidence 包含 race A timeout→UNKNOWN 時 B broker call count=0、success serialization、restart UNKNOWN gate、RISK_EXIT bypass、runtime baseline INSERT denial、0008 mutated baseline→latest、genesis/revision invariants 與 conflicting fill restart pause。
-- Gate 判定仍為 **Reopened**：本工作樹尚未提交/推送，無法宣稱 current-HEAD remote GitHub Actions evidence；ACC-009 在該證據完成前維持 Open。其餘 ACC implementation 與本機 regression evidence 已完成，但不得以此覆蓋歷史 Closed/重開記錄。
+- 本輪補齊 ACC-004 語意：legacy 0008 compatibility revision 的 `created_at` 等於 legacy `effective_at`／authority-effective timestamp；source `account_baselines.created_at` 原值於遷移後還原。0009 migration 與 checksum 均未修改。
+- 本輪補齊 ACC-005 真實競態：`test_genesis_baseline_creation_race_with_first_fill_is_serialized` 使用兩個 `PostgresUnitOfWork`、兩條 thread、Events、bounded timeout；證明 genesis transaction 持 lock 時 first-fill INSERT 阻塞，genesis commit 後 fill 才 commit。
+- 本輪補齊 ACC-006 typed taxonomy：新增 `MarkPriceUnavailableError`；只有此 expected absence 轉 `ACCOUNT_RECONCILIATION_UNAVAILABLE`。unexpected `ValueError`、`AttributeError`、`TypeError`、`PersistenceInvariantError` 均向外傳播，missing baseline 保持 fail-closed mismatch。
+- Fresh 本機證據：`uv lock --check --offline` exit 0；Ruff format/check、mypy exit 0；non-integration `676 passed, 91 deselected`；PostgreSQL 16 `83 passed, 8 deselected, 0 skipped`；`verify_p1.sh` 與 `verify_p1.sh --postgres` 均 exit 0。
+- Gate 判定仍為 **Reopened**：ACC-001~008 本機 Closed；ACC-009 只剩 exact final-commit 的 GitHub Actions `quality-unit`／`postgres-integration`。不得以舊 run 或舊 SHA 取代。

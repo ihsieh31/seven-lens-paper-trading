@@ -498,17 +498,23 @@ def test_upgrade_0008_mutated_baseline_to_latest_preserves_authority(
             ("paper-mut-1",),
         ).fetchone()
         assert row[0] > row[1], "mutated effective_at should be > created_at"
+        legacy_effective_at = row[0]
+        legacy_created_at = row[1]
     # Now migrate to latest (9)
     latest = migrate(test_database_url)
     assert latest >= 9
     # Verify revision preserves authority with GREATEST
     with psycopg.connect(test_database_url, autocommit=True) as conn:
-        rev = conn.execute(
+        revision = conn.execute(
             "SELECT opening_cash_cents, effective_at, created_at FROM account_baseline_revisions WHERE account_id=%s",
             ("paper-mut-1",),
         ).fetchone()
-        assert rev[0] == 1_100_000
-        assert rev[1] <= rev[2], "effective_at must be <= created_at after migration"
+        source = conn.execute(
+            "SELECT effective_at, created_at FROM account_baselines WHERE account_id=%s",
+            ("paper-mut-1",),
+        ).fetchone()
+        assert revision == (1_100_000, legacy_effective_at, legacy_effective_at)
+        assert source == (legacy_effective_at, legacy_created_at)
     # Cleanup
     while current_version(test_database_url):
         rollback(test_database_url)
@@ -549,6 +555,108 @@ def test_genesis_baseline_allowed_on_empty_fill_ledger(migrated_postgres: str) -
     with PostgresUnitOfWork(migrated_postgres) as uow:
         assert uow.account_baselines.get_baseline("paper-gen-empty") is not None
         uow.commit()
+
+
+def test_genesis_baseline_creation_race_with_first_fill_is_serialized(
+    migrated_postgres: str,
+) -> None:
+    intent = _intent(790)
+    with PostgresUnitOfWork(migrated_postgres) as uow:
+        uow.orders.add(intent)
+        for status in (
+            OrderStatus.RISK_APPROVED,
+            OrderStatus.OUTBOX_PENDING,
+            OrderStatus.SUBMITTING,
+            OrderStatus.ACKNOWLEDGED,
+        ):
+            uow.orders.transition_status(intent.client_order_id, status)
+        uow.orders.record_broker_order(
+            BrokerOrder(
+                broker_order_id="b-genesis-fill-race",
+                client_order_id=intent.client_order_id,
+                symbol=intent.symbol,
+                side=intent.side,
+                quantity=intent.quantity,
+                filled_quantity=0,
+                limit_price=intent.limit_price,
+                status=BrokerOrderStatus.ACCEPTED,
+                submitted_at=_BASE,
+                updated_at=_BASE,
+            )
+        )
+        uow.commit()
+
+    genesis_has_lock = threading.Event()
+    allow_genesis_commit = threading.Event()
+    fill_attempted = threading.Event()
+    fill_finished = threading.Event()
+    errors: list[BaseException] = []
+    commit_order: list[str] = []
+    order_lock = threading.Lock()
+
+    def create_genesis() -> None:
+        try:
+            with PostgresUnitOfWork(migrated_postgres) as uow:
+                uow._require_connection().execute("SET LOCAL lock_timeout = '3s'")
+                uow.account_baselines.set_baseline("paper-genesis-race", 1_000_000, _BASE)
+                genesis_has_lock.set()
+                if not allow_genesis_commit.wait(timeout=5):
+                    raise AssertionError("genesis commit release was not signaled")
+                uow.commit()
+                with order_lock:
+                    commit_order.append("genesis")
+        except BaseException as error:
+            errors.append(error)
+            genesis_has_lock.set()
+
+    def insert_first_fill() -> None:
+        try:
+            if not genesis_has_lock.wait(timeout=5):
+                raise AssertionError("genesis did not acquire serialization lock")
+            with PostgresUnitOfWork(migrated_postgres) as uow:
+                uow._require_connection().execute("SET LOCAL lock_timeout = '3s'")
+                fill_attempted.set()
+                uow.orders.add_fill(
+                    Fill(
+                        execution_id="e-genesis-fill-race",
+                        broker_order_id="b-genesis-fill-race",
+                        quantity=OrderQuantity(1),
+                        price=Price.from_cents(10_000),
+                        occurred_at=_BASE,
+                    )
+                )
+                uow.commit()
+                with order_lock:
+                    commit_order.append("fill")
+        except BaseException as error:
+            errors.append(error)
+        finally:
+            fill_finished.set()
+
+    genesis_thread = threading.Thread(target=create_genesis)
+    fill_thread = threading.Thread(target=insert_first_fill)
+    genesis_thread.start()
+    assert genesis_has_lock.wait(timeout=5), "genesis thread did not acquire fills lock"
+    fill_thread.start()
+    assert fill_attempted.wait(timeout=5), "fill thread did not attempt insert"
+    assert not fill_finished.wait(timeout=0.2), "first fill bypassed genesis serialization lock"
+    allow_genesis_commit.set()
+    genesis_thread.join(timeout=5)
+    fill_thread.join(timeout=5)
+    assert not genesis_thread.is_alive(), "genesis thread deadlocked"
+    assert not fill_thread.is_alive(), "fill thread deadlocked"
+    assert not errors
+    assert commit_order == ["genesis", "fill"]
+
+    with psycopg.connect(migrated_postgres, autocommit=True) as conn:
+        assert conn.execute(
+            "SELECT 1 FROM account_baselines WHERE account_id = %s",
+            ("paper-genesis-race",),
+        ).fetchone() == (1,)
+        assert conn.execute(
+            "SELECT 1 FROM fills WHERE execution_id = %s",
+            ("e-genesis-fill-race",),
+        ).fetchone() == (1,)
 
 
 def test_genesis_baseline_rejected_after_any_fill(migrated_postgres: str) -> None:

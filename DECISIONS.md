@@ -352,7 +352,7 @@
 ## ADR-024：P2 全面再驗收——提交線性化、部分失敗稽核與 broker snapshot 合併
 
 - 日期：2026-08-19
-- 狀態：Accepted；P2 Gate Closed
+- 狀態：Historical Accepted；當時 P2 Gate Closed，已由 ADR-026 final remediation supersede
 - 決策：非 risk-exit submission 必須在 `control_state` 的 PostgreSQL shared row lock 下讀取
   pause 並跨越 broker submit，讓 concurrent pause UPDATE 只能在線性化提交完成後生效；控制
   多筆 cancel/flatten 的部分失敗必須逐筆保留狀態、寫 `applied_at=NULL` 的 bounded
@@ -369,13 +369,13 @@
 ## ADR-025：P2-CUR-001~006 Remediation——reconciliation detail、ledger invariant、late fill、FIFO、UNKNOWN 全域閘與帳務對帳
 
 - 日期：2026-08-20
-- 狀態：Accepted；P2 Gate 再次 Closed（P2-CUR 重驗）
+- 狀態：Historical Accepted；當時 P2 Gate 再次 Closed（P2-CUR 重驗），已由 ADR-026 supersede
 - 決策：
   1. `reconciliation_mismatches` 的 evidence detail 由 `mismatch_kinds` 陣列恢復為 child table 真值：`latest()` 必讀 `reconciliation_mismatches` 並驗證 `mismatch_count == len(children)`、`kinds` 順序一致、`CLEAN↔0`/`MISMATCH↔≥1`，否則拋 `PersistenceInvariantError`（`src/seven_lens/infrastructure/postgres.py`；migration 0008）。
   2. `LedgerInvariantError`（duplicate execution、unknown order、oversell、cash 超界）於 `Reconciler.run` 轉 durable `LOCAL_LEDGER_INVARIANT` mismatch，自動 pause 並寫 `PAUSE_ENTRIES` 命令；不以 broad `except Exception` 捕捉（migration 0008 擴 kinds）。
   3. `TradeUpdateConsumer._apply_fill` 亂序完整修復：`filled_quantity = max(mirror, local_total)` 不倒退、`broker_updated_at = max(old, fill.occurred_at)` 不回退、已 terminal/review 不回退、`PENDING_CANCEL` 中可收 fills、衝突時保留 fill 並拋 `TradeUpdateError` 交 reconciliation（`src/seven_lens/execution/trade_updates.py`；`FakeOrderRepository` 同步 `filled_quantity`/`broker_updated_at` 單調檢查）。
   4. `project_ledger` 以 `(occurred_at, execution_id)` 為 canonical 回放序，與 DB arrival order 解耦；`ordered_lots` 改以 `opened_at.value` 排序（`src/seven_lens/execution/ledger.py`）。
-  5. `UNKNOWN` 全域門檻：`ExecutionEngine._submit_while_guarded` 於 `BrokerTransportError`/`BrokerConflictError` → `UNKNOWN` 後持久化 `entries_paused` + `PAUSE_ENTRIES`（`src/seven_lens/application/execution_service.py` 內 `RLock` 防 `FakeControlRepository` deadlock）；`_entry_submission_guard` 在 `FOR SHARE` 內同時檢查 `entries_paused` 與 `UNKNOWN`/`REVIEW_REQUIRED` 未解；`Reconciler.collect` 對兩者產生 `INTENT_STATUS_MISMATCH` 使 CLEAN 不可達；`ControlPlane.resume_entries` 做 defense-in-depth 阻擋。
+  5. `UNKNOWN` 全域門檻（歷史 P2-CUR 實作，後由 ADR-026 將 lock 升級為 `FOR UPDATE`）：`ExecutionEngine._submit_while_guarded` 於 `BrokerTransportError`/`BrokerConflictError` → `UNKNOWN` 後持久化 `entries_paused` + `PAUSE_ENTRIES`（`src/seven_lens/application/execution_service.py` 內 `RLock` 防 `FakeControlRepository` deadlock）；當時 `_entry_submission_guard` 在 `FOR SHARE` 內同時檢查 `entries_paused` 與 `UNKNOWN`/`REVIEW_REQUIRED` 未解；`Reconciler.collect` 對兩者產生 `INTENT_STATUS_MISMATCH` 使 CLEAN 不可達；`ControlPlane.resume_entries` 做 defense-in-depth 阻擋。
   6. 帳務對帳：`PaperAccount.buying_power` 嚴格解析（`src/seven_lens/infrastructure/alpaca_paper.py`）、`account_baselines` 權威基線表（migration 0008，`guard_account_baseline_write` immutable `account_id`）、`AccountReconciliationPolicy`（expected_account_id + cash/nav tolerance）與 `ReconciliationMarkPriceProvider` seam；`Reconciler.collect` 比較 `ACCOUNT_ID`/`BUYING_POWER`/`CASH`（`opening_cash + cash_delta`）/`NAV`（`account_valuation` + marks），缺 baseline/缺 price/缺 provider 皆為 `ACCOUNT_RECONCILIATION_UNAVAILABLE` 而非 CLEAN；新增 6 種 closed mismatch kinds。
 - 範圍聲明：不實作 WS transport、`control CLI` shell、真實 Paper POST/DELETE、`P3` distillation/`P4` holding/`P5` backtest 等；`buying_power` 僅做嚴格快照與 presence 檢查，不偽造 expected buying power 公式（見 P2-CUR-006 買斷規則與本 ADR）。
 - 證據：Ruff/mypy 92 檔全綠；non-integration 637 passed / 77 deselected（含新 `P2-CUR` 對抗）；PostgreSQL 16 integration 69 passed / 8 deselected（含 `latest` detail roundtrip/ordinal/corruption、`LOCAL_LEDGER_INVARIANT` pause、`account_baselines` 權限與 `0008 up/down/up`）；`verify_p1.sh --postgres` 全綠。R-24 重標 `Mitigated`，CLOSED-021 已 superseded。
@@ -383,9 +383,11 @@
 ## ADR-026：P2 最終修復——entry 互斥、cash checkpoint 與 immutable migration compatibility
 
 - 日期：2026-08-20
-- 狀態：Accepted implementation；P2 Gate Reopened，等待完整 acceptance matrix。
+- 狀態：Accepted implementation；本機 acceptance matrix 全綠，P2 Gate 仍 Reopened，等待 exact final-commit remote CI。
 - 決策：非 `RISK_EXIT` 新單以 `control_state FOR UPDATE` 互斥跨越 broker-submit 臨界區；第一個提交在 timeout 後先持久化 `UNKNOWN`，才允許下一個新單取得鎖並看見 unresolved gate。`RISK_EXIT` 不持此新 exposure 鎖。
 - 帳務：baseline revision 是 **cash checkpoint**，expected cash 為 checkpoint cash 加 post-cutoff cash delta；current NAV 的 lots/positions 永遠由 full fill ledger 取得。post-cutoff sell 可消耗 pre-cutoff lot，因此 cash delta 不以獨立 post-cutoff FIFO replay計算。genesis 只能在 fill ledger 空時建立，並以 PostgreSQL `fills` table lock 與第一筆 fill 序列化；有 fill 後 revision 必須帶真實 `(occurred_at, execution_id)` cutoff。
 - Authority：runtime role 對 `account_baselines` / `account_baseline_revisions` 僅有 SELECT；建立 genesis/revision 是 migration owner/operator capability，不向一般 runtime 暴露 arbitrary INSERT。
-- Migration：0009 已在 main 並由 checksummed runner 驗證，不能改寫。version-8 upgrade 若有效 baseline 有 `effective_at > created_at`，runner 在同一 migration transaction 暫時將 source created_at 對齊 effective_at 以供不變的 0009 建 revision，接著在 0009 trigger 暫停期間還原 source-row original created_at。新 revision 的 `created_at` 對該 legacy row 表示 migration-time authority timestamp；source-row original provenance 保留。既有 version-9 database 不會重新執行此 compat path。
+- Migration：0009 已在 main 並由 checksummed runner 驗證，不能改寫。version-8 upgrade 若有效 baseline 有 `effective_at > created_at`，runner 在同一 migration transaction 暫時將 source `created_at` 對齊 `effective_at` 以供不變的 0009 建 revision，接著在 0009 trigger 暫停期間還原 source-row original `created_at`。因此相容路徑產生的 revision `created_at` 精確表示 legacy `effective_at`／authority-effective timestamp，不是 migration execution time；legacy source row 的 original `created_at` 保留。既有 version-9 database 不會重新執行此 compat path。
 - Late fill：fill fact 先 commit；derived mirror/intent projection 失敗先 rollback，再以同一 UoW 持久化 `entries_paused` 與 `PAUSE_ENTRIES` command，任何 safety persistence failure 以 typed error 可觀測地向外傳播。
+- Reconciliation failure taxonomy：mark provider 只有 `MarkPriceUnavailableError` 可轉為 `ACCOUNT_RECONCILIATION_UNAVAILABLE`；missing baseline 仍是 fail-closed mismatch。`ValueError`、`AttributeError`、`TypeError`、`PersistenceInvariantError` 與 configuration/programming defects 不得被降級，ledger corruption 由 `Reconciler.run` 轉為 durable `LOCAL_LEDGER_INVARIANT`。
+- 本機證據：676 non-integration passed / 91 deselected；PostgreSQL 16 integration 83 passed / 8 deselected；新增雙連線 thread race 證明 genesis 持有 `LOCK TABLE fills IN EXCLUSIVE MODE` 時第一筆 fill 阻塞，genesis commit 後 fill 才 commit；`verify_p1.sh` 與 `verify_p1.sh --postgres` 均 exit 0。

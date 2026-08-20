@@ -8,7 +8,11 @@ import pytest
 
 from fakes.control import FakeControlRepository, FakeReconciliationRepository
 from fakes.orders import FakeOrderRepository
-from seven_lens.application.reconciliation_service import AccountReconciliationPolicy, Reconciler
+from seven_lens.application.reconciliation_service import (
+    AccountReconciliationPolicy,
+    MarkPriceUnavailableError,
+    Reconciler,
+)
 from seven_lens.domain.value_objects import RunId, TradingDate, UtcTimestamp
 from seven_lens.execution.orders import (
     BrokerOrder,
@@ -26,7 +30,7 @@ from seven_lens.execution.orders import (
 )
 from seven_lens.execution.reconciliation import MismatchKind, ReconciliationStatus
 from seven_lens.execution.trade_updates import TradeUpdateConsumer, TradeUpdateError, fill_update
-from seven_lens.infrastructure.postgres import AccountBaseline
+from seven_lens.infrastructure.postgres import AccountBaseline, PersistenceInvariantError
 
 _T0 = UtcTimestamp.from_isoformat("2026-08-17T13:00:00.000000Z")
 _T1 = UtcTimestamp.from_isoformat("2026-08-17T13:01:00.000000Z")
@@ -109,7 +113,7 @@ class _FixedPriceProvider:
 
     def current_price(self, symbol: Symbol) -> Price:
         if symbol not in self._prices:
-            raise ValueError(f"missing price for {symbol.value}")
+            raise MarkPriceUnavailableError(f"missing price for {symbol.value}")
         return self._prices[symbol]
 
 
@@ -679,7 +683,7 @@ class TestFailureTaxonomy:
 
         class MissingPriceProvider:
             def current_price(self, symbol: Symbol) -> Price:
-                raise ValueError("missing price for AAPL")
+                raise MarkPriceUnavailableError("missing price for AAPL")
 
         from seven_lens.execution.fake_broker import FakePaperBroker
 
@@ -712,6 +716,118 @@ class TestFailureTaxonomy:
         assert any(
             m.kind == MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE for m in result.mismatches
         )
+
+    def test_unexpected_value_error_in_price_provider_propagates(self) -> None:
+        orders = FakeOrderRepository()
+        buy = _intent(2)
+        orders.add(buy)
+        for status in (
+            OrderStatus.RISK_APPROVED,
+            OrderStatus.OUTBOX_PENDING,
+            OrderStatus.SUBMITTING,
+            OrderStatus.ACKNOWLEDGED,
+        ):
+            orders.transition_status(buy.client_order_id, status)
+        orders.record_broker_order(_mirror("b-unexpected-value", buy, filled=10))
+        orders.add_fill(
+            Fill(
+                execution_id="e-unexpected-value",
+                broker_order_id="b-unexpected-value",
+                quantity=OrderQuantity(10),
+                price=Price.from_cents(10_000),
+                occurred_at=_T0,
+            )
+        )
+
+        class UnexpectedValueErrorProvider:
+            def current_price(self, symbol: Symbol) -> Price:
+                raise ValueError("programming/configuration defect")
+
+        from seven_lens.application.ports.broker import PaperPosition
+        from seven_lens.execution.fake_broker import FakePaperBroker
+
+        class PosBroker(FakePaperBroker):
+            def list_positions(self):
+                return (
+                    PaperPosition(
+                        symbol=Symbol("AAPL"),
+                        quantity=10,
+                        average_entry_price=Price.from_cents(10_000),
+                    ),
+                )
+
+        baseline = AccountBaseline(
+            account_id="paper-1",
+            opening_cash_cents=1_000_000,
+            effective_at=_T0,
+            created_at=_T0,
+            updated_at=_T0,
+            reason="r",
+            actor="op",
+        )
+        reconciler = Reconciler(
+            broker=PosBroker(
+                clock=lambda: _T0,
+                account_id="paper-1",
+                cash=UsdAmount.from_cents(900_000),
+                equity=UsdAmount.from_cents(1_000_000),
+            ),
+            clock=lambda: _T0,
+            account_policy=AccountReconciliationPolicy(expected_account_id="paper-1"),
+            price_provider=UnexpectedValueErrorProvider(),
+        )
+        with pytest.raises(ValueError, match="programming/configuration defect"):
+            reconciler.collect(_UoW(orders, baseline=baseline), _TD)
+
+    def test_persistence_invariant_in_baseline_lookup_propagates(self) -> None:
+        from seven_lens.execution.fake_broker import FakePaperBroker
+
+        class BrokenBaselineRepo:
+            def get_baseline(self, account_id: str) -> object:
+                raise PersistenceInvariantError("corrupt baseline row")
+
+        uow = _UoW(FakeOrderRepository())
+        uow.account_baselines = BrokenBaselineRepo()  # type: ignore[assignment]
+        reconciler = Reconciler(
+            broker=FakePaperBroker(clock=lambda: _T0, account_id="paper-1"),
+            clock=lambda: _T0,
+            account_policy=AccountReconciliationPolicy(expected_account_id="paper-1"),
+        )
+        with pytest.raises(PersistenceInvariantError, match="corrupt baseline row"):
+            reconciler.collect(uow, _TD)
+
+    def test_missing_baseline_is_fail_closed_mismatch(self) -> None:
+        from seven_lens.execution.fake_broker import FakePaperBroker
+
+        reconciler = Reconciler(
+            broker=FakePaperBroker(clock=lambda: _T0, account_id="paper-1"),
+            clock=lambda: _T0,
+            account_policy=AccountReconciliationPolicy(expected_account_id="paper-1"),
+        )
+        result = reconciler.collect(_UoW(FakeOrderRepository()), _TD)
+        assert result.status is ReconciliationStatus.MISMATCH
+        assert any(
+            mismatch.kind is MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE
+            and mismatch.detail == "missing opening cash baseline"
+            for mismatch in result.mismatches
+        )
+
+    def test_invalid_baseline_object_is_not_silently_clean(self) -> None:
+        from seven_lens.execution.fake_broker import FakePaperBroker
+
+        class InvalidBaselineRepo:
+            def get_baseline(self, account_id: str) -> object:
+                return object()
+
+        uow = _UoW(FakeOrderRepository())
+        uow.account_baselines = InvalidBaselineRepo()  # type: ignore[assignment]
+        reconciler = Reconciler(
+            broker=FakePaperBroker(clock=lambda: _T0, account_id="paper-1"),
+            clock=lambda: _T0,
+            account_policy=AccountReconciliationPolicy(expected_account_id="paper-1"),
+        )
+        with pytest.raises(AttributeError):
+            reconciler.collect(uow, _TD)
 
 
 # ---------------------------------------------------------------------------

@@ -61,8 +61,12 @@ class AccountReconciliationPolicy:
         self.nav_tolerance_cents = nav_tolerance_cents
 
 
+class MarkPriceUnavailableError(RuntimeError):
+    """Expected absence of a reconciliation mark, distinct from code defects."""
+
+
 class ReconciliationMarkPriceProvider(Protocol):
-    """Seam for NAV mark prices; implementations must not call the broker."""
+    """Seam for NAV marks; expected absence raises MarkPriceUnavailableError."""
 
     def current_price(self, symbol: Symbol) -> Price: ...
 
@@ -387,39 +391,19 @@ class Reconciler:
             # value would have already raised BrokerTransportError and become
             # BROKER_QUERY_FAILURE.  Here we ensure it is at least present and
             # non-negative; a future ADR will define the portable expected-BP formula.
-            # Only typed expected failures become UNAVAILABLE; programming
-            # AttributeError/TypeError must propagate.
-            try:
-                buying_power_cents = account.buying_power.cents
-                if buying_power_cents < 0:
-                    mismatches.append(
-                        ReconciliationMismatch(
-                            kind=MismatchKind.BUYING_POWER_MISMATCH,
-                            detail=str(buying_power_cents)[:200],
-                        )
-                    )
-            except ValueError:
+            buying_power_cents = account.buying_power.cents
+            if buying_power_cents < 0:
                 mismatches.append(
                     ReconciliationMismatch(
-                        kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
-                        detail="buying power unavailable",
+                        kind=MismatchKind.BUYING_POWER_MISMATCH,
+                        detail=str(buying_power_cents)[:200],
                     )
                 )
-            baseline = None
-            baseline_error = False
-            try:
-                baseline_repo = getattr(unit_of_work, "account_baselines", None)
-                if baseline_repo is not None:
-                    baseline = baseline_repo.get_baseline(account.account_id)
-            except ValueError:
-                baseline_error = True
-                mismatches.append(
-                    ReconciliationMismatch(
-                        kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
-                        detail="baseline query failed",
-                    )
-                )
-            if not baseline_error and baseline is None:
+            baseline_repo = getattr(unit_of_work, "account_baselines", None)
+            baseline = (
+                None if baseline_repo is None else baseline_repo.get_baseline(account.account_id)
+            )
+            if baseline is None:
                 mismatches.append(
                     ReconciliationMismatch(
                         kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
@@ -437,82 +421,52 @@ class Reconciler:
                 post_fills: tuple = ()  # type: ignore[type-arg]
                 broker_orders_map: dict[str, BrokerOrder] = {}
                 expected_cash: int | None = None
-                try:
-                    cutoff_at = getattr(baseline, "cutoff_occurred_at", None)
-                    cutoff_id = getattr(baseline, "cutoff_execution_id", None)
-                    all_fills = orders.list_all_fills()
-                    if cutoff_at is not None and cutoff_id is not None:
+                cutoff_at = getattr(baseline, "cutoff_occurred_at", None)
+                cutoff_id = getattr(baseline, "cutoff_execution_id", None)
+                all_fills = orders.list_all_fills()
+                if cutoff_at is not None and cutoff_id is not None:
+                    post_fills = tuple(
+                        f
+                        for f in all_fills
+                        if f.occurred_at.value > cutoff_at.value
+                        or (f.occurred_at.value == cutoff_at.value and f.execution_id > cutoff_id)
+                    )
+                elif cutoff_at is not None:
+                    post_fills = tuple(
+                        f for f in all_fills if f.occurred_at.value > cutoff_at.value
+                    )
+                else:
+                    # Fallback to effective_at if no explicit cutoff (old baselines)
+                    effective_at = getattr(baseline, "effective_at", None)
+                    if effective_at is not None:
                         post_fills = tuple(
-                            f
-                            for f in all_fills
-                            if f.occurred_at.value > cutoff_at.value
-                            or (
-                                f.occurred_at.value == cutoff_at.value
-                                and f.execution_id > cutoff_id
-                            )
-                        )
-                    elif cutoff_at is not None:
-                        post_fills = tuple(
-                            f for f in all_fills if f.occurred_at.value > cutoff_at.value
+                            f for f in all_fills if f.occurred_at.value >= effective_at.value
                         )
                     else:
-                        # Fallback to effective_at if no explicit cutoff (old baselines)
-                        effective_at = getattr(baseline, "effective_at", None)
-                        if effective_at is not None:
-                            post_fills = tuple(
-                                f for f in all_fills if f.occurred_at.value >= effective_at.value
-                            )
-                        else:
-                            post_fills = all_fills
-                    broker_orders_map = {
-                        o.broker_order_id: o for o in orders.list_all_broker_orders()
-                    }
-                    opening_cash_cents_tmp = int(baseline.opening_cash_cents)
-                    cash_delta_cents = 0
-                    for fill in post_fills:
-                        order = broker_orders_map.get(fill.broker_order_id)
-                        if order is None:
-                            raise LedgerInvariantError("fill references an unknown broker order")
-                        if order.side is OrderSide.BUY:
-                            cash_delta_cents -= fill.quantity.value * fill.price.cents
-                        else:
-                            cash_delta_cents += fill.quantity.value * fill.price.cents
-                        if abs(cash_delta_cents) > 1_000_000_000_000:
-                            raise LedgerInvariantError(
-                                "projected cash delta exceeds the allowed range"
-                            )
-                    expected_cash = opening_cash_cents_tmp + cash_delta_cents
-                except (ValueError, LedgerInvariantError) as exc:
-                    mismatches.append(
-                        ReconciliationMismatch(
-                            kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
-                            detail=str(exc)[:200] if str(exc).strip() else "cutoff unavailable",
-                        )
-                    )
-                    # Fallback to full-ledger cash for mismatch reporting only.
-                    try:
-                        opening_cash_cents_tmp = int(baseline.opening_cash_cents)
-                        expected_cash = opening_cash_cents_tmp + projection.cash_delta_cents
-                    except ValueError:
-                        expected_cash = None
+                        post_fills = all_fills
+                broker_orders_map = {o.broker_order_id: o for o in orders.list_all_broker_orders()}
+                opening_cash_cents = baseline.opening_cash_cents
+                if type(opening_cash_cents) is not int or opening_cash_cents < 0:
+                    raise TypeError("baseline opening_cash_cents must be a non-negative integer")
+                cash_delta_cents = 0
+                for fill in post_fills:
+                    order = broker_orders_map.get(fill.broker_order_id)
+                    if order is None:
+                        raise LedgerInvariantError("fill references an unknown broker order")
+                    if order.side is OrderSide.BUY:
+                        cash_delta_cents -= fill.quantity.value * fill.price.cents
+                    else:
+                        cash_delta_cents += fill.quantity.value * fill.price.cents
+                    if abs(cash_delta_cents) > 1_000_000_000_000:
+                        raise LedgerInvariantError("projected cash delta exceeds the allowed range")
+                expected_cash = opening_cash_cents + cash_delta_cents
                 if expected_cash is not None:
-                    try:
-                        broker_cash = account.cash.cents
-                        if (
-                            abs(broker_cash - expected_cash)
-                            > self._account_policy.cash_tolerance_cents
-                        ):
-                            mismatches.append(
-                                ReconciliationMismatch(
-                                    kind=MismatchKind.CASH_MISMATCH,
-                                    detail=f"expected {expected_cash} got {broker_cash}",
-                                )
-                            )
-                    except ValueError:
+                    broker_cash = account.cash.cents
+                    if abs(broker_cash - expected_cash) > self._account_policy.cash_tolerance_cents:
                         mismatches.append(
                             ReconciliationMismatch(
-                                kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
-                                detail="cash reconciliation unavailable",
+                                kind=MismatchKind.CASH_MISMATCH,
+                                detail=f"expected {expected_cash} got {broker_cash}",
                             )
                         )
                 else:
@@ -561,7 +515,7 @@ class Reconciler:
                         for sym in projection.positions:
                             price = self._price_provider.current_price(sym)
                             if not isinstance(price, Price):
-                                raise ValueError(f"missing price for {sym.value}")
+                                raise TypeError("price provider must return Price")
                             prices[sym] = price
                         if expected_cash is None:
                             mismatches.append(
@@ -584,9 +538,8 @@ class Reconciler:
                                         detail=f"expected {nav} got {broker_equity}",
                                     )
                                 )
-                except ValueError as ve:
-                    # Missing price or valuation input is explicitly unavailable, not CLEAN.
-                    detail = str(ve)[:200] if str(ve).strip() else "valuation input missing"
+                except MarkPriceUnavailableError as error:
+                    detail = str(error)[:200] if str(error).strip() else "mark price unavailable"
                     mismatches.append(
                         ReconciliationMismatch(
                             kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
