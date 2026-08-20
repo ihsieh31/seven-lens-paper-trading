@@ -2,8 +2,8 @@
 
 最後更新：2026-08-19
 專案路徑：`/Users/zongen/Downloads/codex/trading`
-目前階段：`P2 Gate Reopened — final acceptance in progress`；ACC-001~008 已本機修復與 fresh 驗證，ACC-009 等待 exact final-commit remote CI
-下一個最小步驟：建立 final remediation commit、核對該 SHA 的 `quality-unit`／`postgres-integration`；全綠後才關閉 P2。真實下單仍留 P7
+目前階段：`P2 — Alpaca Paper 執行安全` final remediation 已完成；ACC-001~009 Closed，P2 Gate Closed
+下一個最小步驟：先與使用者討論 P3 SourceManifest／quarantine 工作包；真實下單仍留 P7，P2 關門不授權送出委託
 
 ---
 

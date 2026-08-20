@@ -383,7 +383,7 @@
 ## ADR-026：P2 最終修復——entry 互斥、cash checkpoint 與 immutable migration compatibility
 
 - 日期：2026-08-20
-- 狀態：Accepted implementation；本機 acceptance matrix 全綠，P2 Gate 仍 Reopened，等待 exact final-commit remote CI。
+- 狀態：Accepted；P2 Gate Closed。code-bearing commit `488f170` 的 exact-SHA GitHub Actions run `32360443947` 兩個 required jobs 全綠。
 - 決策：非 `RISK_EXIT` 新單以 `control_state FOR UPDATE` 互斥跨越 broker-submit 臨界區；第一個提交在 timeout 後先持久化 `UNKNOWN`，才允許下一個新單取得鎖並看見 unresolved gate。`RISK_EXIT` 不持此新 exposure 鎖。
 - 帳務：baseline revision 是 **cash checkpoint**，expected cash 為 checkpoint cash 加 post-cutoff cash delta；current NAV 的 lots/positions 永遠由 full fill ledger 取得。post-cutoff sell 可消耗 pre-cutoff lot，因此 cash delta 不以獨立 post-cutoff FIFO replay計算。genesis 只能在 fill ledger 空時建立，並以 PostgreSQL `fills` table lock 與第一筆 fill 序列化；有 fill 後 revision 必須帶真實 `(occurred_at, execution_id)` cutoff。
 - Authority：runtime role 對 `account_baselines` / `account_baseline_revisions` 僅有 SELECT；建立 genesis/revision 是 migration owner/operator capability，不向一般 runtime 暴露 arbitrary INSERT。
@@ -391,3 +391,4 @@
 - Late fill：fill fact 先 commit；derived mirror/intent projection 失敗先 rollback，再以同一 UoW 持久化 `entries_paused` 與 `PAUSE_ENTRIES` command，任何 safety persistence failure 以 typed error 可觀測地向外傳播。
 - Reconciliation failure taxonomy：mark provider 只有 `MarkPriceUnavailableError` 可轉為 `ACCOUNT_RECONCILIATION_UNAVAILABLE`；missing baseline 仍是 fail-closed mismatch。`ValueError`、`AttributeError`、`TypeError`、`PersistenceInvariantError` 與 configuration/programming defects 不得被降級，ledger corruption 由 `Reconciler.run` 轉為 durable `LOCAL_LEDGER_INVARIANT`。
 - 本機證據：676 non-integration passed / 91 deselected；PostgreSQL 16 integration 83 passed / 8 deselected；新增雙連線 thread race 證明 genesis 持有 `LOCK TABLE fills IN EXCLUSIVE MODE` 時第一筆 fill 阻塞，genesis commit 後 fill 才 commit；`verify_p1.sh` 與 `verify_p1.sh --postgres` 均 exit 0。
+- 遠端證據：GitHub Actions [`32360443947`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/32360443947) 在 exact code-bearing SHA `488f170` 上 `quality-unit` 與 `postgres-integration` 均成功；ACC-009 關閉。

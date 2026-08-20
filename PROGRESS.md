@@ -2,10 +2,10 @@
 
 ## 狀態摘要
 
-- 專案階段：P2 Gate Reopened — final acceptance in progress。ACC-001~008 已在本機修復並以 fresh locked/real-PostgreSQL gates 驗證；ACC-009 等待 exact final-commit remote CI。這不授權真實下單。
+- 專案階段：P2 — Alpaca Paper 執行安全；Gate Closed（2026-08-20 final remediation ACC-001~009 全部關閉）。這不授權真實下單。
 - 完成度定義：只以路線圖的可驗證交付物計算，不以主觀百分比計算。
 - 最近更新：2026-08-20
-- 下一個 gate：先完成 final commit 的遠端 `quality-unit`／`postgres-integration`；通過後才關閉 P2 並討論 P3 SourceManifest／quarantine。WS/CLI 與真實下單仍分別留 P6/P7。
+- 下一個 gate：先與使用者討論 P3 SourceManifest／quarantine；WS/CLI 與真實下單仍分別留 P6/P7。
 - 歷史：P2 曾於 2026-08-19 及 P2-CUR 修復後標示 Closed；2026-08-20 依 final remediation ACC-001~009 再次重開。歷史 Closed 紀錄保留，但不是目前狀態。
 
 ## 已完成
@@ -352,7 +352,7 @@ re-acceptance.**
 - 治理同步：R-24 重標 `Mitigated` 並引用 read round-trip 測試、`ISSUES.md` CLOSED-021 superseded、README/SECURITY/DEFERRED-013/015 與 ROADMAP/ADR-019 的 P2/WS/CLI 範圍一致化（本輪不實作 WS transport / control CLI）。
 - 最終證據（2026-08-20 本機）：Ruff format/check、mypy strict 92 檔全綠；non-integration 637 passed / 77 deselected（新增 `TestLateFill` / `TestFifo` / `TestLedgerInvariant` / `TestUnknownGate` / `TestAccountReconciliation` 等，見 `tests/test_*`）；真實 disposable PostgreSQL 16 `69 passed / 8 deselected`（`verify_p1.sh --postgres` EXIT=0，含 `account_baselines` 權限與 `0008 up/down/up`）；`RISK_REGISTER` R-24、`ISSUES` SUPERSEDED-021 與本文件已同步。P2 gate **再次 Closed**；不新增 live endpoint，P7 真實下單仍留後續 supervised gate。
 
-## P2 最終修復（2026-08-20）：本機完成，Gate Reopened 等待 remote CI
+## P2 最終修復（2026-08-20）：Gate Closed — ACC-001~009
 
 - 原始重開判定：依據 `SEVEN_LENS_P2_FINAL_REMEDIATION_AGENT_PROMPT.md`（HEAD `0f8281b`）重開 P2 gate；當時 ACC-001~009 尚未完成，因此不得宣告 P2 Complete：
   1. ACC-001 併發新單可同時越過 broker 邊界（`FOR SHARE` 可共存）；
@@ -370,4 +370,4 @@ re-acceptance.**
 - 本輪補齊 ACC-005 真實競態：`test_genesis_baseline_creation_race_with_first_fill_is_serialized` 使用兩個 `PostgresUnitOfWork`、兩條 thread、Events、bounded timeout；證明 genesis transaction 持 lock 時 first-fill INSERT 阻塞，genesis commit 後 fill 才 commit。
 - 本輪補齊 ACC-006 typed taxonomy：新增 `MarkPriceUnavailableError`；只有此 expected absence 轉 `ACCOUNT_RECONCILIATION_UNAVAILABLE`。unexpected `ValueError`、`AttributeError`、`TypeError`、`PersistenceInvariantError` 均向外傳播，missing baseline 保持 fail-closed mismatch。
 - Fresh 本機證據：`uv lock --check --offline` exit 0；Ruff format/check、mypy exit 0；non-integration `676 passed, 91 deselected`；PostgreSQL 16 `83 passed, 8 deselected, 0 skipped`；`verify_p1.sh` 與 `verify_p1.sh --postgres` 均 exit 0。
-- Gate 判定仍為 **Reopened**：ACC-001~008 本機 Closed；ACC-009 只剩 exact final-commit 的 GitHub Actions `quality-unit`／`postgres-integration`。不得以舊 run 或舊 SHA 取代。
+- 遠端證據：exact code-bearing SHA `488f170` 的 GitHub Actions [`32360443947`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/32360443947) 中 `quality-unit`（19s）與 `postgres-integration`（1m8s）均成功。ACC-009 Closed，P2 Gate **Closed**。

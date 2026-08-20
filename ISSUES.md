@@ -292,7 +292,7 @@
 ## P2-ACC-001：併發新單 shared lock 可同時越過 broker — P2 Blocker（High/Safety）
 
 - 嚴重度：High / Safety Blocker
-- 狀態：Closed locally（2026-08-20；等待 ACC-009 exact final-commit remote CI）
+- 狀態：Closed（2026-08-20；本機與 exact-SHA remote CI 證據完成）
 - 原始問題：`PostgresControlRepository.submission_guard()` 曾採 `FOR SHARE`，兩個新單可同時持有相容鎖並先後進入 broker.submit，超時轉 UNKNOWN 前第二單已建立新 exposure。
 - 影響：違反「一旦有模糊提交朝 UNKNOWN 競賽，不得有第二個新單越過 broker 邊界」安全不變量。
 - 修復：目前程式使用 `FOR UPDATE` 使非 `RISK_EXIT` 新單 broker 臨界區互斥；timeout 的 A 先 durable UNKNOWN/pause，B 才取得鎖並 fail closed；`RISK_EXIT` 豁免。
@@ -301,21 +301,21 @@
 ## P2-ACC-002：baseline cutoff 錯誤丟失 cutoff 前部位的 NAV — P2 Blocker（High/Accounting）
 
 - 嚴重度：High / Accounting Blocker
-- 狀態：Closed locally（2026-08-20；等待 ACC-009 remote CI）
+- 狀態：Closed（2026-08-20；本機與 exact-SHA remote CI 證據完成）
 - 原始問題：有 cutoff 的 revision 以 `post_projection` 同時計算 cash 與 NAV，導致 cutoff 前已建倉且仍持有的部位自 NAV 消失。
 - 修復／驗收：cash 使用 checkpoint + post-cutoff fill delta；NAV positions/lots 永遠使用 full ledger。pre-cutoff position NAV、post-cutoff partial sell、same-timestamp execution-id tie-break tests 全綠。
 
 ## P2-ACC-003：runtime role 可任意 INSERT baseline revision — P2 Blocker（High/Authority）
 
 - 嚴重度：High / Authority Blocker
-- 狀態：Closed locally（2026-08-20；等待 ACC-009 remote CI）
+- 狀態：Closed（2026-08-20；本機與 exact-SHA remote CI 證據完成）
 - 原始問題：runtime 被授予 `account_baselines`/`account_baseline_revisions` 的 INSERT，追加最新 revision 即可竄改權威。
 - 修復／驗收：runtime 對兩表僅 SELECT，INSERT/UPDATE/DELETE 均無權；owner/operator path 保留顯式 authority。兩個 runtime INSERT denial tests 與 privileged create/revision tests 於真實 PG 全綠。
 
 ## P2-ACC-004：合法 0008 mutated baseline 使 0009 遷移失敗 — P2 Blocker（High/Migration）
 
 - 嚴重度：High / Migration Blocker
-- 狀態：Closed locally（2026-08-20；等待 ACC-009 remote CI）
+- 狀態：Closed（2026-08-20；本機與 exact-SHA remote CI 證據完成）
 - 原始問題：0008 允許 UPDATE effective_at 而保留原 created_at，使 `effective_at > created_at` 合法；0009 以原 created_at 建 revision 並設 `CHECK (effective_at <= created_at)`，該合法 0008 狀態升級至 0009 即失敗。
 - 修復：不改 checksummed 0009。runner 只對 8→9 compatibility transaction 暫時以 legacy `effective_at` 取代 source `created_at`，完成 copy 後還原 source original `created_at`。revision `created_at` 的語意精確為 legacy `effective_at`／authority-effective timestamp，不是 migration execution time。
 - 驗收：mutated 0008 test 精確斷言 revision `created_at == legacy effective_at` 且 source `created_at` 原值保留；canonical 0008、clean latest、existing 0009/current、down/up 與 checksum gates 全綠。migration files/checksums 未變。
@@ -323,14 +323,14 @@
 ## P2-ACC-005：genesis baseline 僅文件限制，無強制不變量 — P2 Blocker（High/Accounting）
 
 - 嚴重度：High / Accounting semantics Blocker
-- 狀態：Closed locally（2026-08-20；等待 ACC-009 remote CI）
+- 狀態：Closed（2026-08-20；本機與 exact-SHA remote CI 證據完成）
 - 原始問題：`set_baseline()` 宣稱僅在無 fills 前可創 genesis，實際未強制且非事務安全，競態可產生 `fill 與 genesis 交錯`。
 - 修復／驗收：`LOCK TABLE fills IN EXCLUSIVE MODE` 與 ledger check 在同一 transaction；新增兩個獨立 UoW/thread 的 `test_genesis_baseline_creation_race_with_first_fill_is_serialized`，以 Events、bounded joins、`lock_timeout` 證明 genesis 持鎖期間 first fill INSERT 阻塞，genesis commit 後才提交。empty-ledger allow、after-fill reject、revision cutoff tests 全綠。
 
 ## P2-ACC-006：Account 對帳仍將程式缺陷降級為 UNAVAILABLE — P2 Blocker（Medium-High）
 
 - 嚴重度：Medium-High
-- 狀態：Closed locally（2026-08-20；等待 ACC-009 remote CI）
+- 狀態：Closed（2026-08-20；本機與 exact-SHA remote CI 證據完成）
 - 原始問題：account reconciliation 仍以 broad `except ValueError` 處理 expected external/input absence，可能將程式或設定缺陷降級為 `ACCOUNT_RECONCILIATION_UNAVAILABLE`。
 - 修復：新增 `MarkPriceUnavailableError`，只有 typed expected mark absence 轉 unavailable；unexpected `ValueError`、`AttributeError`、`TypeError`、`PersistenceInvariantError` 皆向外傳播。missing baseline 保持 fail-closed mismatch；ledger corruption 由外層轉 durable `LOCAL_LEDGER_INVARIANT`。
 - 驗收：附件指定的 7 個 failure-taxonomy tests 全綠，未弱化原測試。
@@ -338,21 +338,21 @@
 ## P2-ACC-007：衝突遲到 fill 未持久化 reconciliation-required 證據 — P2 Blocker（Medium-High/Safety）
 
 - 嚴重度：Medium-High / Safety
-- 狀態：Closed locally（2026-08-20；等待 ACC-009 remote CI）
+- 狀態：Closed（2026-08-20；本機與 exact-SHA remote CI 證據完成）
 - 原始問題：`TradeUpdateConsumer._apply_fill` 於衝突時保留 fill 並 rollback 衍生狀態但未持久化 entries_paused/PAUSE 命令，控制面重啟後仍可建新單。
 - 修復／驗收：fill fact 先 commit、partial derived state rollback，再 durable pause + `PAUSE_ENTRIES`，最後拋 typed failure；fresh connection test 可見 fill fact 與 pause。
 
 ## P2-ACC-008：治理文件仍稱 P2 Closed — P2 Blocker（Medium/Governance）
 
 - 嚴重度：Medium / Governance
-- 狀態：Closed locally（2026-08-20；等待 ACC-009 remote CI 後更新最終 Closed state）
+- 狀態：Closed（2026-08-20；治理與 exact-SHA remote CI 證據完成）
 - 原始問題：README/PROGRESS top-level 曾稱 P2 Closed，後段又稱 Reopened；ACC-001 也仍將現行程式描述為 `FOR SHARE`。
-- 處置：README、PROGRESS、ISSUES、RISK_REGISTER、DECISIONS 與 PROJECT_HANDOFF 現在一致標示 `P2 Gate Reopened — final acceptance in progress`，歷史 Closed 紀錄保留並清楚標為歷史；current implementation 明載 `FOR UPDATE`。
+- 處置：修復／本機驗證期間，上述文件一致標示 `P2 Gate Reopened — final acceptance in progress`；exact-SHA remote CI 全綠後再一致更新為 `P2 Gate Closed`。歷史 Closed／Reopened chronology 保留；current implementation 明載 `FOR UPDATE`。
 
-## OPEN-P2-ACC-009：缺完整回歸與關鍵場景證據 — P2 Blocker（Acceptance）
+## P2-ACC-009：缺完整回歸與關鍵場景證據 — P2 Blocker（Acceptance）
 
 - 嚴重度：Acceptance Blocker
-- 狀態：Open（2026-08-20；本機部分已完成，只缺 exact final-commit remote CI）
+- 狀態：Closed（2026-08-20）
 - 原始問題：缺少 fresh 完整鎖定 gate、真實 PG threading race／重啟／遷移／權限與 final-HEAD 遠端證據。
 - 本機證據：lock、Ruff format/check、mypy 全綠；non-integration `676 passed, 91 deselected`；real PostgreSQL 16 `83 passed, 8 deselected, 0 skipped`；`verify_p1.sh` 與 `verify_p1.sh --postgres` exit 0。併發 B=0、重啟 UNKNOWN、RISK_EXIT、genesis-vs-fill race、衝突 fill restart pause、0008→latest、runtime INSERT denial、cutoff NAV 全部可重現。
-- 剩餘關閉條件：建立並推送 final remediation commit，確認該 exact SHA 的 GitHub Actions `quality-unit` 與 `postgres-integration` 均成功；不得沿用舊 run。
+- 遠端證據：code-bearing commit `488f170` 已推送；GitHub Actions [`32360443947`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/32360443947) 在該 exact SHA 上 `quality-unit`（19s）與 `postgres-integration`（1m8s）均成功。未沿用舊 run。
