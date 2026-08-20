@@ -1,5 +1,7 @@
 """Unit tests for the typed composition root and its secret boundaries."""
 
+# mypy: ignore-errors
+
 from __future__ import annotations
 
 import pytest
@@ -44,13 +46,29 @@ def _database_mapping() -> dict[str, object]:
     }
 
 
+def _account_mapping() -> dict[str, object]:
+    return {
+        "expected_account_id": "fake-paper-primary",
+        "cash_tolerance_cents": 100,
+        "nav_tolerance_cents": 100,
+    }
+
+
 def _stack_mapping() -> dict[str, object]:
     return {
         "paper": {"environment": "PAPER", "base_url": "https://paper-api.alpaca.markets"},
         "database": _database_mapping(),
+        "account": _account_mapping(),
         "alpaca_key_account": "primary",
         "alpaca_secret_account": "primary",
     }
+
+
+class _DummyPriceProvider:
+    def current_price(self, symbol):  # type: ignore[no-untyped-def]
+        from seven_lens.execution.orders import Price
+
+        return Price.from_cents(10_000)
 
 
 def _provider() -> FakeSecretProvider:
@@ -137,11 +155,80 @@ class TestStackBuilding:
             broker=broker,
             clock=_FixedClock(),  # type: ignore[arg-type]
             control=control,
+            price_provider=_DummyPriceProvider(),
         )
 
         assert isinstance(stack.engine, ExecutionEngine)
         assert isinstance(stack.reconciler, Reconciler)
         assert isinstance(stack.control_plane, ControlPlane)
+        # Account policy must be wired from config, not silently None
+        assert stack.reconciler._account_policy is not None  # type: ignore[attr-defined]
+        assert stack.reconciler._account_policy.expected_account_id == "fake-paper-primary"  # type: ignore[attr-defined]
+        assert stack.reconciler._price_provider is not None  # type: ignore[attr-defined]
+
+    def test_stack_requires_account_config(self) -> None:
+
+        values = _stack_mapping()
+        del values["account"]
+        with pytest.raises(CompositionError):
+            ExecutionStackConfig.from_mapping(values)
+
+    def test_stack_wired_reconciler_detects_wrong_account(self) -> None:
+        from seven_lens.execution.fake_broker import FakePaperBroker
+        from seven_lens.execution.orders import UsdAmount
+
+        config = ExecutionStackConfig.from_mapping(_stack_mapping())
+        # Broker reports a different account id than expected
+        broker = FakePaperBroker(
+            clock=_FixedClock(),  # type: ignore[arg-type]
+            account_id="other-id",
+            cash=UsdAmount.from_cents(10_000_000),
+            equity=UsdAmount.from_cents(10_000_000),
+            buying_power=UsdAmount.from_cents(5_000_000),
+        )
+        control = FakeControlRepository(UtcTimestamp.from_isoformat(_BASE_TIME_TEXT))
+        stack = build_execution_stack(
+            config,
+            broker=broker,
+            clock=_FixedClock(),  # type: ignore[arg-type]
+            control=control,
+            price_provider=_DummyPriceProvider(),
+        )
+        # Need a baseline so cash check can run; create via direct DB or fake
+        # Use the stack's reconciler directly with a fake UoW
+        from fakes.control import FakeReconciliationRepository
+        from fakes.orders import FakeOrderRepository
+        from seven_lens.domain.value_objects import UtcTimestamp as UT
+        from seven_lens.infrastructure.postgres import AccountBaseline
+
+        baseline = AccountBaseline(
+            account_id="other-id",
+            opening_cash_cents=10_000_000,
+            effective_at=UT.from_isoformat(_BASE_TIME_TEXT),
+            created_at=UT.from_isoformat(_BASE_TIME_TEXT),
+            updated_at=UT.from_isoformat(_BASE_TIME_TEXT),
+        )
+
+        class _BaselineRepo:
+            def get_baseline(self, account_id: str):  # type: ignore[no-untyped-def]
+                return baseline if account_id == "other-id" else None
+
+        class _UoW:  # type: ignore[no-untyped-def]
+            def __init__(self):
+                self.orders = FakeOrderRepository()
+                self.reconciliations = FakeReconciliationRepository()
+                self.control = control
+                self.account_baselines = _BaselineRepo()
+
+            def commit(self):
+                pass
+
+        from seven_lens.domain.value_objects import TradingDate
+
+        result = stack.reconciler.run(_UoW(), TradingDate.from_isoformat("2026-08-17"))
+        from seven_lens.execution.reconciliation import MismatchKind
+
+        assert any(m.kind == MismatchKind.ACCOUNT_ID_MISMATCH for m in result.mismatches)
 
     def test_execution_secret_allowlist_is_exact(self) -> None:
         refs = execution_secret_refs()

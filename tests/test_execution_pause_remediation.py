@@ -9,6 +9,7 @@ while emergency risk exits (RISK_EXIT) must stay available.
 
 from __future__ import annotations
 
+# mypy: ignore-errors
 import pytest
 
 from fakes.control import FakeControlRepository

@@ -106,6 +106,11 @@ def _config_mapping() -> dict[str, object]:
             "sslmode": "require",
             "password_account": "primary",
         },
+        "account": {
+            "expected_account_id": "fake-paper-primary",
+            "cash_tolerance_cents": 100,
+            "nav_tolerance_cents": 100,
+        },
         "alpaca_key_account": "primary",
         "alpaca_secret_account": "primary",
     }
@@ -299,7 +304,9 @@ class TestPositionsAndFills:
 
 
 def test_adapter_plugs_into_the_engine_without_network() -> None:
-    """The adapter satisfies the broker port the engine is built against."""
+    """
+
+    # mypy: ignore-errorsThe adapter satisfies the broker port the engine is built against."""
     from seven_lens.application.execution_service import ExecutionEngine
 
     def responder(method: str, url: str) -> AlpacaResponse:

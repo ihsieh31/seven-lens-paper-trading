@@ -8,11 +8,13 @@ replayed test stream feeds it typed updates.  Safety rules:
   observation is reported STALE and changes nothing;
 * an update for an order we never recorded is UNKNOWN_ORDER, never a guess;
 * any state the closed lifecycle cannot represent surfaces as a typed error
-  for reconciliation, with nothing committed.
+  for reconciliation; the execution fact (fill) is durable, but derived
+  mirror/intent mutations are rolled back on conflict.
 """
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
@@ -120,6 +122,8 @@ class _ConsumerUnitOfWork(Protocol):
 
     def commit(self) -> None: ...
 
+    def rollback(self) -> None: ...
+
 
 class TradeUpdateConsumer:
     """Applies one update at a time; every outcome is explicit and auditable."""
@@ -139,6 +143,9 @@ class TradeUpdateConsumer:
         if not inserted:
             unit_of_work.commit()
             return TradeUpdateOutcome.DUPLICATE
+        # Make the execution fact durable before attempting derived state.
+        # If the commit itself fails, the fill is not durable and we propagate.
+        unit_of_work.commit()
         try:
             total = sum(
                 item.quantity.value
@@ -178,19 +185,12 @@ class TradeUpdateConsumer:
                     broker_target = candidate
                 else:
                     broker_target = mirror.status
-            # If nothing about the mirror would change, keep the fill and return.
+            # If nothing about the mirror would change, the fill is already durable.
             if (
                 broker_target is mirror.status
                 and new_filled == mirror.filled_quantity
                 and new_observed is None
             ):
-                # Still check intent progression when the mirror stays put but the
-                # fill itself represents progress (e.g. pending cancel staying).
-                intent = unit_of_work.orders.get(mirror.client_order_id)
-                if intent is not None:
-                    # Late fill absorbed without mirror mutation is still APPLIED.
-                    pass
-                unit_of_work.commit()
                 return TradeUpdateOutcome.APPLIED
             unit_of_work.orders.update_broker_order_status(
                 mirror.broker_order_id,
@@ -218,16 +218,14 @@ class TradeUpdateConsumer:
             unit_of_work.commit()
             return TradeUpdateOutcome.APPLIED
         except TradeUpdateError:
-            import contextlib
-
+            # Roll back only the derived mirror/intent mutations; the fill
+            # itself was already committed and must survive.
             with contextlib.suppress(Exception):
-                unit_of_work.commit()
+                unit_of_work.rollback()
             raise
         except Exception as exc:
-            import contextlib
-
             with contextlib.suppress(Exception):
-                unit_of_work.commit()
+                unit_of_work.rollback()
             raise TradeUpdateError(
                 "trade update cannot be applied fail-safely; reconciliation required"
             ) from exc

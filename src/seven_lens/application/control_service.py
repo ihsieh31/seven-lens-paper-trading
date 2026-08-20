@@ -110,6 +110,8 @@ class _ControlUnitOfWork(Protocol):
 
     def commit(self) -> None: ...
 
+    def rollback(self) -> None: ...
+
 
 class ControlPlane:
     """Applies operator commands transactionally with an append-only audit log."""

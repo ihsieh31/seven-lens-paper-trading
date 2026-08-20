@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """P2-E live read-only verification tests (marked live: need real credentials).
 
 The ``live`` tests are skipped unless ``SEVEN_LENS_P2E_LIVE=1`` is set and

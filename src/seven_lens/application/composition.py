@@ -21,7 +21,11 @@ from seven_lens.application.execution_service import ExecutionEngine
 from seven_lens.application.ports.broker import PaperBrokerPort
 from seven_lens.application.ports.persistence import ControlRepository
 from seven_lens.application.ports.secrets import SecretProvider
-from seven_lens.application.reconciliation_service import Reconciler
+from seven_lens.application.reconciliation_service import (
+    AccountReconciliationPolicy,
+    Reconciler,
+    ReconciliationMarkPriceProvider,
+)
 from seven_lens.config.broker import PaperBrokerConfig, validate_paper_startup
 from seven_lens.domain.value_objects import UtcTimestamp
 from seven_lens.security.secret_values import (
@@ -103,11 +107,52 @@ class RuntimeDatabaseConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class AccountReconciliationConfig:
+    """Typed account reconciliation policy; never learned from the broker."""
+
+    expected_account_id: str
+    cash_tolerance_cents: int
+    nav_tolerance_cents: int
+
+    def __post_init__(self) -> None:
+        if (
+            type(self.expected_account_id) is not str
+            or not self.expected_account_id.strip()
+            or len(self.expected_account_id) > 100
+        ):
+            raise CompositionError("account expected_account_id must be bounded text up to 100")
+        if type(self.cash_tolerance_cents) is not int or self.cash_tolerance_cents < 0:
+            raise CompositionError("account cash_tolerance_cents must be a non-negative integer")
+        if type(self.nav_tolerance_cents) is not int or self.nav_tolerance_cents < 0:
+            raise CompositionError("account nav_tolerance_cents must be a non-negative integer")
+
+    @classmethod
+    def from_mapping(cls, values: Mapping[str, object]) -> AccountReconciliationConfig:
+        expected = {"expected_account_id", "cash_tolerance_cents", "nav_tolerance_cents"}
+        if set(values) != expected:
+            missing = sorted(expected - set(values))
+            extra = sorted(set(values) - expected)
+            raise CompositionError(
+                f"invalid account configuration fields: missing={missing}, extra={extra}"
+            )
+        return cls(
+            expected_account_id=_text(values["expected_account_id"], "expected_account_id"),
+            cash_tolerance_cents=_positive_int(
+                values["cash_tolerance_cents"], "cash_tolerance_cents", allow_zero=True
+            ),
+            nav_tolerance_cents=_positive_int(
+                values["nav_tolerance_cents"], "nav_tolerance_cents", allow_zero=True
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class ExecutionStackConfig:
     """The complete typed startup input for the execution stack."""
 
     paper: PaperBrokerConfig
     database: RuntimeDatabaseConfig
+    account: AccountReconciliationConfig
     alpaca_key_account: str
     alpaca_secret_account: str
 
@@ -116,6 +161,8 @@ class ExecutionStackConfig:
             raise CompositionError("paper must be a validated PaperBrokerConfig")
         if not isinstance(self.database, RuntimeDatabaseConfig):
             raise CompositionError("database must be a RuntimeDatabaseConfig")
+        if not isinstance(self.account, AccountReconciliationConfig):
+            raise CompositionError("account must be an AccountReconciliationConfig")
         if type(self.alpaca_key_account) is not str or self.alpaca_key_account != "primary":
             raise CompositionError("alpaca key account must be 'primary'")
         if type(self.alpaca_secret_account) is not str or self.alpaca_secret_account != "primary":
@@ -124,7 +171,7 @@ class ExecutionStackConfig:
     @classmethod
     def from_mapping(cls, values: Mapping[str, object]) -> ExecutionStackConfig:
         """Parse the exact nested schema; nothing unknown survives this edge."""
-        expected = {"paper", "database", "alpaca_key_account", "alpaca_secret_account"}
+        expected = {"paper", "database", "account", "alpaca_key_account", "alpaca_secret_account"}
         if set(values) != expected:
             missing = sorted(expected - set(values))
             extra = sorted(set(values) - expected)
@@ -137,9 +184,13 @@ class ExecutionStackConfig:
         database_values = values["database"]
         if not isinstance(database_values, Mapping):
             raise CompositionError("database configuration must be a mapping")
+        account_values = values["account"]
+        if not isinstance(account_values, Mapping):
+            raise CompositionError("account configuration must be a mapping")
         return cls(
             paper=PaperBrokerConfig.from_mapping(paper_values),
             database=RuntimeDatabaseConfig.from_mapping(database_values),
+            account=AccountReconciliationConfig.from_mapping(account_values),
             alpaca_key_account=_text(values["alpaca_key_account"], "alpaca_key_account"),
             alpaca_secret_account=_text(values["alpaca_secret_account"], "alpaca_secret_account"),
         )
@@ -190,12 +241,25 @@ def build_execution_stack(
     broker: PaperBrokerPort,
     clock: Callable[[], UtcTimestamp],
     control: ControlRepository,
+    price_provider: ReconciliationMarkPriceProvider,
 ) -> ExecutionStack:
     """Validate Paper-only startup and wire the deterministic services."""
     validate_paper_startup(config.paper)
+    if not hasattr(price_provider, "current_price"):
+        raise CompositionError("price_provider must implement current_price")
+    account_policy = AccountReconciliationPolicy(
+        expected_account_id=config.account.expected_account_id,
+        cash_tolerance_cents=config.account.cash_tolerance_cents,
+        nav_tolerance_cents=config.account.nav_tolerance_cents,
+    )
     return ExecutionStack(
         engine=ExecutionEngine(broker=broker, clock=clock, control=control),
-        reconciler=Reconciler(broker=broker, clock=clock),
+        reconciler=Reconciler(
+            broker=broker,
+            clock=clock,
+            account_policy=account_policy,
+            price_provider=price_provider,
+        ),
         control_plane=ControlPlane(clock=clock),
     )
 
@@ -209,6 +273,17 @@ def _text(value: object, field_name: str) -> str:
 def _port(value: object) -> int:
     if type(value) is not int or not 1 <= value <= 65_535:
         raise CompositionError("port must be an integer between 1 and 65535")
+    return value
+
+
+def _positive_int(value: object, field_name: str, *, allow_zero: bool = False) -> int:
+    if type(value) is not int:
+        raise CompositionError(f"{field_name} must be an integer")
+    if allow_zero:
+        if value < 0:
+            raise CompositionError(f"{field_name} must be a non-negative integer")
+    elif value <= 0:
+        raise CompositionError(f"{field_name} must be a positive integer")
     return value
 
 

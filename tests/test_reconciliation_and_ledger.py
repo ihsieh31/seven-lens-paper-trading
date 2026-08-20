@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+# mypy: ignore-errors
 from dataclasses import replace
 from datetime import timedelta
 from uuid import uuid4

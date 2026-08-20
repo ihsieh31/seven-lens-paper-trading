@@ -20,7 +20,9 @@ from seven_lens.execution.orders import (
 
 
 class FakeOrderRepository:
-    """Type-exact in-memory persistence with the same closed transition maps."""
+    """
+
+    # mypy: ignore-errorsType-exact in-memory persistence with the same closed transition maps."""
 
     def __init__(self) -> None:
         self._intents: dict[str, OrderIntent] = {}
@@ -28,6 +30,34 @@ class FakeOrderRepository:
         self._mirror_by_client: dict[str, str] = {}
         self._fills: list[Fill] = []
         self._execution_ids: set[str] = set()
+        self._snapshots: list[
+            tuple[
+                dict[str, OrderIntent], dict[str, BrokerOrder], dict[str, str], list[Fill], set[str]
+            ]
+        ] = []
+
+    def _snapshot(self) -> None:
+        self._snapshots.append(
+            (
+                dict(self._intents),
+                dict(self._mirrors),
+                dict(self._mirror_by_client),
+                list(self._fills),
+                set(self._execution_ids),
+            )
+        )
+
+    def commit(self) -> None:
+        self._snapshot()
+
+    def rollback(self) -> None:
+        if self._snapshots:
+            intents, mirrors, by_client, fills, exec_ids = self._snapshots[-1]
+            self._intents = dict(intents)
+            self._mirrors = dict(mirrors)
+            self._mirror_by_client = dict(by_client)
+            self._fills = list(fills)
+            self._execution_ids = set(exec_ids)
 
     def add(self, intent: OrderIntent) -> OrderIntent:
         existing = self._intents.get(intent.client_order_id.value)

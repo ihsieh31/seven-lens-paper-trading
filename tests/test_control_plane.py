@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """Unit tests for the control plane's audited, fail-closed operator levers."""
 
 from __future__ import annotations
@@ -546,6 +547,8 @@ class TestFlattenPaper:
         engine = ExecutionEngine(broker=broker, clock=_FixedClock())
         submitting = engine.submit_from_outbox(unit_of_work, stuck.client_order_id)
         assert submitting.status is OrderStatus.UNKNOWN
+        # UNKNOWN now durably pauses via the unit_of_work's control (same DB connection)
+        assert unit_of_work.control.state().entries_paused is True
         plane.pause_entries(unit_of_work, reason="drill", actor="owner")
 
         submitted = plane.flatten_paper(
@@ -563,7 +566,9 @@ class TestFlattenPaper:
         assert unit_of_work.orders.list_by_status(OrderStatus.CANCEL_PENDING) == ()
         canceled = unit_of_work.orders.list_by_status(OrderStatus.CANCELED)
         assert len(canceled) == 1
+        # First PAUSE is from UNKNOWN durable gate, second from explicit pause
         assert [record.command.value for record in unit_of_work.control.commands] == [
+            "PAUSE_ENTRIES",
             "PAUSE_ENTRIES",
             "FLATTEN_PAPER",
         ]

@@ -93,6 +93,10 @@ class ExecutionPausedError(RuntimeError):
     """
 
 
+class ControlPersistenceError(RuntimeError):
+    """Raised when the durable pause/audit cannot be persisted."""
+
+
 class _ControlStateSource(Protocol):
     def state(self) -> ControlStateSnapshot: ...
 
@@ -108,6 +112,8 @@ class _OrderUnitOfWork(Protocol):
     def orders(self) -> OrderRepository: ...
 
     def commit(self) -> None: ...
+
+    def rollback(self) -> None: ...
 
 
 class ExecutionEngine:
@@ -340,18 +346,34 @@ class ExecutionEngine:
                     submitting.client_order_id, OrderStatus.UNKNOWN
                 )
                 unit_of_work.commit()
-                self._pause_for_reconciliation_required(submitting)
+                self._pause_for_reconciliation_required(submitting, unit_of_work)
             return submitting
 
     @contextmanager
     def _entry_submission_guard(
         self, intent: OrderIntent, unit_of_work: _OrderUnitOfWork | None = None
     ) -> Iterator[None]:
-        """Linearize a new entry before a concurrent pause becomes visible."""
-        if self._control is None or intent.intent_type is OrderIntentType.RISK_EXIT:
+        """Linearize a new entry before a concurrent pause becomes visible.
+
+        The guard and the unresolved-intent check must be on the same
+        PostgreSQL connection as the order write to avoid cross-connection
+        self-deadlock.  When the caller's unit of work exposes a control
+        repository (PostgresUnitOfWork), we use that; otherwise we fall back
+        to the construction-time control.
+        """
+        if intent.intent_type is OrderIntentType.RISK_EXIT:
             yield
             return
-        with self._control.submission_guard() as state:
+        # Prefer the caller's control (same DB connection) to avoid A-waits-B / B-waits-A.
+        control = None
+        if unit_of_work is not None:
+            control = getattr(unit_of_work, "control", None)
+        if control is None:
+            control = self._control
+        if control is None:
+            yield
+            return
+        with control.submission_guard() as state:
             if state.entries_paused:
                 raise ExecutionPausedError(
                     "entries are paused; new intents cannot submit until a CLEAN "
@@ -370,36 +392,56 @@ class ExecutionEngine:
                 return True
         return False
 
-    def _pause_for_reconciliation_required(self, intent: OrderIntent) -> None:
-        """Durably block new entries after an ambiguous broker outcome."""
-        if self._control is None or intent.intent_type is OrderIntentType.RISK_EXIT:
+    def _pause_for_reconciliation_required(
+        self, intent: OrderIntent, unit_of_work: _OrderUnitOfWork | None = None
+    ) -> None:
+        """Durably block new entries after an ambiguous broker outcome.
+
+        Failures are not swallowed: a persistence failure raises
+        ControlPersistenceError so the caller can observe that the operator
+        mirror is not durable, even though the primary UNKNOWN gate remains.
+        """
+        if intent.intent_type is OrderIntentType.RISK_EXIT:
+            return
+        control = None
+        uow_for_commit = None
+        if unit_of_work is not None and hasattr(unit_of_work, "control"):
+            # Use the same DB connection as the order write.
+            control = getattr(unit_of_work, "control", None)
+            uow_for_commit = unit_of_work
+        if control is None:
+            control = self._control
+        if control is None:
             return
         try:
-            self._control.set_entries_paused(
-                True, "reconciliation required; ambiguous broker outcome"
-            )
-            # Best-effort audit; failure to record the command does not clear the pause.
-            try:
-                from uuid import uuid4
+            control.set_entries_paused(True, "reconciliation required; ambiguous broker outcome")
+        except Exception as exc:
+            raise ControlPersistenceError("failed to persist entries_paused") from exc
+        try:
+            from uuid import uuid4
 
-                from seven_lens.execution.control import ControlCommand, ControlCommandRecord
+            from seven_lens.execution.control import ControlCommand, ControlCommandRecord
 
-                now = self._clock()
-                self._control.add_command(
-                    ControlCommandRecord(
-                        command_id=uuid4(),
-                        command=ControlCommand.PAUSE_ENTRIES,
-                        reason="automatic pause on ambiguous broker outcome",
-                        actor="execution_engine",
-                        run_id=None,
-                        requested_at=now,
-                        applied_at=now,
-                    )
+            now = self._clock()
+            control.add_command(
+                ControlCommandRecord(
+                    command_id=uuid4(),
+                    command=ControlCommand.PAUSE_ENTRIES,
+                    reason="automatic pause on ambiguous broker outcome",
+                    actor="execution_engine",
+                    run_id=None,
+                    requested_at=now,
+                    applied_at=now,
                 )
-            except Exception:
-                pass
-        except Exception:
-            pass
+            )
+        except Exception as exc:
+            raise ControlPersistenceError("failed to persist pause audit command") from exc
+        # Commit the pause on the same transaction as the UNKNOWN if possible.
+        if uow_for_commit is not None and hasattr(uow_for_commit, "commit"):
+            try:
+                uow_for_commit.commit()
+            except Exception as exc:
+                raise ControlPersistenceError("failed to commit pause transaction") from exc
 
     def _submit_while_guarded(
         self, unit_of_work: _OrderUnitOfWork, submitting: OrderIntent
@@ -411,12 +453,12 @@ class ExecutionEngine:
                 submitting.client_order_id, OrderStatus.UNKNOWN
             )
             unit_of_work.commit()
-            self._pause_for_reconciliation_required(submitting)
+            self._pause_for_reconciliation_required(submitting, unit_of_work)
             return unknown
         except BrokerConflictError as error:
             unit_of_work.orders.transition_status(submitting.client_order_id, OrderStatus.UNKNOWN)
             unit_of_work.commit()
-            self._pause_for_reconciliation_required(submitting)
+            self._pause_for_reconciliation_required(submitting, unit_of_work)
             raise BrokerMirrorMismatchError(
                 "broker reports a conflicting order for our deterministic client id"
             ) from error

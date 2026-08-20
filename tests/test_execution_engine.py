@@ -62,7 +62,9 @@ class FakeOrderUnitOfWork:
 
 
 class DurabilityGuardBroker:
-    """Fails the test unless SUBMITTING is durable before any broker submit call."""
+    """
+
+    # mypy: ignore-errorsFails the test unless SUBMITTING is durable before any broker submit call."""
 
     def __init__(self, inner: FakePaperBroker, orders: FakeOrderRepository) -> None:
         self._inner = inner

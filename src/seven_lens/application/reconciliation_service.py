@@ -392,7 +392,7 @@ class Reconciler:
                             detail=str(buying_power_cents)[:200],
                         )
                     )
-            except Exception:
+            except (ValueError, AttributeError, TypeError):
                 mismatches.append(
                     ReconciliationMismatch(
                         kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
@@ -405,7 +405,7 @@ class Reconciler:
                 baseline_repo = getattr(unit_of_work, "account_baselines", None)
                 if baseline_repo is not None:
                     baseline = baseline_repo.get_baseline(account.account_id)
-            except Exception:
+            except (ValueError, TypeError, AttributeError):
                 baseline_error = True
                 mismatches.append(
                     ReconciliationMismatch(
@@ -421,9 +421,50 @@ class Reconciler:
                     )
                 )
             elif baseline is not None:
+                # Ledger cutoff: only post-baseline fills count toward expected cash/NAV.
+                # For genesis (no cutoff) all fills are included.
+                try:
+                    cutoff_at = getattr(baseline, "cutoff_occurred_at", None)
+                    cutoff_id = getattr(baseline, "cutoff_execution_id", None)
+                    all_fills = orders.list_all_fills()
+                    if cutoff_at is not None and cutoff_id is not None:
+                        post_fills = tuple(
+                            f
+                            for f in all_fills
+                            if f.occurred_at.value > cutoff_at.value
+                            or (
+                                f.occurred_at.value == cutoff_at.value
+                                and f.execution_id > cutoff_id
+                            )
+                        )
+                    elif cutoff_at is not None:
+                        post_fills = tuple(
+                            f for f in all_fills if f.occurred_at.value > cutoff_at.value
+                        )
+                    else:
+                        # Fallback to effective_at if no explicit cutoff (old baselines)
+                        effective_at = getattr(baseline, "effective_at", None)
+                        if effective_at is not None:
+                            post_fills = tuple(
+                                f for f in all_fills if f.occurred_at.value >= effective_at.value
+                            )
+                        else:
+                            post_fills = all_fills
+                    broker_orders_map = {
+                        o.broker_order_id: o for o in orders.list_all_broker_orders()
+                    }
+                    post_projection = project_ledger(post_fills, broker_orders_map)
+                except (ValueError, TypeError, AttributeError) as exc:
+                    mismatches.append(
+                        ReconciliationMismatch(
+                            kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
+                            detail=str(exc)[:200] if str(exc).strip() else "cutoff unavailable",
+                        )
+                    )
+                    post_projection = projection
                 try:
                     opening_cash_cents = int(baseline.opening_cash_cents)
-                    expected_cash = opening_cash_cents + projection.cash_delta_cents
+                    expected_cash = opening_cash_cents + post_projection.cash_delta_cents
                     broker_cash = account.cash.cents
                     if abs(broker_cash - expected_cash) > self._account_policy.cash_tolerance_cents:
                         mismatches.append(
@@ -432,7 +473,7 @@ class Reconciler:
                                 detail=f"expected {expected_cash} got {broker_cash}",
                             )
                         )
-                except Exception:
+                except (ValueError, TypeError, AttributeError):
                     mismatches.append(
                         ReconciliationMismatch(
                             kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
@@ -442,7 +483,7 @@ class Reconciler:
                 # NAV reconciliation requires mark prices for every open lot.
                 try:
                     if self._price_provider is None:
-                        if projection.positions:
+                        if post_projection.positions:
                             mismatches.append(
                                 ReconciliationMismatch(
                                     kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
@@ -452,7 +493,7 @@ class Reconciler:
                         else:
                             # No positions: NAV is just expected cash; compare to equity.
                             opening_cash_cents = int(baseline.opening_cash_cents)
-                            expected_nav = opening_cash_cents + projection.cash_delta_cents
+                            expected_nav = opening_cash_cents + post_projection.cash_delta_cents
                             broker_equity = account.equity.cents
                             if (
                                 abs(broker_equity - expected_nav)
@@ -466,14 +507,14 @@ class Reconciler:
                                 )
                     else:
                         prices: dict[Symbol, Price] = {}
-                        for sym in projection.positions:
+                        for sym in post_projection.positions:
                             price = self._price_provider.current_price(sym)
                             if not isinstance(price, Price):
                                 raise ValueError(f"missing price for {sym.value}")
                             prices[sym] = price
                         opening_cash_cents = int(baseline.opening_cash_cents)
                         nav = account_valuation(
-                            projection,
+                            post_projection,
                             opening_cash_cents=opening_cash_cents,
                             prices=prices,
                         )
@@ -494,7 +535,7 @@ class Reconciler:
                             detail=detail,
                         )
                     )
-                except Exception:
+                except (TypeError, AttributeError):
                     mismatches.append(
                         ReconciliationMismatch(
                             kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,

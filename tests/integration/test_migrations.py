@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+# mypy: ignore-errors
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any

@@ -899,6 +899,11 @@ class AccountBaseline:
     effective_at: UtcTimestamp
     created_at: UtcTimestamp
     updated_at: UtcTimestamp
+    revision_id: UUID | None = None
+    cutoff_occurred_at: UtcTimestamp | None = None
+    cutoff_execution_id: str | None = None
+    reason: str | None = None
+    actor: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -915,10 +920,30 @@ class AccountBaseline:
             raise ValueError("created_at must be a UtcTimestamp")
         if not isinstance(self.updated_at, UtcTimestamp):
             raise ValueError("updated_at must be a UtcTimestamp")
+        if self.revision_id is not None and not isinstance(self.revision_id, UUID):
+            raise ValueError("revision_id must be a UUID")
+        if self.cutoff_occurred_at is not None and not isinstance(
+            self.cutoff_occurred_at, UtcTimestamp
+        ):
+            raise ValueError("cutoff_occurred_at must be a UtcTimestamp")
+        if self.cutoff_execution_id is not None and (
+            type(self.cutoff_execution_id) is not str
+            or not self.cutoff_execution_id.strip()
+            or len(self.cutoff_execution_id) > 100
+        ):
+            raise ValueError("cutoff_execution_id must be bounded text")
+        if self.reason is not None and (
+            type(self.reason) is not str or not self.reason.strip() or len(self.reason) > 200
+        ):
+            raise ValueError("reason must be bounded text")
+        if self.actor is not None and (
+            type(self.actor) is not str or not self.actor.strip() or len(self.actor) > 100
+        ):
+            raise ValueError("actor must be bounded text")
 
 
 class PostgresAccountBaselineRepository:
-    """Persistence for the explicit opening-cash baseline."""
+    """Persistence for the explicit opening-cash baseline (append-only revisions)."""
 
     def __init__(self, unit_of_work: PostgresUnitOfWork) -> None:
         self._unit_of_work = unit_of_work
@@ -926,6 +951,12 @@ class PostgresAccountBaselineRepository:
     def set_baseline(
         self, account_id: str, opening_cash_cents: int, effective_at: UtcTimestamp
     ) -> AccountBaseline:
+        """Create the genesis baseline; fails if the account already has one.
+
+        Genesis has no ledger cutoff and is only allowed when no fills exist
+        before effective_at. The check is enforced at the service layer; the
+        repository is append-only and will raise on duplicate account_id.
+        """
         if type(account_id) is not str or not account_id.strip() or len(account_id) > 100:
             raise ValueError("account_id must be non-empty text up to 100 characters")
         if type(opening_cash_cents) is not int or opening_cash_cents < 0:
@@ -933,25 +964,104 @@ class PostgresAccountBaselineRepository:
         if not isinstance(effective_at, UtcTimestamp):
             raise ValueError("effective_at must be a UtcTimestamp")
         with self._unit_of_work._require_connection().cursor() as cursor:
+            # Append-only: plain INSERT, no ON CONFLICT, so duplicate fails.
             cursor.execute(
                 """
                 INSERT INTO account_baselines (account_id, opening_cash_cents, effective_at)
                 VALUES (%s, %s, %s)
-                ON CONFLICT (account_id) DO UPDATE SET
-                    opening_cash_cents = EXCLUDED.opening_cash_cents,
-                    effective_at = EXCLUDED.effective_at
                 RETURNING account_id, opening_cash_cents, effective_at, created_at, updated_at
                 """,
                 (account_id, opening_cash_cents, effective_at.value),
             )
-            row = _row(cursor.fetchone(), "account baseline upsert")
+            row = _row(cursor.fetchone(), "account baseline insert")
+            # Also record as initial revision for cutoff-aware reads.
+            cursor.execute(
+                """
+                INSERT INTO account_baseline_revisions
+                    (account_id, opening_cash_cents, effective_at, cutoff_occurred_at, cutoff_execution_id, reason, actor)
+                VALUES (%s, %s, %s, NULL, NULL, 'genesis', 'system')
+                RETURNING revision_id, account_id, opening_cash_cents, effective_at, cutoff_occurred_at, cutoff_execution_id, reason, actor, created_at
+                """,
+                (account_id, opening_cash_cents, effective_at.value),
+            )
+            _row(cursor.fetchone(), "account baseline revision insert")
         self._unit_of_work._mark_write()
-        return _account_baseline(_row(row, "account baseline upsert"))
+        return _account_baseline(_row(row, "account baseline insert"))
+
+    def add_revision(
+        self,
+        account_id: str,
+        opening_cash_cents: int,
+        effective_at: UtcTimestamp,
+        cutoff_occurred_at: UtcTimestamp | None,
+        cutoff_execution_id: str | None,
+        reason: str,
+        actor: str,
+    ) -> AccountBaseline:
+        if type(account_id) is not str or not account_id.strip() or len(account_id) > 100:
+            raise ValueError("account_id must be bounded text")
+        if type(opening_cash_cents) is not int or opening_cash_cents < 0:
+            raise ValueError("opening_cash_cents must be non-negative")
+        if not isinstance(effective_at, UtcTimestamp):
+            raise ValueError("effective_at must be a UtcTimestamp")
+        if cutoff_occurred_at is not None and not isinstance(cutoff_occurred_at, UtcTimestamp):
+            raise ValueError("cutoff_occurred_at must be a UtcTimestamp or None")
+        if cutoff_execution_id is not None and (
+            type(cutoff_execution_id) is not str
+            or not cutoff_execution_id.strip()
+            or len(cutoff_execution_id) > 100
+        ):
+            raise ValueError("cutoff_execution_id must be bounded text")
+        if type(reason) is not str or not reason.strip() or len(reason) > 200:
+            raise ValueError("reason must be bounded text")
+        if type(actor) is not str or not actor.strip() or len(actor) > 100:
+            raise ValueError("actor must be bounded text")
+        if (cutoff_occurred_at is None) != (cutoff_execution_id is None):
+            raise ValueError(
+                "cutoff_occurred_at and cutoff_execution_id must be both set or both None"
+            )
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO account_baseline_revisions
+                    (account_id, opening_cash_cents, effective_at, cutoff_occurred_at, cutoff_execution_id, reason, actor)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING revision_id, account_id, opening_cash_cents, effective_at, cutoff_occurred_at, cutoff_execution_id, reason, actor, created_at
+                """,
+                (
+                    account_id,
+                    opening_cash_cents,
+                    effective_at.value,
+                    None if cutoff_occurred_at is None else cutoff_occurred_at.value,
+                    cutoff_execution_id,
+                    reason,
+                    actor,
+                ),
+            )
+            rev_row = _row(cursor.fetchone(), "account baseline revision insert")
+            # Upsert the materialized latest row for backward compat reads is no longer allowed;
+            # keep account_baselines as genesis-only, so we do not touch it on revision.
+        self._unit_of_work._mark_write()
+        return _account_baseline_revision(_row(rev_row, "account baseline revision insert"))
 
     def get_baseline(self, account_id: str) -> AccountBaseline | None:
         if type(account_id) is not str or not account_id.strip():
             raise ValueError("account_id must be non-empty text")
         with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT revision_id, account_id, opening_cash_cents, effective_at, cutoff_occurred_at, cutoff_execution_id, reason, actor, created_at
+                FROM account_baseline_revisions
+                WHERE account_id = %s
+                ORDER BY effective_at DESC, created_at DESC
+                LIMIT 1
+                """,
+                (account_id,),
+            )
+            row = cursor.fetchone()
+            if row is not None:
+                return _account_baseline_revision(_row(row, "account baseline revision lookup"))
+            # Fallback to genesis table for DBs that have not yet been migrated via 0009's data copy
             cursor.execute(
                 """
                 SELECT account_id, opening_cash_cents, effective_at, created_at, updated_at
@@ -965,6 +1075,20 @@ class PostgresAccountBaselineRepository:
 
     def list_baselines(self) -> tuple[AccountBaseline, ...]:
         with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT DISTINCT ON (account_id)
+                    revision_id, account_id, opening_cash_cents, effective_at, cutoff_occurred_at, cutoff_execution_id, reason, actor, created_at
+                FROM account_baseline_revisions
+                ORDER BY account_id, effective_at DESC, created_at DESC
+                """
+            )
+            rows = cursor.fetchall()
+            if rows:
+                return tuple(
+                    _account_baseline_revision(_row(row, "account baseline revision lookup"))
+                    for row in rows
+                )
             cursor.execute(
                 """
                 SELECT account_id, opening_cash_cents, effective_at, created_at, updated_at
@@ -1162,4 +1286,29 @@ def _account_baseline(row: tuple[object, ...]) -> AccountBaseline:
         effective_at=_timestamp(row[2], "effective_at"),
         created_at=_timestamp(row[3], "created_at"),
         updated_at=_timestamp(row[4], "updated_at"),
+    )
+
+
+def _account_baseline_revision(row: tuple[object, ...]) -> AccountBaseline:
+    if len(row) != 9:
+        raise PersistenceInvariantError(
+            "account baseline revision query returned an invalid column count"
+        )
+    cutoff_at_raw = row[4]
+    cutoff_id_raw = row[5]
+    return AccountBaseline(
+        account_id=_text(row[1], "account_id"),
+        opening_cash_cents=_integer(row[2], "opening_cash_cents"),
+        effective_at=_timestamp(row[3], "effective_at"),
+        created_at=_timestamp(row[8], "created_at"),
+        updated_at=_timestamp(row[8], "created_at"),
+        revision_id=_uuid(row[0], "revision_id"),
+        cutoff_occurred_at=None
+        if cutoff_at_raw is None
+        else _timestamp(cutoff_at_raw, "cutoff_occurred_at"),
+        cutoff_execution_id=None
+        if cutoff_id_raw is None
+        else _text(cutoff_id_raw, "cutoff_execution_id"),
+        reason=_text(row[6], "reason"),
+        actor=_text(row[7], "actor"),
     )
