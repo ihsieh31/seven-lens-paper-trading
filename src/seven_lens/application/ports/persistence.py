@@ -160,7 +160,7 @@ class ControlRepository(Protocol):
         ...
 
     def submission_guard(self) -> AbstractContextManager[ControlStateSnapshot]:
-        """Hold a shared pause-state lock across one broker submission."""
+        """Hold an exclusive new-entry lock across one broker submission."""
         ...
 
     def set_entries_paused(self, paused: bool, reason: str | None) -> ControlStateSnapshot:

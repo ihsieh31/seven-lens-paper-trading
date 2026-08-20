@@ -20,6 +20,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from seven_lens.domain.value_objects import UtcTimestamp
+from seven_lens.execution.control import ControlCommand, ControlCommandRecord, ControlStateSnapshot
 from seven_lens.execution.orders import (
     REVIEW_BROKER_ORDER_STATUSES,
     TERMINAL_BROKER_ORDER_STATUSES,
@@ -120,9 +121,20 @@ class _ConsumerUnitOfWork(Protocol):
     @property
     def orders(self) -> _ConsumerOrders: ...
 
+    @property
+    def control(self) -> _ConsumerControl: ...
+
     def commit(self) -> None: ...
 
     def rollback(self) -> None: ...
+
+
+class _ConsumerControl(Protocol):
+    def set_entries_paused(self, paused: bool, reason: str | None) -> object: ...
+
+    def add_command(self, record: ControlCommandRecord) -> object: ...
+
+    def state(self) -> ControlStateSnapshot: ...
 
 
 class TradeUpdateConsumer:
@@ -134,6 +146,42 @@ class TradeUpdateConsumer:
         if type(update) is OrderStatusUpdate:
             return self._apply_status(unit_of_work, update)
         raise TradeUpdateError("unknown trade update type")
+
+    def _persist_conflict_pause(self, unit_of_work: _ConsumerUnitOfWork) -> None:
+        """Persist entries_paused and an audit command after an unrepresentable fill."""
+        # Use the same connection as the fill fact when possible; rollback has
+        # already cleared derived state, so this is a fresh transaction.
+        try:
+            unit_of_work.control.set_entries_paused(
+                True, "reconciliation required; conflicting fill"
+            )
+        except Exception as exc:
+            raise TradeUpdateError(
+                "failed to persist entries_paused after conflicting fill"
+            ) from exc
+        try:
+            from uuid import uuid4
+
+            now = unit_of_work.control.state().updated_at
+            unit_of_work.control.add_command(
+                ControlCommandRecord(
+                    command_id=uuid4(),
+                    command=ControlCommand.PAUSE_ENTRIES,
+                    reason="automatic pause on conflicting fill",
+                    actor="trade_update_consumer",
+                    run_id=None,
+                    requested_at=now,
+                    applied_at=now,
+                )
+            )
+        except TradeUpdateError:
+            raise
+        except Exception as exc:
+            raise TradeUpdateError("failed to persist pause audit after conflicting fill") from exc
+        try:
+            unit_of_work.commit()
+        except Exception as exc:
+            raise TradeUpdateError("failed to commit pause after conflicting fill") from exc
 
     def _apply_fill(self, unit_of_work: _ConsumerUnitOfWork, fill: Fill) -> TradeUpdateOutcome:
         mirror = unit_of_work.orders.get_broker_order_by_id(fill.broker_order_id)
@@ -222,10 +270,14 @@ class TradeUpdateConsumer:
             # itself was already committed and must survive.
             with contextlib.suppress(Exception):
                 unit_of_work.rollback()
+            # Durably pause for reconciliation; an exception is not a durable gate.
+            self._persist_conflict_pause(unit_of_work)
             raise
         except Exception as exc:
             with contextlib.suppress(Exception):
                 unit_of_work.rollback()
+            # Preserve fill fact, persist pause, then surface typed error.
+            self._persist_conflict_pause(unit_of_work)
             raise TradeUpdateError(
                 "trade update cannot be applied fail-safely; reconciliation required"
             ) from exc

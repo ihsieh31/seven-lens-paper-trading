@@ -22,8 +22,12 @@ from seven_lens.application.ports.persistence import (
 from seven_lens.config.broker import BrokerEnvironment
 from seven_lens.domain.value_objects import TradingDate, UtcTimestamp
 from seven_lens.execution.control import ControlCommand, ControlCommandRecord
-from seven_lens.execution.ledger import LedgerInvariantError, account_valuation, project_ledger
-from seven_lens.execution.orders import BrokerOrder, OrderStatus, Price, Symbol
+from seven_lens.execution.ledger import (
+    LedgerInvariantError,
+    account_equity_from_cash_and_positions,
+    project_ledger,
+)
+from seven_lens.execution.orders import BrokerOrder, OrderSide, OrderStatus, Price, Symbol
 from seven_lens.execution.reconciliation import (
     MismatchKind,
     ReconciliationMismatch,
@@ -383,6 +387,8 @@ class Reconciler:
             # value would have already raised BrokerTransportError and become
             # BROKER_QUERY_FAILURE.  Here we ensure it is at least present and
             # non-negative; a future ADR will define the portable expected-BP formula.
+            # Only typed expected failures become UNAVAILABLE; programming
+            # AttributeError/TypeError must propagate.
             try:
                 buying_power_cents = account.buying_power.cents
                 if buying_power_cents < 0:
@@ -392,7 +398,7 @@ class Reconciler:
                             detail=str(buying_power_cents)[:200],
                         )
                     )
-            except (ValueError, AttributeError, TypeError):
+            except ValueError:
                 mismatches.append(
                     ReconciliationMismatch(
                         kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
@@ -405,7 +411,7 @@ class Reconciler:
                 baseline_repo = getattr(unit_of_work, "account_baselines", None)
                 if baseline_repo is not None:
                     baseline = baseline_repo.get_baseline(account.account_id)
-            except (ValueError, TypeError, AttributeError):
+            except ValueError:
                 baseline_error = True
                 mismatches.append(
                     ReconciliationMismatch(
@@ -421,8 +427,16 @@ class Reconciler:
                     )
                 )
             elif baseline is not None:
-                # Ledger cutoff: only post-baseline fills count toward expected cash/NAV.
+                # Ledger cutoff: only post-baseline fills count toward expected cash.
                 # For genesis (no cutoff) all fills are included.
+                # Current positions for NAV always come from the full ledger so
+                # pre-cutoff positions are not dropped.
+                # Cash delta for post fills is summed directly (buy debit, sell credit)
+                # rather than via project_ledger(post_fills) which would fail when a
+                # post-cutoff sell consumes a pre-cutoff lot.
+                post_fills: tuple = ()  # type: ignore[type-arg]
+                broker_orders_map: dict[str, BrokerOrder] = {}
+                expected_cash: int | None = None
                 try:
                     cutoff_at = getattr(baseline, "cutoff_occurred_at", None)
                     cutoff_id = getattr(baseline, "cutoff_execution_id", None)
@@ -453,27 +467,55 @@ class Reconciler:
                     broker_orders_map = {
                         o.broker_order_id: o for o in orders.list_all_broker_orders()
                     }
-                    post_projection = project_ledger(post_fills, broker_orders_map)
-                except (ValueError, TypeError, AttributeError) as exc:
+                    opening_cash_cents_tmp = int(baseline.opening_cash_cents)
+                    cash_delta_cents = 0
+                    for fill in post_fills:
+                        order = broker_orders_map.get(fill.broker_order_id)
+                        if order is None:
+                            raise LedgerInvariantError("fill references an unknown broker order")
+                        if order.side is OrderSide.BUY:
+                            cash_delta_cents -= fill.quantity.value * fill.price.cents
+                        else:
+                            cash_delta_cents += fill.quantity.value * fill.price.cents
+                        if abs(cash_delta_cents) > 1_000_000_000_000:
+                            raise LedgerInvariantError(
+                                "projected cash delta exceeds the allowed range"
+                            )
+                    expected_cash = opening_cash_cents_tmp + cash_delta_cents
+                except (ValueError, LedgerInvariantError) as exc:
                     mismatches.append(
                         ReconciliationMismatch(
                             kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
                             detail=str(exc)[:200] if str(exc).strip() else "cutoff unavailable",
                         )
                     )
-                    post_projection = projection
-                try:
-                    opening_cash_cents = int(baseline.opening_cash_cents)
-                    expected_cash = opening_cash_cents + post_projection.cash_delta_cents
-                    broker_cash = account.cash.cents
-                    if abs(broker_cash - expected_cash) > self._account_policy.cash_tolerance_cents:
+                    # Fallback to full-ledger cash for mismatch reporting only.
+                    try:
+                        opening_cash_cents_tmp = int(baseline.opening_cash_cents)
+                        expected_cash = opening_cash_cents_tmp + projection.cash_delta_cents
+                    except ValueError:
+                        expected_cash = None
+                if expected_cash is not None:
+                    try:
+                        broker_cash = account.cash.cents
+                        if (
+                            abs(broker_cash - expected_cash)
+                            > self._account_policy.cash_tolerance_cents
+                        ):
+                            mismatches.append(
+                                ReconciliationMismatch(
+                                    kind=MismatchKind.CASH_MISMATCH,
+                                    detail=f"expected {expected_cash} got {broker_cash}",
+                                )
+                            )
+                    except ValueError:
                         mismatches.append(
                             ReconciliationMismatch(
-                                kind=MismatchKind.CASH_MISMATCH,
-                                detail=f"expected {expected_cash} got {broker_cash}",
+                                kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
+                                detail="cash reconciliation unavailable",
                             )
                         )
-                except (ValueError, TypeError, AttributeError):
+                else:
                     mismatches.append(
                         ReconciliationMismatch(
                             kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
@@ -481,9 +523,12 @@ class Reconciler:
                         )
                     )
                 # NAV reconciliation requires mark prices for every open lot.
+                # Positions come from the full ledger; cash comes from the
+                # checkpointed post-cutoff delta.  Missing price is typed
+                # unavailable, not CLEAN.
                 try:
                     if self._price_provider is None:
-                        if post_projection.positions:
+                        if projection.positions:
                             mismatches.append(
                                 ReconciliationMismatch(
                                     kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
@@ -492,40 +537,53 @@ class Reconciler:
                             )
                         else:
                             # No positions: NAV is just expected cash; compare to equity.
-                            opening_cash_cents = int(baseline.opening_cash_cents)
-                            expected_nav = opening_cash_cents + post_projection.cash_delta_cents
-                            broker_equity = account.equity.cents
-                            if (
-                                abs(broker_equity - expected_nav)
-                                > self._account_policy.nav_tolerance_cents
-                            ):
+                            if expected_cash is None:
                                 mismatches.append(
                                     ReconciliationMismatch(
-                                        kind=MismatchKind.NAV_MISMATCH,
-                                        detail=f"expected {expected_nav} got {broker_equity}",
+                                        kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
+                                        detail="nav reconciliation unavailable",
                                     )
                                 )
+                            else:
+                                broker_equity = account.equity.cents
+                                if (
+                                    abs(broker_equity - expected_cash)
+                                    > self._account_policy.nav_tolerance_cents
+                                ):
+                                    mismatches.append(
+                                        ReconciliationMismatch(
+                                            kind=MismatchKind.NAV_MISMATCH,
+                                            detail=f"expected {expected_cash} got {broker_equity}",
+                                        )
+                                    )
                     else:
                         prices: dict[Symbol, Price] = {}
-                        for sym in post_projection.positions:
+                        for sym in projection.positions:
                             price = self._price_provider.current_price(sym)
                             if not isinstance(price, Price):
                                 raise ValueError(f"missing price for {sym.value}")
                             prices[sym] = price
-                        opening_cash_cents = int(baseline.opening_cash_cents)
-                        nav = account_valuation(
-                            post_projection,
-                            opening_cash_cents=opening_cash_cents,
-                            prices=prices,
-                        )
-                        broker_equity = account.equity.cents
-                        if abs(broker_equity - nav) > self._account_policy.nav_tolerance_cents:
+                        if expected_cash is None:
                             mismatches.append(
                                 ReconciliationMismatch(
-                                    kind=MismatchKind.NAV_MISMATCH,
-                                    detail=f"expected {nav} got {broker_equity}",
+                                    kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
+                                    detail="nav reconciliation unavailable",
                                 )
                             )
+                        else:
+                            nav = account_equity_from_cash_and_positions(
+                                expected_cash,
+                                projection.lots,
+                                prices,
+                            )
+                            broker_equity = account.equity.cents
+                            if abs(broker_equity - nav) > self._account_policy.nav_tolerance_cents:
+                                mismatches.append(
+                                    ReconciliationMismatch(
+                                        kind=MismatchKind.NAV_MISMATCH,
+                                        detail=f"expected {nav} got {broker_equity}",
+                                    )
+                                )
                 except ValueError as ve:
                     # Missing price or valuation input is explicitly unavailable, not CLEAN.
                     detail = str(ve)[:200] if str(ve).strip() else "valuation input missing"
@@ -533,13 +591,6 @@ class Reconciler:
                         ReconciliationMismatch(
                             kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
                             detail=detail,
-                        )
-                    )
-                except (TypeError, AttributeError):
-                    mismatches.append(
-                        ReconciliationMismatch(
-                            kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
-                            detail="nav reconciliation unavailable",
                         )
                     )
         return ReconciliationResult.create(

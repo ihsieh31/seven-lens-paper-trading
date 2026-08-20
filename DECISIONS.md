@@ -379,3 +379,13 @@
   6. 帳務對帳：`PaperAccount.buying_power` 嚴格解析（`src/seven_lens/infrastructure/alpaca_paper.py`）、`account_baselines` 權威基線表（migration 0008，`guard_account_baseline_write` immutable `account_id`）、`AccountReconciliationPolicy`（expected_account_id + cash/nav tolerance）與 `ReconciliationMarkPriceProvider` seam；`Reconciler.collect` 比較 `ACCOUNT_ID`/`BUYING_POWER`/`CASH`（`opening_cash + cash_delta`）/`NAV`（`account_valuation` + marks），缺 baseline/缺 price/缺 provider 皆為 `ACCOUNT_RECONCILIATION_UNAVAILABLE` 而非 CLEAN；新增 6 種 closed mismatch kinds。
 - 範圍聲明：不實作 WS transport、`control CLI` shell、真實 Paper POST/DELETE、`P3` distillation/`P4` holding/`P5` backtest 等；`buying_power` 僅做嚴格快照與 presence 檢查，不偽造 expected buying power 公式（見 P2-CUR-006 買斷規則與本 ADR）。
 - 證據：Ruff/mypy 92 檔全綠；non-integration 637 passed / 77 deselected（含新 `P2-CUR` 對抗）；PostgreSQL 16 integration 69 passed / 8 deselected（含 `latest` detail roundtrip/ordinal/corruption、`LOCAL_LEDGER_INVARIANT` pause、`account_baselines` 權限與 `0008 up/down/up`）；`verify_p1.sh --postgres` 全綠。R-24 重標 `Mitigated`，CLOSED-021 已 superseded。
+
+## ADR-026：P2 最終修復——entry 互斥、cash checkpoint 與 immutable migration compatibility
+
+- 日期：2026-08-20
+- 狀態：Accepted implementation；P2 Gate Reopened，等待完整 acceptance matrix。
+- 決策：非 `RISK_EXIT` 新單以 `control_state FOR UPDATE` 互斥跨越 broker-submit 臨界區；第一個提交在 timeout 後先持久化 `UNKNOWN`，才允許下一個新單取得鎖並看見 unresolved gate。`RISK_EXIT` 不持此新 exposure 鎖。
+- 帳務：baseline revision 是 **cash checkpoint**，expected cash 為 checkpoint cash 加 post-cutoff cash delta；current NAV 的 lots/positions 永遠由 full fill ledger 取得。post-cutoff sell 可消耗 pre-cutoff lot，因此 cash delta 不以獨立 post-cutoff FIFO replay計算。genesis 只能在 fill ledger 空時建立，並以 PostgreSQL `fills` table lock 與第一筆 fill 序列化；有 fill 後 revision 必須帶真實 `(occurred_at, execution_id)` cutoff。
+- Authority：runtime role 對 `account_baselines` / `account_baseline_revisions` 僅有 SELECT；建立 genesis/revision 是 migration owner/operator capability，不向一般 runtime 暴露 arbitrary INSERT。
+- Migration：0009 已在 main 並由 checksummed runner 驗證，不能改寫。version-8 upgrade 若有效 baseline 有 `effective_at > created_at`，runner 在同一 migration transaction 暫時將 source created_at 對齊 effective_at 以供不變的 0009 建 revision，接著在 0009 trigger 暫停期間還原 source-row original created_at。新 revision 的 `created_at` 對該 legacy row 表示 migration-time authority timestamp；source-row original provenance 保留。既有 version-9 database 不會重新執行此 compat path。
+- Late fill：fill fact 先 commit；derived mirror/intent projection 失敗先 rollback，再以同一 UoW 持久化 `entries_paused` 與 `PAUSE_ENTRIES` command，任何 safety persistence failure 以 typed error 可觀測地向外傳播。

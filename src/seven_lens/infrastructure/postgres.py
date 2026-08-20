@@ -793,14 +793,19 @@ class PostgresControlRepository:
 
     @contextmanager
     def submission_guard(self) -> Iterator[ControlStateSnapshot]:
-        """Hold the pause row stable until the surrounding transaction commits."""
+        """Hold the new-entry authority row exclusively until submission resolves.
+
+        New-entry submissions are linearized with FOR UPDATE so two concurrent
+        entries cannot both cross the broker boundary while the first is still
+        racing toward UNKNOWN.  RISK_EXIT bypasses this guard entirely.
+        """
         with self._unit_of_work._require_connection().cursor() as cursor:
             cursor.execute(
                 """
                 SELECT entries_paused, paused_reason, updated_at, flatten_generation
                 FROM control_state
                 WHERE singleton
-                FOR SHARE
+                FOR UPDATE
                 """
             )
             row = cursor.fetchone()
@@ -953,9 +958,9 @@ class PostgresAccountBaselineRepository:
     ) -> AccountBaseline:
         """Create the genesis baseline; fails if the account already has one.
 
-        Genesis has no ledger cutoff and is only allowed when no fills exist
-        before effective_at. The check is enforced at the service layer; the
-        repository is append-only and will raise on duplicate account_id.
+        Genesis has no ledger cutoff and is only allowed when the fill ledger
+        is empty.  The check is enforced transactionally with a table lock so
+        a concurrent first fill cannot race the genesis creation.
         """
         if type(account_id) is not str or not account_id.strip() or len(account_id) > 100:
             raise ValueError("account_id must be non-empty text up to 100 characters")
@@ -964,6 +969,11 @@ class PostgresAccountBaselineRepository:
         if not isinstance(effective_at, UtcTimestamp):
             raise ValueError("effective_at must be a UtcTimestamp")
         with self._unit_of_work._require_connection().cursor() as cursor:
+            # Serialize genesis against the first fill.
+            cursor.execute("LOCK TABLE fills IN EXCLUSIVE MODE")
+            cursor.execute("SELECT 1 FROM fills LIMIT 1")
+            if cursor.fetchone() is not None:
+                raise ValueError("genesis baseline requires empty fill ledger")
             # Append-only: plain INSERT, no ON CONFLICT, so duplicate fails.
             cursor.execute(
                 """
@@ -1024,6 +1034,19 @@ class PostgresAccountBaselineRepository:
                 "cutoff_occurred_at and cutoff_execution_id must be both set or both None"
             )
         with self._unit_of_work._require_connection().cursor() as cursor:
+            # If fills exist, a revision must carry an explicit deterministic cutoff
+            # referencing a real ledger boundary (occurred_at, execution_id).
+            cursor.execute("SELECT 1 FROM fills LIMIT 1")
+            has_fills = cursor.fetchone() is not None
+            if has_fills and cutoff_occurred_at is None:
+                raise ValueError("revision after fills requires explicit cutoff")
+            if cutoff_occurred_at is not None and cutoff_execution_id is not None:
+                cursor.execute(
+                    "SELECT 1 FROM fills WHERE execution_id = %s AND occurred_at = %s",
+                    (cutoff_execution_id, cutoff_occurred_at.value),
+                )
+                if cursor.fetchone() is None:
+                    raise ValueError("cutoff must reference an existing fill")
             cursor.execute(
                 """
                 INSERT INTO account_baseline_revisions

@@ -351,3 +351,19 @@ re-acceptance.**
   6. P2-CUR-006 帳務對帳：`PaperAccount.buying_power` 嚴格解析、`account_baselines` 權威基線表（migration 0008）、`AccountReconciliationPolicy` / `ReconciliationMarkPriceProvider` seam、tolerance 內的 `CASH`/`NAV`/`ACCOUNT_ID`/`BUYING_POWER` 檢查與 `ACCOUNT_RECONCILIATION_UNAVAILABLE` 失效閉環（`src/seven_lens/application/reconciliation_service.py` 擴 6 種新 mismatch）。
 - 治理同步：R-24 重標 `Mitigated` 並引用 read round-trip 測試、`ISSUES.md` CLOSED-021 superseded、README/SECURITY/DEFERRED-013/015 與 ROADMAP/ADR-019 的 P2/WS/CLI 範圍一致化（本輪不實作 WS transport / control CLI）。
 - 最終證據（2026-08-20 本機）：Ruff format/check、mypy strict 92 檔全綠；non-integration 637 passed / 77 deselected（新增 `TestLateFill` / `TestFifo` / `TestLedgerInvariant` / `TestUnknownGate` / `TestAccountReconciliation` 等，見 `tests/test_*`）；真實 disposable PostgreSQL 16 `69 passed / 8 deselected`（`verify_p1.sh --postgres` EXIT=0，含 `account_baselines` 權限與 `0008 up/down/up`）；`RISK_REGISTER` R-24、`ISSUES` SUPERSEDED-021 與本文件已同步。P2 gate **再次 Closed**；不新增 live endpoint，P7 真實下單仍留後續 supervised gate。
+
+## P2 最終修復進行中（2026-08-20）：Gate Reopened — ACC-001~009
+
+- 依據 `SEVEN_LENS_P2_FINAL_REMEDIATION_AGENT_PROMPT.md`（HEAD `0f8281b`）重開 P2 gate，最終驗收判定 **P2 必須維持 Reopened，不得宣告 P2 Complete**，阻塞項見 `ISSUES.md` OPEN-P2-ACC-001~009：
+  1. ACC-001 併發新單可同時越過 broker 邊界（`FOR SHARE` 可共存）；
+  2. ACC-002 baseline cutoff 的 NAV 錯誤丟失 cutoff 前已建倉且仍持有的部位；
+  3. ACC-003 runtime role 可任意 INSERT 新 baseline revision 取得權威；
+  4. ACC-004 合法 0008 mutated baseline 使 0009 `effective_at <= created_at` 失敗；
+  5. ACC-005 genesis 僅文件宣稱「fill 前才允許」，實際無強制；
+  6. ACC-006 `AttributeError`/`TypeError` 被降級為普通 unavailable，掩蓋程式缺陷；
+  7. ACC-007 衝突遲到 fill 僅拋例外，未持久化 reconciliation-required / pause 證據；
+  8. ACC-008 治理文件仍稱 P2 Closed、描述仍停留 0008；
+  9. ACC-009 缺完整回歸、真實 PG 併發／重啟／遷移／權限等證據。
+- 本輪依建議順序修復 001→007，最後執行完整 Ruff/mypy/pytest 非整合 + `run_postgres_integration.sh` + `verify_p1.sh --postgres` 並同步治理；完成前不宣告 P2 Closed。
+- 本機 fresh regression（2026-08-20）：`uv lock --check --offline`、Ruff format/check、mypy strict、non-integration `672 passed, 90 deselected`、PostgreSQL 16 `82 passed, 8 deselected`、`verify_p1.sh` 與 `verify_p1.sh --postgres` 均 exit 0。新 PG evidence 包含 race A timeout→UNKNOWN 時 B broker call count=0、success serialization、restart UNKNOWN gate、RISK_EXIT bypass、runtime baseline INSERT denial、0008 mutated baseline→latest、genesis/revision invariants 與 conflicting fill restart pause。
+- Gate 判定仍為 **Reopened**：本工作樹尚未提交/推送，無法宣稱 current-HEAD remote GitHub Actions evidence；ACC-009 在該證據完成前維持 Open。其餘 ACC implementation 與本機 regression evidence 已完成，但不得以此覆蓋歷史 Closed/重開記錄。

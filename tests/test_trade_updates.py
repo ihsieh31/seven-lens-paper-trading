@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pytest
 
+from fakes.control import FakeControlRepository
 from fakes.orders import FakeOrderRepository
 from seven_lens.domain.value_objects import RunId, TradingDate, UtcTimestamp
 from seven_lens.execution.orders import (
@@ -37,7 +38,11 @@ _TRADING_DATE = TradingDate.from_isoformat("2026-08-17")
 class _UnitOfWork:
     def __init__(self, orders: FakeOrderRepository) -> None:
         self.orders = orders
+        self.control = FakeControlRepository(_T0)
         self.commit_count = 0
+
+    def rollback(self) -> None:
+        self.orders.rollback()
 
     def commit(self) -> None:
         self.commit_count += 1

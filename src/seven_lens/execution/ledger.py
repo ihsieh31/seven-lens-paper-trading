@@ -95,6 +95,26 @@ def account_valuation(
     return total
 
 
+def account_equity_from_cash_and_positions(
+    expected_cash_cents: int,
+    lots: tuple[OpenLot, ...],
+    prices: Mapping[Symbol, Price],
+) -> int:
+    """NAV from checkpointed cash plus current FIFO lots at mark prices."""
+    if type(expected_cash_cents) is not int or abs(expected_cash_cents) > _MAX_ABS_CENTS:
+        raise ValueError("expected cash must be a bounded integer number of cents")
+    market_value = 0
+    for lot in lots:
+        price = prices.get(lot.symbol)
+        if price is None:
+            raise ValueError(f"missing price for symbol {lot.symbol.value}")
+        market_value += lot.quantity * price.cents
+    total = expected_cash_cents + market_value
+    if abs(total) > _MAX_ABS_CENTS:
+        raise ValueError("account valuation exceeds the allowed range")
+    return total
+
+
 def project_ledger(
     fills: tuple[Fill, ...],
     broker_orders: Mapping[str, BrokerOrder],

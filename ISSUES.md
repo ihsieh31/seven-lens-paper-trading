@@ -288,3 +288,68 @@
   equal timestamp 不同狀態不去重；fills 加全域 cursor-cycle/bounded-page 與 order-id identity。
 - 證據：原四組 fault injection 與 equal-timestamp 重現均由 Luna 確認 closed；637 個
   non-integration、69 個 PostgreSQL 16 integration、1 個真實 GET-only live acceptance 全綠。
+
+## OPEN-P2-ACC-001：併發新單 FOR SHARE 仍可同時越過 broker — P2 Blocker（High/Safety）
+
+- 嚴重度：High / Safety Blocker
+- 狀態：Open（2026-08-20；`SEVEN_LENS_P2_FINAL_REMEDIATION_AGENT_PROMPT.md` ACC-001）
+- 問題：`PostgresControlRepository.submission_guard()` 採 `FOR SHARE`，兩個新單可同時持有相容鎖並先後進入 broker.submit，超時轉 UNKNOWN 前第二單已建立新 exposure。
+- 影響：違反「一旦有模糊提交朝 UNKNOWN 競賽，不得有第二個新單越過 broker 邊界」安全不變量。
+- 修復方向：改為 `FOR UPDATE`（或等價 advisory 鎖）使新單 broker 臨界區互斥；RISK_EXIT 豁免。
+- 驗收：真實 PG 雙連線 threading 測試證明 racing B 的 broker 調用數為 0（見 ACC-009）。
+
+## OPEN-P2-ACC-002：baseline cutoff 錯誤丟失 cutoff 前部位的 NAV — P2 Blocker（High/Accounting）
+
+- 嚴重度：High / Accounting Blocker
+- 狀態：Open（2026-08-20；ACC-002）
+- 問題：有 cutoff 的 revision 以 `post_projection` 同時計算 cash 與 NAV，導致 cutoff 前已建倉且仍持有的部位自 NAV 消失。
+- 驗收：需證明 pre-cutoff BUY 10 → baseline → 無後續 fill 時 NAV 仍含 10 股；partial SELL 情境亦正確。
+
+## OPEN-P2-ACC-003：runtime role 可任意 INSERT baseline revision — P2 Blocker（High/Authority）
+
+- 嚴重度：High / Authority Blocker
+- 狀態：Open（2026-08-20；ACC-003）
+- 問題：runtime 被授予 `account_baselines`/`account_baseline_revisions` 的 INSERT，追加最新 revision 即可竄改權威。
+- 修復方向：runtime 對兩表僅 SELECT，基線建立改為顯式 privileged 路徑；對應 verifier 更新。
+
+## OPEN-P2-ACC-004：合法 0008 mutated baseline 使 0009 遷移失敗 — P2 Blocker（High/Migration）
+
+- 嚴重度：High / Migration Blocker
+- 狀態：Open（2026-08-20；ACC-004）
+- 問題：0008 允許 UPDATE effective_at 而保留原 created_at，使 `effective_at > created_at` 合法；0009 以原 created_at 建 revision 並設 `CHECK (effective_at <= created_at)`，該合法 0008 狀態升級至 0009 即失敗。
+- 修復方向：依遷移歷史規則處理 0009 檢查與遷移資料選擇（見 DECISIONS/遷移策略）。
+
+## OPEN-P2-ACC-005：genesis baseline 僅文件限制，無強制不變量 — P2 Blocker（High/Accounting）
+
+- 嚴重度：High / Accounting semantics Blocker
+- 狀態：Open（2026-08-20；ACC-005）
+- 問題：`set_baseline()` 宣稱僅在無 fills 前可創 genesis，實際未強制且非事務安全，競態可產生 `fill 與 genesis 交錯`。
+- 驗收：fills 為空時允許、任一 fill 後拒絕；併發建立 genesis 與首個 fill 必須序列化。
+
+## OPEN-P2-ACC-006：Account 對帳仍將程式缺陷降級為 UNAVAILABLE — P2 Blocker（Medium-High）
+
+- 嚴重度：Medium-High
+- 狀態：Open（2026-08-20；ACC-006）
+- 問題：多處 `except (AttributeError, TypeError)` 被視為普通 `ACCOUNT_RECONCILIATION_UNAVAILABLE`，掩蓋程式錯誤。
+- 修復：僅捕獲 typed expected failures，程式 `AttributeError`/`TypeError` 與 `PersistenceInvariantError` 必須向外傳播。
+
+## OPEN-P2-ACC-007：衝突遲到 fill 未持久化 reconciliation-required 證據 — P2 Blocker（Medium-High/Safety）
+
+- 嚴重度：Medium-High / Safety
+- 狀態：Open（2026-08-20；ACC-007）
+- 問題：`TradeUpdateConsumer._apply_fill` 於衝突時保留 fill 並 rollback 衍生狀態但未持久化 entries_paused/PAUSE 命令，控制面重啟後仍可建新單。
+- 驗收：衝突 fill 後重啟可見 pause；堅持 fact 不丟、衍生不落地。
+
+## OPEN-P2-ACC-008：治理文件仍稱 P2 Closed — P2 Blocker（Medium/Governance）
+
+- 嚴重度：Medium / Governance
+- 狀態：Open（2026-08-20；ACC-008）
+- 問題：README/PROGRESS 等仍稱 P2 Closed 且描述停留 0008 架構，與 0009 及本次重開不一致。
+- 處置：已重開 P2 並記錄 ACC-001~007；僅在最終回歸全綠後才可再次標 Closed。
+
+## OPEN-P2-ACC-009：缺完整回歸與關鍵場景證據 — P2 Blocker（Acceptance）
+
+- 嚴重度：Acceptance Blocker
+- 狀態：Open（2026-08-20；ACC-009）
+- 問題：缺少 fresh 完整鎖定 gate、真實 PG threading race／重啟／遷移／權限等證據。
+- 關閉條件：Ruff/mypy/pytest 非整合 + `run_postgres_integration.sh` + `verify_p1.sh --postgres` 全綠，且特寫測試（併發 B=0、重啟 UNKNOWN 阻擋、衝突 fill 重啟 pause、0008→latest、runtime INSERT 拒絕、cutoff NAV）可重現。

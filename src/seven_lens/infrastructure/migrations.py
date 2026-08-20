@@ -62,7 +62,54 @@ def migrate(dsn: str) -> int:
                                 f"{migration.filename} checksum does not match database history"
                             )
                         continue
+                legacy_baseline_created_at: tuple[tuple[str, object], ...] = ()
+                if migration.version == 9 and _current_version(cursor) == 8:
+                    # 0008 legitimately allowed effective_at to be moved past
+                    # created_at.  0009's immutable checksum copies created_at
+                    # into a CHECK-constrained revision.  Temporarily make the
+                    # copy legal, then restore source-table provenance after the
+                    # migration.  The migrated revision's created_at is thereby
+                    # the effective authority timestamp for that legacy row.
+                    cursor.execute(
+                        """
+                        SELECT account_id, created_at
+                        FROM public.account_baselines
+                        WHERE effective_at > created_at
+                        ORDER BY account_id
+                        """
+                    )
+                    legacy_baseline_created_at = tuple(
+                        cast(tuple[str, object], row) for row in cursor.fetchall()
+                    )
+                    if legacy_baseline_created_at:
+                        cursor.execute(
+                            """
+                            UPDATE public.account_baselines
+                            SET created_at = effective_at
+                            WHERE effective_at > created_at
+                            """
+                        )
                 cursor.execute(migration.up_sql)
+                if legacy_baseline_created_at:
+                    cursor.execute(
+                        "ALTER TABLE public.account_baselines "
+                        "DISABLE TRIGGER account_baselines_guard_write"
+                    )
+                    cursor.executemany(
+                        """
+                        UPDATE public.account_baselines
+                        SET created_at = %s
+                        WHERE account_id = %s
+                        """,
+                        tuple(
+                            (created_at, account_id)
+                            for account_id, created_at in legacy_baseline_created_at
+                        ),
+                    )
+                    cursor.execute(
+                        "ALTER TABLE public.account_baselines "
+                        "ENABLE TRIGGER account_baselines_guard_write"
+                    )
                 cursor.execute(
                     """
                     INSERT INTO schema_migrations (version, filename, checksum)
