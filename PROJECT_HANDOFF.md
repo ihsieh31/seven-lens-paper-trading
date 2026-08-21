@@ -329,3 +329,14 @@ Accepted、五項修復結案。以下為該 session 實際重跑的證據。
 - 殘留事項：未追蹤 `.mimosa/` hook-state 目錄（Mimosa plugin 工具產物，非專案變更）；
   wire 層非負欄位的負零字串以 canonical-string 訊息拒絕（既有 fail-closed 設計）。均為
   Low／資訊性，不阻斷驗收。
+
+### 發布完成（2026-08-21）：remediation-R1 已進入 main
+
+- 使用者明確授權直接 push；remediation-R1、驗收測試、治理同步與 `.mimosa/` ignore 已提交為
+  `9037dacc589690101ea60901a3f34991480a70e1`（`fix: close P3-A remediation findings`）並推送
+  `origin/main`。
+- exact code-bearing SHA 的 GitHub Actions run `32488368972` 完成且成功；`quality-unit` 與
+  `postgres-integration` 兩個 jobs 均為 `success`。direct-main push 當下顯示 required checks
+  expected，不以 bypass 訊息關門；以上述自動 exact-SHA run 為遠端驗證證據。
+- P3-A 發布完成；下一個實作邊界是 P3-B point-in-time input/event verification。P3-C~F、P4
+  deterministic Risk、P5 回測、P6 Shadow、P7 supervised Paper、P8 unattended Paper 均未開始。

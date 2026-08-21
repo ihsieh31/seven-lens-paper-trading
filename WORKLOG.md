@@ -633,3 +633,16 @@
   （既有 fail-closed 設計）。
 - 驗收期間的基線對照實驗已逐位元還原（SHA-256 復驗）；除本治理更新外未修改 production
   code、tests 或規劃文件語意。未 stage、commit 或 push。
+
+## 2026-08-21 — P3-A remediation-R1 發布與 exact-SHA CI
+
+- 使用者明確授權直接 push；先修正 `PROJECT_HANDOFF.md` 的過期 P2 main 基線、
+  `docs/MASTER_PLAN.md`／`README.md` 的過期 P3 未實作敘述，並將 `.mimosa/` 加入
+  `.gitignore`，未發布工具 hook-state。
+- 發布前本機重跑：Ruff format/check、mypy strict、lock checks 全綠；non-integration
+  `759 passed, 91 deselected`；真實 PostgreSQL 16 `83 passed, 8 deselected, 0 skipped`；
+  `git diff --check` 通過。
+- remediation-R1、測試與治理同步提交為 `9037dacc589690101ea60901a3f34991480a70e1`
+  （`fix: close P3-A remediation findings`）並直接推送 `origin/main`。
+- GitHub Actions run `32488368972` 對 exact code-bearing SHA 完成且成功：`quality-unit`、
+  `postgres-integration` 均為 `success`。push 當下的 required-check bypass 訊息不作驗證證據。

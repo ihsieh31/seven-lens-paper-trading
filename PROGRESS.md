@@ -441,3 +441,12 @@ re-acceptance.**
   `83 passed, 8 deselected, 0 skipped`，owner-label 容器清點 0；`git diff --check`。
 - 殘留：未追蹤 `.mimosa/` hook-state 目錄（工具產物）；wire 層非負欄位負零字串以
   canonical-string 訊息拒絕（既有 fail-closed 設計）。均為 Low／資訊性，不阻斷。
+
+## P3-A remediation-R1 發布（2026-08-21）：main + exact-SHA CI 成功
+
+- 使用者明確授權直接 push；remediation-R1 與驗收／治理同步提交為
+  `9037dacc589690101ea60901a3f34991480a70e1` 並推送 `origin/main`。
+- GitHub Actions run `32488368972` 對 exact code-bearing SHA 完成：`quality-unit` 與
+  `postgres-integration` 均為 `success`。direct-main push 的 required-check bypass 訊息不列為
+  驗證；以該自動 exact-SHA run 為 Gate 遠端證據。
+- `.mimosa/` 已加入 `.gitignore`，工具 hook-state 未發布。下一個 gate 維持 P3-B。
