@@ -2,16 +2,16 @@
 
 ## 狀態摘要
 
-- 專案階段：P2 — Alpaca Paper 執行安全；Gate Closed（2026-08-20 final remediation ACC-001~009 全部關閉）。這不授權真實下單。
+- 專案階段：P3 — TradingAgents 分析核心整合；P3-A implementation completed，待獨立驗收。P2 Gate Closed，這不授權真實下單。
 - 完成度定義：只以路線圖的可驗證交付物計算，不以主觀百分比計算。
-- 最近更新：2026-08-20
-- 下一個 gate：先與使用者討論 P3 SourceManifest／quarantine；WS/CLI 與真實下單仍分別留 P6/P7。
+- 最近更新：2026-08-21
+- 下一個 gate：以 `docs/P3A_ACCEPTANCE_PROMPT.md` 執行獨立 P3-A 驗收；WS/CLI 與真實下單仍分別留 P6/P7，P8 無人值守門檻保留。
 - 歷史：P2 曾於 2026-08-19 及 P2-CUR 修復後標示 Closed；2026-08-20 依 final remediation ACC-001~009 再次重開。歷史 Closed 紀錄保留，但不是目前狀態。
 
 ## 已完成
 
 - [x] 確認新專案與工作區範圍。
-- [x] 確認只做七人委員策略、本人使用、Paper-only。
+- [x] 2026-08-14 歷史基線曾確認七人委員策略、本人使用、Paper-only；策略部分已由 2026-08-21 ADR-027／ADR-028 supersede，Paper-only 不變。
 - [x] 確認零付費資料與公開來源限制。
 - [x] 分析 TradingAgents 的實際 agent graph、state、portfolio manager 與訊號輸出。
 - [x] 核對 Alpaca Paper Trading 的模擬限制與 order update/reconciliation 能力。
@@ -22,6 +22,8 @@
 - [x] 確認本機 `skill/` 有七位候選語料（約 827 MB／723 個非 `.DS_Store` 檔案）；依使用者要求本輪不審查內容，且依再散布邊界排除於公開 Git repository。
 - [x] 七位與語料規劃 commit `1d4d9bd31d993a5fb6803a8d08ff5deec04122e1` 已發布；GitHub Actions run [`31950919861`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/31950919861) 的 `quality-unit` 與 `postgres-integration` 均成功。
 - [x] 建立主企劃、架構、蒸餾、營運、安全、路線圖和來源規格。
+- [x] 依使用者 2026-08-21 決定，將七人蒸餾移出核心主線並保留為 disabled Future Analyst Plugin；P3 最終改為完整 TradingAgents 四分析員→兩輪 Bull/Bear→Research Manager→Trader→兩輪 Risk Debate→LLM Portfolio Manager，P4 deterministic Risk approval，P5 validation，P6/P7/P8 安全 gate 保留（ADR-028）。
+- [x] 2026-08-21 重新核對 TradingAgents upstream `main` 仍為固定 commit `a33fd4c0f134485a43553a2c23a63cb14adbd88f`，並檢查現行 analyst、debate、structured Research Manager/Trader、risk debate 與 Portfolio Manager 邊界。
 - [x] 建立獨立 Decision、Progress、Issue、Worklog、Risk 日誌。
 - [x] 完成 P1-A：Python 3.13 `src` package、`uv.lock`、ruff/mypy/pytest 嚴格基線。
 - [x] 完成 Paper-only typed config、精確 endpoint allowlist 與啟動 fail-closed 驗證。
@@ -66,9 +68,11 @@
       暫停、runtime role 權限）。已於 2026-08-19 完成並 Closed；2026-08-20 依 P2-CUR-001~006
       remediation 重開並再次 Closed（見下方「P2 Remediation 2026-08-20」節）。P2-E 真實 read-only 連線驗證已完成首次執行（2026-08-17，見下方 P2-E 證據）。
 - [ ] WebSocket 傳輸本體與 control shell CLI（ADR-019 範圍聲明，P6/P7 bring-up）。
-- [ ] 審查本機七位候選語料，建立 SourceManifest、quarantine／coverage 報告與七套 doctrine cards。
+- [ ] P3-A：implementation completed、待獨立驗收；已固定 upstream SHA／Apache-2.0 inventory，建立 strict contracts、canonical wire、golden／adversarial／source-invariant tests。只有獨立 acceptance session 可勾選 Gate Closed。
+- [ ] P3-B~F：point-in-time inputs/event verification、四分析員、兩輪 Bull/Bear、Research Manager、Trader、兩輪 Risk Debate、Portfolio Manager、Agnes/OpenCode provider isolation、daily reflection、weekly 4,000-line memory skill、record/replay 與 adversarial evals。
+- [ ] Future Analyst Plugin 七人 corpus 審查／蒸餾：`DEFERRED/DISABLED`；未經使用者重新核准，不讀取 `skill/`、不排入主線。
 - [ ] 取得 Tavily 對同一 Customer 彙總使用 7 個免費帳號的書面／後台授權證據。
-- [ ] 實作量化預篩、committee workflow、portfolio optimizer 與風控。
+- [ ] P4 實作量化 long/short 預篩、`PortfolioProposal` validation／target-to-quantity translation、一次駁回重申與 deterministic Risk。
 - [ ] 建立回測／walk-forward／shadow／paper 驗證鏈。
 - [ ] 啟用本機 launchd 與告警。
 
@@ -371,3 +375,28 @@ re-acceptance.**
 - 本輪補齊 ACC-006 typed taxonomy：新增 `MarkPriceUnavailableError`；只有此 expected absence 轉 `ACCOUNT_RECONCILIATION_UNAVAILABLE`。unexpected `ValueError`、`AttributeError`、`TypeError`、`PersistenceInvariantError` 均向外傳播，missing baseline 保持 fail-closed mismatch。
 - Fresh 本機證據：`uv lock --check --offline` exit 0；Ruff format/check、mypy exit 0；non-integration `676 passed, 91 deselected`；PostgreSQL 16 `83 passed, 8 deselected, 0 skipped`；`verify_p1.sh` 與 `verify_p1.sh --postgres` 均 exit 0。
 - 遠端證據：exact code-bearing SHA `488f170` 的 GitHub Actions [`32360443947`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/32360443947) 中 `quality-unit`（19s）與 `postgres-integration`（1m8s）均成功。ACC-009 Closed，P2 Gate **Closed**。
+
+## P3 最終需求凍結（2026-08-21）：歷史規劃基線；P3-A 後續已實作
+
+- 使用者確認完整 TradingAgents 鏈、兩種 debate 各兩輪、完整持倉輸入、target-weight proposal、deterministic Risk 一次駁回／一次重申／第二次 `NO_TRADE`。
+- 使用者確認 long/short、15 檔、單股 15%、long/short/total/net gross limits、40% turnover、無最短持有期、同日退出 reason gate 與 verified Risk Exit 例外。
+- 使用者確認開盤後 60 分鐘與收盤前 90 分鐘兩個正常分析窗口、全部持倉 + 12／5 候選、一般 15 分鐘與緊急 3 分鐘 deadline。
+- 使用者確認 Agnes／Muse 角色路由、最高可用 reasoning、一次 failover、去識別化 portfolio snapshot、Muse training/non-ZDR acceptance，未來 GPT-5.6 需同一 eval gate。
+- 使用者確認每日持倉 reflection、Risk rejection memory、週六壓縮與最多 4,000 行的專用 memory-curation skill；raw records immutable。
+- 突發事件採 deterministic 二次確認；source/timestamp conflict 為 `DATA_CONFLICT`，不把可疑事件交給 LLM。只有 hard-risk 可在驗證失敗時獨立減倉。
+- 本輪只更新規劃／治理文件；未修改 production code、未使用 credential、未呼叫 broker/data/model API、未 stage/commit/push。
+
+## P3-A 實作（2026-08-21）：completed，待獨立驗收
+
+- 固定 TradingAgents `a33fd4c0f134485a43553a2c23a63cb14adbd88f`；保存 exact Apache-2.0
+  LICENSE（SHA-256 `c71d239d...d0ab4`）、23-path planned-source manifest、無 NOTICE 與
+  `runtime_code_vendored: false` 證據。
+- 新增 dependency-free frozen/slots contracts：三窗口 input、四 analyst roles、Bull/Bear 與
+  Risk debate、Research/Trader、完整去識別化 snapshot、signed target proposal、一次 rejection
+  feedback；wire 採 exact fields/types、固定小數字串、bounded canonical JSON、重算 content/universe
+  hash，proposal 以 executable boundary 驗證 input identity/universe。
+- targeted `70 passed`；`verify_p1.sh` exit 0（Ruff、mypy strict 100 files、non-integration
+  `746 passed, 91 deselected`）；真實 PostgreSQL 16 `83 passed, 8 deselected, 0 skipped`；
+  `git diff --check` 通過。
+- 未新增 dependency、未改 `uv.lock`／migration／P2／CI；只做固定 SHA 的無 credential read-only
+  GitHub retrieval，未使用 credential/API、未讀 `skill/`、未 stage/commit/push。

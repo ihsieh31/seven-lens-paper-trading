@@ -1,6 +1,6 @@
 # TradingAgents 邏輯與程式架構評估
 
-評估基準：`TauricResearch/TradingAgents` main commit `a33fd4c0f134485a43553a2c23a63cb14adbd88f`（本企劃研究時固定版本）。
+評估基準：`TauricResearch/TradingAgents` main commit `a33fd4c0f134485a43553a2c23a63cb14adbd88f`（2026-08-21 重新核對仍為 upstream `main`；本企劃固定版本）。
 
 ## 1. 它實際怎麼運作
 
@@ -36,9 +36,9 @@ flowchart LR
 
 它回答「這一檔如何」，沒有建立 point-in-time universe、候選排名、資金競爭、相關性、sector exposure 或 portfolio optimization。本專案需先做 universe/quant/evidence funnel，再對少量候選執行辯論。
 
-### 3.2 Portfolio Manager 是語言模型，不是硬約束引擎
+### 3.2 Portfolio Manager 是語言模型，只能作提案層
 
-Portfolio Manager 看的是文字 plan 和風險辯論，不掌握權威 broker cash、lots、open orders、ADV、當日 turnover、sector exposure、持有期限制。它產生的 Buy/Hold 等級不是可安全執行的 target portfolio。
+上游 Portfolio Manager 看的是文字 plan 和風險辯論，預設不掌握權威 broker cash、lots、open orders、ADV、當日 turnover 或完整持倉。因此本專案會保留這個角色，但重寫輸入／輸出：每次強制提供去識別化完整 portfolio snapshot，只允許輸出結構化 target-weight `PortfolioProposal`，再交給獨立 deterministic Risk Engine 審核。
 
 ### 3.3 沒有券商級狀態機
 
@@ -70,43 +70,61 @@ Portfolio Manager 看的是文字 plan 和風險辯論，不掌握權威 broker 
 
 ## 4. 本專案如何使用它
 
-不直接 fork 成交易核心；採「概念移植 + 隔離 adapter」：
+P3 主線直接採用其 **分析方法與 graph 語意**，但不直接 fork 成交易核心；實作採「semantic parity + 本專案 versioned contracts + 隔離 adapter」：
 
 | TradingAgents 概念 | 本專案版本 |
 |---|---|
-| Analysts | 七套 versioned doctrine agents |
-| Bull/Bear debate | blinded assessment + targeted rebuttal |
-| Research Manager | evidence verifier；不可憑空整合 |
-| Trader | 移除；改為 neutral chair 產生 bounded verdict |
-| Risk debate | 保留研究層 dissent，但硬風控獨立 deterministic |
-| Portfolio Manager | deterministic constrained optimizer |
-| Final signal | versioned TargetPortfolio + RiskDecision |
-| Memory | point-in-time eval store，不讓 outcome 汙染歷史 input |
+| Market/Technical Analyst | point-in-time bars/indicators/regime 的 `AnalystReport` |
+| Fundamentals Analyst | filing/financial/valuation inputs 的 `AnalystReport` |
+| News Analyst | company/industry/global/macro event `AnalystReport` |
+| Sentiment Analyst | 合規、可回溯、時間戳完整的 sentiment `AnalystReport` |
+| Bull/Bear debate | 有限輪次、保存雙方 history、claim/citation/conflict verification |
+| Research Manager | 結構化 `ResearchConclusion`；不可憑空新增 evidence |
+| Trader | 結構化 trader plan；沒有 order authority |
+| Risk debate | 兩輪 Aggressive/Conservative/Neutral 認知風險辯論；不可放寬 hard limits |
+| Portfolio Manager | 看完整去識別化持倉／帳戶／剩餘限制，輸出結構化 `PortfolioProposal` |
+| Final signal | `PortfolioProposal` → deterministic `RiskDecision` → approved `TargetPortfolio`；第一次拒絕只允許重申一次 |
+| Memory | 每日 outcome/reflection + 每週 bounded compaction；immutable raw audit 防 future leakage |
 
-若後續直接呼叫部分 TradingAgents code，只能包在 `AnalysisProvider` sandbox：
+不要求 production P3 與上游逐位元輸出一致；要求 graph 順序、角色責任、最大輪次與資料流可由 semantic-parity tests 證明。上游 structured-output 仍有 free-text fallback，本專案禁止 fallback 結果穿越 P3→P4 boundary。
+
+直接移植需要的 TradingAgents code 時，只能包在 `AnalysisProvider` sandbox，並保留固定 SHA 的 Apache-2.0 license／attribution／NOTICE（若有）、標示本專案修改；不 fork，也不複製 CLI、simulated exchange 或 order path：
 
 - 無 Alpaca credentials；
 - 無 order/ledger DB write；
 - 無 shell 或任意工具；
 - 只讀 sanitized EvidencePacket；
 - 嚴格 schema、timeout、token、network allowlist；
-- 失敗輸出 `INVALID`。
+- 固定 upstream SHA、dependency lock、graph/prompt/provider versions；
+- 失敗輸出 `INVALID/ABSTAIN`，不得把自由文字猜成 action。
 
-## 5. 不採用上游 Portfolio Manager 的理由
+## 5. 採用 Portfolio Manager 但保留 deterministic Risk authority
 
-「風險辯論」是認知風險檢查，「Risk Engine」是資金安全機制，兩者不可互換。前者可以討論公司會不會失敗；後者必須機械地拒絕第 11 個持倉、超過 8% 單股、同日反向交易、stale quote 或帳務不一致。把兩者放進同一個 prompt，無法提供可證明的上限。
+「風險辯論」是認知風險檢查，「Risk Engine」是資金安全機制，兩者不可互換。Portfolio Manager可綜合研究、持倉、cash、buying power、open orders、same-day fills 與 limits，提出 long/short target weights；但 Risk Engine 必須機械地拒絕第 16 檔、超過 15% 單股、gross/net/turnover/borrow breach、無正當理由的同日虧損退出、stale quote 或帳務不一致。
+
+Risk 第一次拒絕時回傳 machine-readable reason codes 與 remaining limits；Portfolio Manager可以重申一次。不得重跑無限迴圈，第二次拒絕固定 `NO_TRADE`。任何核准後 quantity/order type 仍由 deterministic P4/P2 產生。
+
+### 5.1 本專案新增的必要改造
+
+- Bull/Bear 與 Risk Debate 各固定兩輪。
+- Analysts 預設 Agnes 2.5 Flash、備援 Agnes 2.0 Flash；其他深度角色預設 Muse Spark 1.2 Contributor、備援 Agnes 2.5 Flash。
+- 每個 adapter 要求最高可用 reasoning，記錄 requested/effective capability，只備援一次。
+- Portfolio Manager confidence < 0.65 強制 `HOLD`；輸出只有 `OPEN/INCREASE/REDUCE/CLOSE/HOLD`、signed target weight、evidence ids 與短 reason codes。
+- 同日虧損退出需明確的 thesis/event/borrow/liquidity/hard-risk 證據；短線獲利退出不受此特殊理由限制。
+- 每日寫 reflection；週六用專用 skill 壓縮 LLM-visible memory 至最多 4,000 行，原始 audit 永久保留。
+- 突發事件在進 LLM 前由 deterministic verifier 做來源、freshness 與 conflict 二次確認；緊急 graph 只能處理受影響持倉且不可新增風險。
 
 ## 6. Upstream 追蹤策略
 
 - 固定 commit SHA，不依 main 浮動。
 - 每季檢查 schema、graph、data vendors 和 license 變更。
-- 只 cherry-pick 經測試的純研究改善，不拉入 execution side effects。
+- 只移植經測試且在 manifest 列明的 research/risk-debate/Portfolio Manager/memory 改善，不拉入 execution side effects。
 - 上游更新需經 regression、prompt/eval drift 和 security review。
 - 本專案的 ledger/risk/execution 永遠不依賴其版本。
 
 ## 7. 結論
 
-TradingAgents 是有價值的研究原型，證明「多角色分析—辯論—整合」可被程式化；它不是 brokerage operating system。對本專案最正確的使用方式，是保留它的 graph 思想，重建 point-in-time evidence、七套 doctrine 和 deterministic trading core，而不是把最後的語言模型訊號接上 Alpaca。
+TradingAgents 是 P3 的完整研究／提案方法基準：「四分析員—Bull/Bear—Research Manager—Trader—Risk Debate—Portfolio Manager」。本專案直接移植所需程式並改造成 point-in-time、完整 portfolio-aware、strict-schema、可重播的 proposal pipeline；它仍不是 brokerage operating system。deterministic Risk approval、target-to-order translation 與 P2 execution 永遠保留在本專案。七人蒸餾降為停用的 Future Analyst Plugin，不阻塞 P3。
 
 ## 8. 固定程式參考
 

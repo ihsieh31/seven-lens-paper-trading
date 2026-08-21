@@ -1,13 +1,14 @@
 # 外部依據與來源策略
 
-此檔分成「架構依據」與「蒸餾候選來源」。候選不等於已驗證、已授權或已納入；每次實作須固定版本與保存 SourceManifest。
+此檔分成「P3 分析／資料架構依據」與「停用的 Future Analyst Plugin 候選來源」。候選不等於已驗證、已授權或已納入；每次實作須固定版本與保存 SourceManifest。
 
 ## 1. TradingAgents
 
 - Upstream：[TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents)
-- 本企劃固定檢查 commit：`a33fd4c0f134485a43553a2c23a63cb14adbd88f`
-- 重要程式：[setup.py](https://github.com/TauricResearch/TradingAgents/blob/a33fd4c0f134485a43553a2c23a63cb14adbd88f/tradingagents/graph/setup.py)、[agent_states.py](https://github.com/TauricResearch/TradingAgents/blob/a33fd4c0f134485a43553a2c23a63cb14adbd88f/tradingagents/agents/utils/agent_states.py)、[portfolio_manager.py](https://github.com/TauricResearch/TradingAgents/blob/a33fd4c0f134485a43553a2c23a63cb14adbd88f/tradingagents/agents/managers/portfolio_manager.py)、[signal_processing.py](https://github.com/TauricResearch/TradingAgents/blob/a33fd4c0f134485a43553a2c23a63cb14adbd88f/tradingagents/graph/signal_processing.py)
-- 用途：理解 graph/state/debate，不把 upstream 的語言模型訊號直接接券商。
+- 本企劃固定檢查 commit：`a33fd4c0f134485a43553a2c23a63cb14adbd88f`（2026-08-21 `git ls-remote` 核對為 upstream `main`）
+- License：[Apache License 2.0](https://github.com/TauricResearch/TradingAgents/blob/a33fd4c0f134485a43553a2c23a63cb14adbd88f/LICENSE)；直接複製所需檔案時保留 license／copyright／NOTICE（若有），並標示本專案修改。
+- 重要程式：[setup.py](https://github.com/TauricResearch/TradingAgents/blob/a33fd4c0f134485a43553a2c23a63cb14adbd88f/tradingagents/graph/setup.py)、[agent_states.py](https://github.com/TauricResearch/TradingAgents/blob/a33fd4c0f134485a43553a2c23a63cb14adbd88f/tradingagents/agents/utils/agent_states.py)、[schemas.py](https://github.com/TauricResearch/TradingAgents/blob/a33fd4c0f134485a43553a2c23a63cb14adbd88f/tradingagents/agents/schemas.py)、[research_manager.py](https://github.com/TauricResearch/TradingAgents/blob/a33fd4c0f134485a43553a2c23a63cb14adbd88f/tradingagents/agents/managers/research_manager.py)、[trader.py](https://github.com/TauricResearch/TradingAgents/blob/a33fd4c0f134485a43553a2c23a63cb14adbd88f/tradingagents/agents/trader/trader.py)、[portfolio_manager.py](https://github.com/TauricResearch/TradingAgents/blob/a33fd4c0f134485a43553a2c23a63cb14adbd88f/tradingagents/agents/managers/portfolio_manager.py)
+- 用途：P3 採用四分析員→兩輪 Bull/Bear→Research Manager→Trader→兩輪 Risk Debate→Portfolio Manager 的完整研究／提案 graph；只移植所需 analysis/data/debate/risk/manager/memory 模組，order path 不納入。
 
 ## 2. Alpaca Paper Trading
 
@@ -38,21 +39,28 @@
 - account pool 只做合規的配額平衡和故障隔離，不跨 key 併發繞過 rate limit；禁止自動 PAYGO。
 - Tavily 是 discovery/extract 工具，不是 primary-source truth database。
 
-## 4. OpenAI / Codex
+## 4. LLM providers / Codex
 
 - [OpenAI 最新模型選擇指南](https://developers.openai.com/api/docs/guides/latest-model)
 - [Codex Automations](https://learn.chatgpt.com/docs/automations)
+- [Agnes AI API reference](https://github.com/1038lab/Agnes-AI/blob/main/references/api.md)
+- [Agnes AI model catalog](https://github.com/AgnesAI-Labs/AgnesAI-Models/blob/main/MODEL_CATALOG.md)
+- [OpenCode Go models、pricing 與 privacy](https://opencode.ai/docs/go/)
 
 對架構的影響：
 
-- Sol 用於高難度架構與高風險 review；Terra 用於平衡品質／成本的主要開發；Luna 用於大量、邊界清楚的重複工作。
+- Analysts 預設 `agnes-2.5-flash`，備援 `agnes-2.0-flash`；兩者走 Chat Completions-compatible adapter。
+- Research Manager、Trader、Risk Debate、Portfolio Manager 預設 `muse-spark-1.2-contributor`，備援 `agnes-2.5-flash`；Muse 使用獨立 Responses adapter。使用者已接受其非 ZDR／提示與輸出可供訓練的政策。
+- OpenCode `deepseek-v4-flash` 保留為 disabled-by-default 可配置候選；必須先通過相同 eval，且不加入第三次自動 failover。
+- 公開文件沒有提供所有 provider 共用的 `effort=max` 契約；因此只設定內部 `reasoning_requested=max`，再由 capability-aware adapter 映射並保存 effective setting。
+- 每角色只 failover 一次；未來 `gpt-5.6` 需通過相同 held-out/schema/safety/latency gate 才能啟用。
 - Scheduled tasks 適合週期性檢查、報告與 code maintenance；本機任務依賴機器和應用程式運行，因此不作為盤中交易的唯一排程器。
 
-## 5. 七人 primary-source map
+## 5. Future Analyst Plugin 的七人 primary-source map（停用）
 
 下列只代表 discovery 起點。每個內容仍需逐頁判斷是否免費、公開、可引用、是否為本人發表。
 
-本機 `skill/` 已有七位候選語料；截至 2026-08-16 只確認路徑存在，尚未審查內容、來源、授權、完整性、重複、時間或可蒸餾性。該目錄約 827 MB，固定排除於公開 Git repository。以下是正式 P3 審查時的起點，不是已驗收清單。
+本機 `skill/` 已有七位候選語料；截至 2026-08-16 只確認路徑存在，尚未審查內容、來源、授權、完整性、重複、時間或可蒸餾性。該目錄約 827 MB，固定排除於公開 Git repository。以下只在使用者未來重新核准插件研究時作 discovery 起點，不是 P3 工作、不是已驗收清單。
 
 ### Howard Marks
 
@@ -64,7 +72,7 @@
 
 - 本機候選：`skill/Muddy_Waters/`。
 - 計畫中的 primary sources：Muddy Waters 官方研究、相關公司 filing／回應、監管與法院文件。
-- 做 long-only 排除與風險檢查；每項負面主張必須區分已證實事實、研究機構主張、公司反駁與本系統推論。
+- 做 long/short 風險檢查；每項負面主張必須區分已證實事實、研究機構主張、公司反駁與本系統推論。
 
 ### Aswath Damodaran
 
@@ -100,13 +108,13 @@
 
 ## 6. GitHub 其他設計候選
 
-- 舊版 discovery 候選紀錄不再代表目前七位名單；若正式 P3 仍想借鑑 retrieval/evidence packet 設計，必須重新做 repository、license、source 與 prompt-injection 稽核。
+- 舊版 discovery 候選紀錄不代表 P3 主線；Future Analyst Plugin 若重新啟動，必須重新做 repository、license、source 與 prompt-injection 稽核。
 
 結論：尚無「有名、完整、具授權、可追溯、含反例與 held-out eval」的一套 skill 能涵蓋七人。開源資產只當設計與 discovery 輸入。
 
 ## 7. 免費資料候選優先序
 
-實作 P3 時才逐一驗證 API 條款、rate limit 和 point-in-time 能力：
+實作 P3 時逐一驗證 API 條款、rate limit 和 point-in-time 能力：
 
 1. SEC EDGAR submissions/companyfacts/filings；
 2. 公司 IR 和官方 press release；
@@ -124,4 +132,4 @@
 - 每個 material claim 最近處放 citation id；SourceManifest 解析成可點 URL。
 - 摘要用自己的文字；保存必要短摘錄供 entailment，不大量重製原文。
 - source URL 失效時保存 tombstone、hash 和既有 metadata；若無法驗證，降低 confidence。
-- 每次 doctrine、backtest 和 daily run 都固定 source snapshot id。
+- 每次 `PortfolioProposal`、backtest 和 daily run 都固定 portfolio/source/data snapshot ids；Future Analyst Plugin 若啟用，另固定 plugin/doctrine version。

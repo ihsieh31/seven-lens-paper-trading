@@ -1,12 +1,12 @@
-# 七人委員全自動 Paper Trading 系統：第一性原理主企劃書
+# TradingAgents 分析核心 Paper Trading 系統：第一性原理主企劃書
 
-版本：0.1
-日期：2026-08-14
-狀態：Planning baseline
+版本：0.3
+日期：2026-08-21
+狀態：P3 主線改版；P1/P2 已完成，P3 尚未實作
 
 ## 1. 專案定義
 
-本專案要建立的不是「會自動按買賣鍵的聊天機器人」，而是一套可重現、可追溯、遇到未知狀況會停止新增風險的自動投資作業系統。它每天在美股開盤前完成跨股票篩選與七人委員研究，開盤後執行主要再平衡；收盤前只針對持倉和極少數高優先候選重評，再進行一次受限再平衡。
+本專案要建立的不是「會自動按買賣鍵的聊天機器人」，而是一套可重現、可追溯、遇到未知狀況會停止新增風險的自動投資作業系統。它每天先完成跨股票篩選，於開盤後 60 分鐘分析全部持倉與最多 12 個新候選；收盤前 90 分鐘只重評全部持倉與最多 5 個新候選。突發事件另走經二次資料確認的緊急分析流程。
 
 系統只做 Alpaca Paper Trading，只供本人使用。第一版不保留任何實盤 adapter、實盤 URL、實盤 credential 欄位或切換選項。
 
@@ -24,9 +24,9 @@
 
 ### 1.2 明確不做
 
-- 不做當沖、超短線、盤前盤後交易。
-- 不做空、不用 margin、不做 options、crypto、OTC、ETN、槓桿或反向 ETF。
-- 不把公開人物寫成可冒充本人的聊天角色。
+- 不把當沖當成主要策略，但不設定最短持有期；符合已驗證理由與風控時允許同日減倉、平倉或獲利短線退出。
+- 不做 options、crypto、OTC、ETN、槓桿或反向 ETF，也不做盤前盤後交易；允許 Alpaca 標示可放空且符合借券條件的標的。
+- 不把公開人物寫成可冒充本人的聊天角色；七人方法論蒸餾不再是主線必要條件。
 - 不付費購買 X API、研究訂閱、市場資料或雲端服務。
 - 不繞過登入、付費牆、robots 或存取限制。
 - 不以 Codex 桌面排程作為市場時鐘或唯一 broker workflow engine。
@@ -38,18 +38,18 @@
 
 1. **世界狀態是否可知？** 資料是否完整、新鮮、合法取得、時間一致？
 2. **公司是否值得研究？** 先用廉價、確定性的指標把大股票池縮小。
-3. **投資論點是否成立？** 七種方法論分別提出主張、證據、反證、時效和失效條件。
-4. **這個論點在組合中值多少？** 根據預期報酬、風險、相關性、流動性、信心和換手成本計算 target weight。
-5. **現在能不能下單？** 硬風控、帳務、market clock、quote freshness、price collar 和交易窗口決定。
+3. **投資論點是否成立？** 技術、基本面、新聞與情緒分析員先獨立研究，Bull/Bear 研究員辯論，再由 Research Manager 與 Trader 形成有界研究結論。
+4. **應該提出什麼組合要求？** Aggressive/Conservative/Neutral Risk Debate 與 LLM Portfolio Manager 在看過完整持倉、現金、buying power、未成交單、當日成交和剩餘限制後，只能產生結構化 `PortfolioProposal`。
+5. **現在能不能下單？** deterministic Risk Engine 審核 proposal；若駁回，只允許 Portfolio Manager 依 reason codes 與 remaining limits 重申一次，第二次仍不通過即 `NO_TRADE`。
 6. **委託後真實狀態為何？** 以 broker 回報與 reconciliation 更新帳本，不以模型或本地預期認定成交。
 
-因此資料、研究、組合、風控、執行、帳務是六個不同 bounded context。LLM 只存在於第三層和有限的證據分類工作。
+因此資料、研究、LLM 組合提案、確定性風控、執行、帳務是不同 bounded context。LLM 可以提出目標比例，但沒有核准或下單權。
 
 ## 3. 投資任務與預設宇宙
 
 ### 3.1 投資目標
 
-在不使用槓桿的前提下，尋找 10–60 個交易日可實現的風險調整後超額報酬，主要來自：
+以中期論點為主，在明確曝險上限下尋找風險調整後超額報酬；不設最短持有期，以便在論點失效、重大事件或硬風控觸發時及時退出。主要來源包括：
 
 - 市場尚未充分定價的供應鏈瓶頸與第二階影響；
 - 可被公開財報與產業資料驗證的主題性需求變化；
@@ -80,41 +80,53 @@
 | Universe | 約 2,000–4,000 | 資產、價格、流動性硬篩 | 移除不可交易標的 |
 | Quant screen | 100 | 趨勢、品質、估值 proxy、事件、風險 | 找值得取證者 |
 | Evidence screen | 30 | Tavily/SEC/IR/免費來源摘要與缺口評分 | 確認有足夠資料 |
-| Full committee | 12 | 七人 doctrine assessments + rebuttal | 深度辯論 |
-| Portfolio | 最多 10 持倉 | deterministic optimizer + risk | 形成目標組合 |
+| Full analysis | 12 | 四分析員 + Bull/Bear + Research Manager + Trader | 深度研究與結構化決策 |
+| Portfolio | 最多 15 檔（long + short） | LLM proposal + deterministic risk | 形成經核准的目標組合 |
 
 既有持倉永遠進入 evidence refresh；若資料不足，允許減倉或退出，不允許因缺資料自動加碼。
 
-## 4. 七人委員的分工
+## 4. TradingAgents-style 分析核心
 
-七位不是七票等權，也不是七個預先被要求看多／看空的角色。每位都可以 `SUPPORT`、`OPPOSE` 或 `ABSTAIN`，並對自己最擅長的 domain 給出 assessment。
+P3 採用 `TauricResearch/TradingAgents` 固定 commit `a33fd4c0f134485a43553a2c23a63cb14adbd88f` 的完整研究／決策 graph，直接移植所需模組並針對本專案改造；不 fork、不移植 CLI、simulated exchange 或下單路徑。複製檔案須保留 Apache-2.0 LICENSE、attribution／NOTICE（若上游提供）並標示修改：
 
-| 方法論 | 主要任務 | 典型反問 |
+| 角色 | 輸入 | 有界輸出 |
 |---|---|---|
-| Howard Marks | 市場週期、風險、投資人心理與 second-level thinking | 共識已反映什麼，而週期位置讓哪些風險被低估？ |
-| Muddy Waters Research | forensic accounting、揭露品質、治理與舞弊風險 | 哪些可核對證據會推翻管理層敘事或資產品質？ |
-| Aswath Damodaran | 故事到數字、估值、風險與 terminal assumptions | 目前價格要求公司成為什麼樣的企業？ |
-| Serenity / `@aleabitoreddit` | AI／半導體多跳 BOM、上游瓶頸、認證週期 | 真正不可替代的 chokepoint 在哪？ |
-| Terry Smith / Fundsmith | 高品質複利、資本報酬、再投資與資本配置 | 企業能否以高報酬率長期再投資而不依賴槓桿？ |
-| Michael Mauboussin | expectations investing、base rates、競爭優勢與機率決策 | 市價隱含哪些預期，base rate 與可逆證據是否支持？ |
-| Lyn Alden | 財政／貨幣 regime、能源、美元、長週期 | 宏觀資產負債表環境支持或破壞哪個現金流？ |
+| Technical / Market Analyst | point-in-time bars、技術指標、市場 regime | 趨勢、動能、波動、關鍵價位與資料缺口 |
+| Fundamentals Analyst | filing、財務指標、公司輪廓、估值 inputs | 財務品質、成長、估值、red flags 與假設 |
+| News Analyst | 公司、產業、全球與宏觀事件 | 事件、因果路徑、時效、催化劑與反證 |
+| Sentiment Analyst | 經允許且有時間戳的新聞／社群訊號 | direction、intensity、confidence、來源分歧 |
+| Bull / Bear Researchers | 四份 analyst reports | 有限輪次正反辯論與未解衝突 |
+| Research Manager | analyst reports + debate state | 結構化研究結論與證據缺口 |
+| Trader | 以上全部 | 結構化 trader plan；不是券商委託 |
+| Aggressive / Conservative / Neutral | trader plan、完整研究與 portfolio snapshot | 兩輪有界 risk debate |
+| Portfolio Manager | 全部研究、兩種 debate、完整 portfolio/account snapshot、記憶 | 結構化 `PortfolioProposal`；不是券商委託 |
 
-### 4.1 辯論協議
+Bull/Bear 與 Risk Debate 都固定兩輪。LLM Portfolio Manager 可以提出 long/short target weights，但所有請求都必須經 P4 deterministic Risk Engine；P2 execution 邊界不變。
 
-1. **Evidence packet freeze**：本輪所有委員只讀同一個有時間戳快照。
-2. **Blinded first pass**：各自獨立輸出，不可先看其他委員結論，降低群體從眾。
-3. **Evidence verification**：每個 material claim 必須映射 source fragment；無法支持則降級或移除。
-4. **Targeted rebuttal**：只把真正衝突的假設交給相關委員反駁，不進行無限對話。
-5. **Neutral chair**：整合共識與歧見，但不得新增 evidence packet 中不存在的事實。
-6. **Deterministic translation**：把結論轉為有限範圍的 alpha/confidence/risk inputs，再交給 optimizer。
+### 4.1 分析協議
 
-### 4.2 權重原則
+1. **Snapshot freeze**：同一 run 的分析員只讀相同 `as_of` 與 immutable source/data snapshot。
+2. **Independent analyst pass**：四個 analyst report 分開保存；任一缺失不可由其他角色猜補。
+3. **Bounded debate**：Bull/Bear 與三方 Risk Debate 都固定兩輪，直接標記引用、衝突與無法解決的假設。
+4. **Evidence verification**：每個 material claim 必須映射 source/data reference；無法支持則移除或整體 `INVALID/ABSTAIN`。
+5. **Structured boundary**：所有角色輸出都必須通過 versioned schema；Portfolio Manager 禁止輸出長篇建議文字，只能輸出機器可驗證的買賣要求。
+6. **Full portfolio context**：每次 Portfolio Manager 呼叫都必須取得去識別化的 NAV、cash、buying power、全部持倉權重／成本／損益、open orders、same-day fills、borrowability 與 remaining limits。
+7. **No order authority**：分析 graph 不讀 broker credentials、不呼叫 order API，也不輸出 share quantity、order type 或 `OrderIntent`。
 
-- 權重依「domain relevance × 過去校準 × 當前證據品質」決定，不是名氣或固定一人一票。
-- Muddy Waters 類負面證據可觸發風險調查或否決，但一則疑點不等於自動做空。
-- 委員一致不代表正確；高度相關的同源資訊要做 correlation haircut。
-- 一位相關專家的 primary-source-backed 反例，可以勝過六個低相關、重複同一新聞的支持意見。
-- 權重只能從 held-out / forward evaluation 更新，且有上下限和版本紀錄。
+### 4.2 `PortfolioProposal` 與審核原則
+
+- 每一列只能是 `OPEN/INCREASE/REDUCE/CLOSE/HOLD`，包含 symbol、`LONG/SHORT/FLAT`、signed target weight、confidence、evidence ids、短 reason codes、論點失效條件與所有版本；禁止自由文字交易建議。
+- target weight 的絕對值不得超過 15%；quantity／金額由 deterministic translation 根據最新權威帳戶快照計算。
+- Risk Engine 回傳 `APPROVED` 或結構化 `REJECTED(reason_codes, remaining_limits)`。第一次拒絕不重跑 Analysts／debates；Portfolio Manager以同一份已驗證研究、刷新後的完整 portfolio snapshot 與 rejection feedback 重申一次，且不能加入本 run 候選集合外的標的。第二次拒絕即 `NO_TRADE`。
+- schema、evidence、provider、timeout 或完整 portfolio snapshot 失敗皆為 `INVALID/NO_TRADE`，不得解析自由文字補救。
+- confidence 低於 0.65 強制 `HOLD`；提高 confidence 不能放寬 deterministic limits。
+
+### 4.3 反思與記憶
+
+- 每日保存決策、結果、Risk rejection、持倉中間狀態與 forecast calibration；持倉未平也每日寫入。
+- 原始 decision/outcome/rejection 保存在 immutable audit/DB，不刪除、不由 LLM 改寫。
+- LLM 可見的濃縮記憶每週六整理，最多 4,000 行；保留重複錯誤、風控拒絕原因、有效／失敗模式、預測校準、部位教訓與 market regime。
+- P3 依 `docs/MEMORY_CURATION_SKILL_SPEC.md` 交付新的 memory-curation skill，限制整理器只做去重、合併與重要性保留；不得改寫權威原始紀錄或把未來 outcome 洩漏給歷史 run。
 
 ## 5. 每日作業流程
 
@@ -125,35 +137,35 @@
 | 04:30 | 抓取價格、公司行動、SEC/IR、新聞與宏觀快照 | 失敗重試且不下單 |
 | 06:00 | universe/quant screen，產生前 100 | 資料不新鮮則整輪無新增部位 |
 | 06:30 | 對前 30 建 EvidencePacket | Tavily 超額則使用 cache/primary sources，不得 PAYGO |
-| 07:00–09:00 | 前 12 七人 first pass、驗證、rebuttal、chair | 09:10 未完成者 `INVALID` |
-| 09:10 | 凍結 `TargetPortfolio` 與 pre-trade risk decision | 之後模型輸出不可插單 |
-| 09:35 | 主要再平衡 | 錯過窗口不追單 |
-| 10:00 | post-trade reconciliation | 不一致則 pause entries |
-| 15:15 | 持倉與少數高順位候選 refresh | 不重跑整個 universe |
-| 15:35 | 凍結第二份 target；只允許受限 delta | 資料不足維持或降風險 |
-| 15:40 | 收盤前再平衡 | 收盤前安全 cutoff 取消未成交單 |
+| 開盤+60m | 全部持倉 + 最多 12 個 long/short 候選，完整 graph | 全流程 15 分鐘內；超時 `NO_TRADE` |
+| 分析完成後 | deterministic Risk 審核，必要時一次重申，凍結核准 target | 時間不足即不追單；後續 Paper evidence 可調整窗口 |
+| 第一窗口後 | post-trade reconciliation | 不一致則 pause entries |
+| 收盤-90m | 全部持倉 + 最多 5 個 long/short 候選，完整 graph | 全流程 15 分鐘內；超時 `NO_TRADE` |
+| 第二分析完成後 | deterministic Risk 審核與受限再平衡 | 收盤前安全 cutoff 取消未成交單 |
 | 收盤+5m | 最終 reconciliation | 不一致升級 critical |
-| 收盤+30m | 日報、歸因、成本和 issue 更新 | 不影響已完成帳務 |
+| 收盤+30m | 日報、歸因、每日反思／記憶和 issue 更新 | 不影響已完成帳務 |
+| 週六 | 壓縮 LLM-visible memory 至最多 4,000 行 | 不在交易 critical path |
 
 開盤後執行是因為避免把 Paper-only 的盤前流動性誤當正常成交；精確時間須由 paper experiments 校準。
 
-## 6. 不做當沖的機械規則
+## 6. 同日交易與緊急事件規則
 
-- 每一 lot 保存 acquisition trading date。
-- 同日買入的 share 不可因 alpha 改變在當日賣出。
-- 同日賣出的 symbol 不可因 alpha 改變在當日買回。
-- 正常研究退出需持有至少 5 個交易日。
-- 只有 `RISK_EXIT`、`BROKER_CORRECTION`、`CORPORATE_ACTION` 可突破最短持有期；每次例外要單獨 audit event。
-- 收盤前交易不是第二套當沖訊號，而是對目標投資組合的小幅修正、未成交處理或風險降低。
+- 不設定最短持有期；同日 long→sell、short→cover 與平倉後再進場都可發生，但仍受兩個正常窗口與每日 40% turnover 上限。
+- 短線獲利退出不需特殊例外；同日虧損退出不能只因為帳面虧損，必須提供 `same_day_exit_reason_code`、evidence ids，且理由屬於 downside band 明顯超標、thesis invalidated、重大新事件、borrow/liquidity anomaly 或 hard-risk trigger。
+- 不符合上述條件時 Risk Engine 拒絕；Portfolio Manager仍只有一次重申機會。
+- 事件監測器追蹤價格／成交量異常、停牌、借券狀態與重大新聞。價格事件須兩個獨立來源一致且連續三個 fresh samples；官方 filing／交易所／公司公告可單一 primary source 驗證新聞事件。
+- 來源延遲、timestamp 不符或資料衝突標記 `DATA_CONFLICT`，不啟動 LLM 緊急交易；只有已驗證的 deterministic hard-risk 規則仍可減倉並告警。
+- 緊急分析只涵蓋受影響與高度相關持倉，只能 `HOLD/REDUCE/CLOSE`，3 分鐘超時即 `NO_TRADE`；`RISK_EXIT` 可在任何時間執行且不計 40% turnover。
 
 ## 7. 初始投資組合與風控政策
 
 以下是 Paper 校準起點，不是收益保證：
 
-- 總曝險／淨長曝險不超過 NAV 100%；現金下限 20%。
-- 最多 10 個持倉；單一標的 target 不超過 8%。
+- long gross ≤ NAV 100%；short gross ≤ NAV 20%；total gross ≤ NAV 120%；net exposure 維持 NAV 40%–100%。
+- long + short 合計最多 15 檔；單一標的 absolute target weight 不超過 NAV 15%。
+- 做空只允許 Alpaca 權威 snapshot 顯示 `shortable` 且符合 easy-to-borrow／borrow policy；狀態未知或改變時禁止新空倉並觸發檢查。
 - 單一 GICS sector 不超過 25%；高度相關主題另設 30% cluster cap。
-- 每日單邊成交額合計不超過 NAV 20%。
+- 每日 turnover 不超過 NAV 40%；經驗證的 `RISK_EXIT` 不計入此上限。
 - 每筆預期部位不超過該股 20 日 ADV 的 0.1%。
 - 不在 quote stale、spread 超限、trading halt、corporate action 不明時新增部位。
 - 日內 Paper NAV 較前收盤跌 1.0%：停止新部位；跌 1.5%：取消所有 entry orders。
@@ -189,15 +201,15 @@ optimizer 的目標是最大化經 haircut 的預期報酬，減去 variance、c
 - 每個帳號各有獨立 1,000-credit ledger、reset timestamp、health、429 cooldown 和 enabled flag。
 - router 以最低使用率的健康帳號循序分配，不靠跨帳號併發突破單帳號或服務 rate limit。
 - 預設 basic search；同 URL、query 和 freshness window 去重。
-- 只對前 30 候選做網頁 extract，完整 committee 只限前 12。
+- 只對前 30 候選做網頁 extract，完整多角色 analysis 只限前 12。
 - 429 遵守 `Retry-After`，超過 deadline 即停止，不延後追單。
 - 禁止 PAYGO、自動建立帳號或隱匿 identity；自動偵測方案／額度／授權異常並 pause discovery。
 
 ### 8.3 X 資料邊界
 
 - 不建立 credential scraping、cookie harvesting 或規避登入的爬蟲。
-- 離線蒸餾逐一搜尋可公開存取的原始 X URL、作者網站或合法第三方索引。
-- runtime 不以即時 X 為必要輸入；無法讀取時保留最後已驗證 doctrine，但「最新立場」標示 stale 並棄權。
+- runtime 不以即時 X 為必要輸入；Sentiment Analyst 無法取得合規、可回溯且足夠新鮮的資料時必須降級或棄權。
+- 七人候選語料只屬 Future Analyst Plugin，未重新核准前不蒸餾、不讀取、不成為 P3 依賴。
 - 原文只保存個人研究所需最小片段；repository 不提交大量第三方全文。
 
 ## 9. 模型與多 Agent 分工
@@ -209,27 +221,30 @@ optimizer 的目標是最大化經 haircut 的預期報酬，減去 variance、c
 - `gpt-5.6-luna`：批次資料清理、fixture、重複性單元測試、文件更新。
 - 所有 agent 必須有檔案 ownership；共享工作區時不得覆蓋他人修改。
 
-### 9.2 每日研究階段
+### 9.2 每日研究模型路由
 
-- Luna 處理大量候選的抽取、分類和初步 assessment。
-- Terra 處理前 12 的複雜辯論、衝突解決和 evidence repair。
-- Sol 只在主席、重大矛盾、高影響持倉或 release/evaluation 上使用。
-- DeepSeek V4 Flash、Agnes 2.5 Flash 僅能在建立 provider adapter、資料政策和同一套 eval gate 後成為可選模型，不可成為第一版必要依賴。
-- 任一模型降級、超時或結構錯誤只能降低 coverage，不能繞過驗證。
+- Technical/Market、Fundamentals、News、Sentiment 預設 `agnes-2.5-flash`，備援 `agnes-2.0-flash`。
+- Research Manager、Trader、Aggressive/Conservative/Neutral Risk Debate、Portfolio Manager 預設 OpenCode Go 的 `muse-spark-1.2-contributor`，備援 `agnes-2.5-flash`。
+- OpenCode Go 的 `deepseek-v4-flash` 保留為可配置候選 provider；通過同一 eval gate 後可由設定檔明確指派角色，但不成為第三次自動 failover。
+- 所有角色預設要求 thinking/reasoning 的最高可用 effort。因 provider 參數不一致，adapter 必須做 capability negotiation、只傳實際支援的參數，並記錄 `requested=max` 與 effective setting；不得假裝已啟用。
+- 每一角色只允許切換備援一次；備援仍失敗、輸出 schema 錯誤或超時即 `INVALID/NO_TRADE`，不可靜默更換其他模型。
+- adapter 同時支援 Chat Completions 與 Responses 類型，但對內只暴露同一 versioned schema；模型可按角色混用。
+- 傳給模型的 portfolio snapshot 必須去除姓名、account id、broker order id 等識別欄位，只保留分析必需數值。使用者已接受 Muse Spark Contributor 的非 ZDR／訓練資料政策。
+- 未來 `gpt-5.6` 只有通過相同 held-out、schema、safety、latency 與 cost eval gate 後才可加入，不自動升級或替換既有模型。
 
 ## 10. Codex 的正確角色
 
 Codex 適合：
 
 - 夜間單元／整合／property tests；
-- 每週 doctrine source refresh 和來源缺口報告；
+- 每週分析來源、provider/version drift 與資料缺口報告；
 - 每日收盤後產生程式與資料品質報告；
 - 文件、issue、risk register 和 dependency audit；
 - 在獨立 worktree 完成非緊急修復並等待核准合併。
 
 Codex 不負責：
 
-- 09:35 或 15:40 的唯一喚醒機制；
+- 開盤後 60 分鐘或收盤前 90 分鐘分析／交易窗口的唯一喚醒機制；
 - 保管 broker credentials；
 - 在 production 工作目錄自動修改程式後立即交易；
 - 對未 reconciliation 的委託做自主補單。
@@ -239,7 +254,7 @@ Codex 不負責：
 ### 11.1 研究有效性
 
 - source citation coverage、citation entailment、source-date compliance；
-- doctrine fidelity 與 persona-name removal test；
+- analyst role fidelity、graph semantic parity 與角色移除／ablation test；
 - abstention precision/recall、hallucination rate、conflict handling；
 - Brier score/校準曲線、不同 horizon 的 rank IC；
 - 委員相關性、ablation、反例召回、權重穩定性；
@@ -266,18 +281,19 @@ Codex 不負責：
 1. **P0 Spec Gate**：本文件集核准，所有硬邊界無矛盾。
 2. **P1 Core Gate**：schema、DB、config、secrets、observability、CI 完成。
 3. **P2 Broker Safety Gate**：Paper adapter、outbox、reconciliation、故障注入全過。
-4. **P3 Research Gate**：七套 doctrine v1、source manifest、held-out eval 過門檻。
-5. **P4 Strategy Gate**：point-in-time walk-forward 和經濟成交模型完成。
-6. **P5 Shadow Gate**：至少 20 個交易日只產生意圖、不送單，零嚴重帳務錯誤。
-7. **P6 Supervised Paper Gate**：至少 20 個交易日 Paper，逐日人工檢視但不手動干預策略。
-8. **P7 Unattended Paper Gate**：再至少 40 個交易日無人值守，通過 uptime、reconciliation、風控和研究品質門檻。
+4. **P3 Analysis/Proposal Gate**：完整 TradingAgents graph、`PortfolioProposal`、provider/memory、point-in-time/evidence/schema eval 過門檻。
+5. **P4 Deterministic Risk Gate**：候選漏斗、一次駁回重申、long/short hard risk 與 `TargetPortfolio` 重建性過門檻。
+6. **P5 Validation Gate**：point-in-time walk-forward、decision replay、attribution 與經濟成交模型完成。
+7. **P6 Shadow Gate**：至少 20 個交易日只產生意圖、不送單，零嚴重帳務錯誤。
+8. **P7 Supervised Paper Gate**：至少 20 個交易日 Paper，逐日人工檢視但不手動干預策略。
+9. **P8 Unattended Paper Gate**：再至少 40 個交易日無人值守，通過 uptime、reconciliation、風控和研究品質門檻。
 
 無論 Paper 表現如何，本企劃沒有自動升級實盤的 gate。
 
 ## 13. 最終交付物
 
 - 可重建環境、版本鎖定與 secrets setup 文件；
-- 七人 doctrine registry、公開來源 manifest 和 evidence corpus 索引；
+- 完整 TradingAgents analysis/proposal graph、versioned `PortfolioProposal` schema、公開來源 manifest、portfolio/evidence/data snapshot 索引與 bounded-memory skill；
 - 完整 Python modular monolith、DB migrations、CLI/control plane；
 - Paper broker adapter、portfolio/risk/execution/reconciliation；
 - backtest、walk-forward、shadow、paper reports；
@@ -287,4 +303,4 @@ Codex 不負責：
 
 ## 14. 目前結論
 
-這個專案在技術上可行，但「免費公開資料 + 沒有 X API + 無人值守」必須接受一個不可妥協的結果：系統不能保證知道每位委員的最新公開發言，也不能用猜測填補。正確行為是保存可稽核的 doctrine、定期離線更新、在資料過期時棄權，並讓投資組合持有現金。這不是功能缺陷，而是零付費資料條件下的安全設計。
+這個專案在技術上可行，但 TradingAgents 的 Portfolio Manager proposal 不等於可直接交易。正確邊界是：P3 保存可稽核、point-in-time、可重播的完整研究／提案與記憶；P4 deterministic Risk 才能核准 targets 並轉成 quantity；P2 只執行已核准的 Paper `OrderIntent`。資料不足、上游/provider 漂移、schema 失敗或第二次 Risk rejection 時必須 `NO_TRADE`。七人蒸餾保留為未來可選插件，不再阻塞主線。

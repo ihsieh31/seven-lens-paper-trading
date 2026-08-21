@@ -12,9 +12,11 @@
 6. stale/invalid/missing data 不會被預設值轉成可交易信號。
 7. 過期 research/target 不可在下一窗口重用。
 8. hard limits 只能由版本化設定和明確控制流程變更，不能由 LLM 變更。
-9. 同日 alpha 反轉不會造成 round trip。
+9. 同日交易只能通過 normal-window turnover limits 或 verified `RISK_EXIT`；同日虧損退出不能只因帳面虧損。
 10. 告警失敗不會讓 fail-closed 狀態自動恢復。
 11. Telemetry 不是權威 audit；recorder、diagnostic 或 exporter 故障不得改變 business result、transaction、rollback、retry 或 fail-closed 狀態。
+12. LLM Portfolio Manager的第一個 proposal 被拒後最多重申一次；第二次拒絕必為 `NO_TRADE`。
+13. 未通過來源／timestamp 二次確認的突發事件不得進 LLM emergency graph。
 
 ## 2. 啟動順序
 
@@ -48,7 +50,10 @@
 |---|---|---|
 | Tavily 單帳號額度用盡／429 | 已授權 pool 才切到另一健康帳號；否則停止 discovery | cooldown/reset 或 Tavily 授權確認 |
 | Tavily pool 授權不明／被撤回 | 立即降為單帳號模式，其他 keys disabled | 書面或後台授權重新驗證 |
-| LLM timeout/429/schema error | 該 assessment `INVALID`；不自由文字 fallback | 新 run 或窗口內受限重試成功 |
+| LLM timeout/429/schema error | 該角色只切換備援一次；仍失敗則整體 `INVALID/NO_TRADE`，不自由文字 fallback | 新 run |
+| Risk 第一次拒絕 proposal | 回傳 reason codes + remaining limits；只重申一次 | 第二份 proposal通過，否則 `NO_TRADE` |
+| 行情／新聞事件來源衝突或延遲 | 三次重抓、核對 timestamp／第二來源；仍衝突記 `DATA_CONFLICT`，不啟動 LLM | 新事件重新通過驗證；hard-risk 仍可獨立減倉 |
+| LLM-visible memory 超過 4,000 行 | 不送入交易 graph；保留 immutable raw records，排入週六 compaction | bounded memory artifact 通過 lineage/future-leakage validation |
 | Primary source 無法讀 | 降低 coverage；material claim 不成立 | 來源恢復或替代 primary source |
 | Quote stale/spread 超限 | 該 symbol 不送單 | 新 quote 通過門檻且仍在窗口 |
 | Alpaca submit timeout | intent `UNKNOWN`；依 client id 查單 | 查明存在、拒絕或明確不存在 |
@@ -74,7 +79,7 @@
 - symbol active/tradable、非 halt；
 - 市場為 regular session 且在本窗口內；
 - quote age、spread、price collar；
-- lot/day-trade restriction；
+- shortable／borrow status；同日虧損退出 reason/evidence gate；
 - post-trade gross/net/name/sector/cluster/turnover/ADV/drawdown limits；
 - deterministic client id 尚無有效 broker order。
 
@@ -116,6 +121,14 @@
 
 控制面本機綁定、強驗證、完整 audit；不得直接暴露公網。
 
+### 7.1 自動緊急分析
+
+1. event monitor 偵測 price/volume 異常、halt、borrow change 或重大新聞，但本身不產生交易要求。
+2. 價格事件以兩個獨立來源及連續三個 fresh samples 確認；官方 filing／交易所／公司公告可單一 primary source 確認新聞。
+3. stale timestamp、來源不一致或疑似 provider bug 產生 `DATA_CONFLICT` 與告警，不交給 LLM。
+4. 已確認事件只重跑受影響與高度相關持倉，deadline 3 分鐘，Portfolio Manager只能要求 `HOLD/REDUCE/CLOSE`。
+5. proposal 仍經 deterministic Risk Engine；第一次拒絕可重申一次。LLM failure 時只有已驗證 hard-risk rule 可產生 turnover-exempt `RISK_EXIT`。
+
 ## 8. 告警
 
 免費通道採可插拔 AlertPort（Telegram bot、Discord webhook 或 email 擇一）。
@@ -140,7 +153,7 @@
 
 ### WARN/INFO
 
-- 個別 doctrine abstain、延遲、較高 spread、每日報告。
+- 個別 analyst／整體 `PortfolioProposal` abstain、延遲、較高 spread、每日報告。
 
 ## 9. Runbook
 
@@ -171,7 +184,7 @@
 ## 10. 備份與恢復
 
 - PostgreSQL 每日加密 logical backup，重要交易事件後 WAL/等價增量保護。
-- manifests、configs、doctrine versions、reports 和 DB backup 都在本機第二儲存位置；不含 plaintext secrets。
+- manifests、configs、graph/prompt/model/provider versions、reports 和 DB backup 都在本機第二儲存位置；不含 plaintext secrets。Future Analyst Plugin 若啟用才另備份 plugin/doctrine versions。
 - 每月 restore drill 到隔離 DB，驗證 row counts、hash chain 和 reconciliation replay。
 - 研究 raw cache 可重抓；order/fill/audit ledger 不可遺失。
 
@@ -187,7 +200,7 @@
 
 ## 12. Codex 自動化隔離
 
-Codex automations 只能在獨立 worktree 或只讀模式執行測試、報告和蒸餾候選更新。它不能自動合併到當日交易 runtime，也不能接觸 broker credential。production artifact 只能由通過 release gate 的固定 commit/dependency lock 建置。
+Codex automations 只能在獨立 worktree 或只讀模式執行測試、報告和 analysis/provider drift 檢查。Future Analyst Plugin 保持停用時不得自動讀取或蒸餾 `skill/`。它不能自動合併到當日交易 runtime，也不能接觸 broker credential。production artifact 只能由通過 release gate 的固定 commit/dependency lock 建置。
 
 ## 13. P1 CI 與 clean-machine gate
 

@@ -82,14 +82,23 @@ up/down/up）。2026-08-19 獨立驗收另發現並修復 pause recovery 重送�
 8 deselected、live acceptance 1 passed；P2 gate **Closed**。真實下單仍留 P7；WS 傳輸本體
 與 control shell CLI 依 ADR-019 延後至 P6/P7。
 
-## P3 — 資料與七人蒸餾（6–10 週，可與 P2 部分並行）
+## P3 — TradingAgents 完整研究、提案與記憶整合（8–12 週）
 
 交付：
 
-- source manifest、content-addressed store、Tavily budget manager 與條件式 account pool；
-- SEC/IR/public web adapters、time-aware retrieval；
-- 七套 doctrine v1 candidate、counterexamples、golden/held-out/adversarial eval；
-- source rights/coverage report。
+- **P3-A upstream/license/contracts**：固定上游 commit `a33fd4c0f134485a43553a2c23a63cb14adbd88f`，只直接移植需要的 analysis/data/debate/risk/Portfolio Manager/memory 模組；保留 Apache-2.0 license、attribution／NOTICE 並標示修改。定義 `AnalysisInput`、四種 `AnalystReport`、兩種 `DebateState`、`PortfolioSnapshot`、`PortfolioProposal` 與 `RiskRejectionFeedback` versioned schema；
+- **P3-B point-in-time input/event verification**：沿用既有資料來源，加入 source manifest、content-addressed store、SEC/IR/public web/market/Tavily adapters、time-aware retrieval、去識別化完整 portfolio snapshot，以及雙來源／三次 fresh sample 的事件驗證器；
+- **P3-C analyst/research layer**：Technical/Market、Fundamentals、News、Sentiment、兩輪 Bull/Bear、Research Manager、Trader；
+- **P3-D risk/proposal layer**：兩輪 Aggressive/Conservative/Neutral Risk Debate 與 LLM Portfolio Manager；輸出 target-weight `PortfolioProposal`，不得輸出自由文字交易建議或 `OrderIntent`；
+- **P3-E provider isolation**：角色可配置模型；Analysts 預設 `agnes-2.5-flash`／備援 `agnes-2.0-flash`，其餘深度角色預設 `muse-spark-1.2-contributor`／備援 `agnes-2.5-flash`；`deepseek-v4-flash` 是通過同一 eval 後才可明確指定的候選，不是第三次 failover；新增 Agnes／OpenCode exact Keychain refs 與 scoped secret mapping，要求最高可用 reasoning、一次 failover、Chat/Responses adapter 與去識別化；
+- **P3-F reflection/memory/evals**：依 `docs/MEMORY_CURATION_SKILL_SPEC.md` 實作持倉期間每日反思、Risk rejection memory、週六最多 4,000 行的 memory-curation skill、immutable raw audit、record/replay、semantic-parity/golden/held-out/adversarial eval。
+
+範圍邊界：
+
+- 採用完整 TradingAgents 研究／risk debate／Portfolio Manager 鏈，但 LLM Portfolio Manager 只有提案權，沒有 risk approval、broker 或 order authority。
+- Portfolio Manager 每次必須看去識別化的 NAV、cash、buying power、全部 positions、open orders、same-day fills、borrow status 與 remaining limits；缺任一必要 snapshot 即 `INVALID/NO_TRADE`。
+- P3 用固定多 symbol／portfolio fixtures 驗證跨檔提案；production universe/quant funnel 與 deterministic Risk approval 留 P4。
+- 七人蒸餾與本機 `skill/` 語料不屬 P3，保留為停用的 Future Analyst Plugin；不得因此讀取、審查或發布 corpus。
 
 Tavily account pool 驗收：
 
@@ -99,33 +108,42 @@ Tavily account pool 驗收：
 - 不以跨 key 併發繞過 rate limit；任何 429 遵守 `Retry-After`；
 - secrets 不進 DB、log、fixture、Git 或 LLM context。
 
-每位 doctrine 的 Definition of Done：
+P3 Definition of Done：
 
-- 至少一份核心長文或等價高上下文 primary set；
-- 至少 50 個可驗證 source fragments，若確實不足則記錄搜尋證據和縮小 domain；
-- 至少 10 個反例／立場反轉／框架失效案例；
-- Distillation Spec 的量化 gate 通過；
-- 禁止來源、付費內容和未授權第三方全文不進 repo。
+- graph 順序、角色輸入／輸出與兩輪 Bull/Bear／兩輪 Risk Debate 對固定上游版本有可重現的 semantic-parity tests；
+- 四份 analyst report、兩種 debate、Research Manager、Trader、Portfolio Manager 都保存獨立狀態與完整 version references；
+- 每個 material claim 可回鏈 point-in-time source/data reference，future-dated input 100% 阻擋；
+- PortfolioProposal 只接受 `OPEN/INCREASE/REDUCE/CLOSE/HOLD`、signed target weight、confidence、evidence ids 與短 reason codes；低於 0.65 confidence 強制 `HOLD`；
+- structured-output/schema/timeout/429/provider/data/portfolio-snapshot failure 全部得到 `INVALID/NO_TRADE`，自由文字 fallback 不可進 P4；
+- 相同 frozen inputs 的 record/replay 在不重呼叫模型時可重建同一 `PortfolioProposal`；
+- prompt injection、缺來源、互相矛盾、stale data、模型部分失敗與 debate round overflow 有 adversarial tests；
+- AnalysisProvider 沒有 broker credential、order/ledger write、shell 或任意 network 能力；
+- requested/effective reasoning、一次 provider failover、Muse non-ZDR policy acceptance 與 sanitized input 有 audit evidence；未來 GPT-5.6 必須通過同一 eval gate；
+- 每日 open-position reflection 可追到原始 decision/outcome/rejection；週六壓縮結果 ≤ 4,000 行且無 future leakage，immutable raw records 完整不變；
+- event verifier 對雙來源分歧、舊 timestamp、單點壞價與延遲新聞產生 `DATA_CONFLICT`，不啟動 LLM 緊急交易；
+- source rights/coverage 報告完成，禁止來源、付費內容和未授權第三方全文不進 repo。
 
-主責：Luna 批次 discovery/label；Terra pipeline/evals；Sol 定義 doctrine、抽樣與發布 gate。蒸餾結果必須人工抽樣，不得只由同一模型自評。
+實作時以檔案 ownership 分工；任何 agent 報告都需由非 owner 以 source/tests 重現。結果必須人工抽樣，不得只由同一模型自評。
 
-## P4 — 篩選、委員會、組合與風控（4–6 週）
+## P4 — 候選篩選與 deterministic Risk approval（4–6 週）
 
 交付：
 
-- point-in-time universe、factor/evidence funnel；
-- blinded doctrine runner、evidence verifier、targeted rebuttal、chair；
-- source overlap/correlation haircut；
-- deterministic optimizer 和 hard risk rules；
-- no-day-trade lots、開盤／收盤前 target freeze。
+- point-in-time universe、quant factor/evidence funnel；
+- `PortfolioProposal` + quant factors + authoritative account/portfolio state 的 deterministic validation 與 target-to-quantity translation；
+- source/data overlap 與 prediction-correlation haircut；
+- 一次 `RiskRejectionFeedback(reason_codes, remaining_limits)` 與一次 Portfolio Manager 重申；使用同一研究＋刷新後完整 portfolio snapshot，不重跑 Analysts／debates、不加入 run 外候選；第二次拒絕固定 `NO_TRADE`；
+- long gross 100%、short gross 20%、total gross 120%、net 40%–100%、最多 15 檔、單股 absolute 15%、daily turnover 40% 與 shortable/borrow hard gates；
+- 同日交易 reason-code gate、開盤後 60 分鐘／收盤前 90 分鐘 target freeze，以及任何時間可用且 turnover-exempt 的 verified `RISK_EXIT`。
 
 驗收：
 
-- 每個 verdict material claim 都能回鏈 evidence；
-- 未引用、過時、衝突未解的 case 正確 abstain；
-- optimizer 永不突破 hard constraints；無 feasible solution 持現金；
-- 同日信號反轉 property tests 不產生 round trip；
-- 相同 snapshot/version 可重建相同 targets。
+- 只有 P3 `VALID` 且未過期、portfolio snapshot hash 相符的 `PortfolioProposal` 可進 Risk Engine；`INVALID/ABSTAIN` 不得新增風險；
+- target/confidence 無論多高都不能直接生成委託或放寬 hard constraints；
+- Risk Engine 永不突破 hard constraints；無 feasible solution 或第二次拒絕為 `NO_TRADE`；
+- 同日虧損退出缺少允許的 reason/evidence 時必定拒絕；短線獲利退出、verified Risk Exit 與正常再進場各有 property tests；
+- 相同 proposal/quant/holdings/constraints snapshot 可重建相同 targets；
+- `TargetPortfolio → RiskDecision → OrderIntent` 只走既有 P2 application boundary。
 
 主責：Terra；Sol 做金融邏輯、prompt/eval、optimizer review；Luna 跑大批 regression。
 
@@ -136,14 +154,15 @@ Tavily account pool 驗收：
 - as-of backtest、walk-forward partitions；
 - economic fill simulator：IEX/Paper limitations、spread/slippage/unfilled/capacity；
 - baselines、ablation、regime/sector/style attribution；
-- model/data/doctrine versioned experiment registry。
+- TradingAgents decision replay、per-analyst accuracy/calibration、decision attribution；
+- graph/prompt/model/provider/data versioned experiment registry。
 
 驗收：
 
 - time-travel tests 100% 阻擋未來 source/universe constituents；
 - 沒有用 test period 選參數；
 - 報告含所有失敗 run、換手、drawdown、capacity 和 exposure；
-- 七人委員相對簡單 baseline 有可解釋增量，否則不得增加複雜度；
+- 多角色 graph 相對單一分析／純 quant baseline 有可解釋增量，否則不得增加複雜度；
 - 結果在更保守成交假設下仍不出現明顯邏輯崩壞。
 
 主責：Terra；Sol 方法論審查；Luna experiment runner/report fixtures。
@@ -200,12 +219,12 @@ Tavily account pool 驗收：
 
 - 每晚：lint/type/unit/integration（不碰 broker）。
 - 每交易日收盤後：讀取已生成的 report，更新 PROGRESS/ISSUES candidate；不得自行關閉 Critical。
-- 每週：來源缺口與 doctrine drift 報告、dependency/license/secret scan。
+- 每週：來源缺口、upstream/provider/prompt drift 報告、dependency/license/secret scan。
 - 每月：restore drill 提醒、eval regression、Tavily usage review。
 
 ### Change control
 
-下列變更必須新增 ADR 和重新跑對應 gate：broker adapter、hard limits、投資宇宙、持有期、doctrine weight、資料供應商、模型 provider、schedule window、schema breaking change。
+下列變更必須新增 ADR 和重新跑對應 gate：broker adapter、hard limits、投資宇宙、持有期、TradingAgents graph/role/round、analysis-to-portfolio translation、資料供應商、模型 provider、schedule window、schema breaking change。
 
 ## 專案完成定義
 

@@ -1,0 +1,731 @@
+{
+  "abstain_report": {
+    "catalysts": [
+      "catalyst"
+    ],
+    "confidence": "0.0000",
+    "counterevidence_refs": [],
+    "evidence_refs": [
+      "evidence.1"
+    ],
+    "input_id": "00000000-0000-4000-8000-000000000002",
+    "invalidators": [
+      "invalidator"
+    ],
+    "material_claims": [],
+    "meta": {
+      "created_at": "2026-08-21T14:30:00.000000Z",
+      "producer_version": "p3a.1",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "schema_version": "1.0.0"
+    },
+    "missing_evidence": [
+      "missing item"
+    ],
+    "observations": [
+      "observation"
+    ],
+    "report_id": "00000000-0000-4000-8000-000000000020",
+    "risks": [
+      "risk"
+    ],
+    "role": "FUNDAMENTALS",
+    "status": "ABSTAIN",
+    "summary": "bounded summary",
+    "symbol": "MSFT"
+  },
+  "emergency": {
+    "as_of": "2026-08-21T14:30:00.000000Z",
+    "candidate_symbols": [],
+    "data_snapshot_refs": [
+      "market.1"
+    ],
+    "deadline": "2026-08-21T14:33:00.000000Z",
+    "evidence_refs": [
+      "evidence.1"
+    ],
+    "focus_symbols": [
+      "TSLA"
+    ],
+    "holding_symbols": [
+      "AAPL",
+      "TSLA"
+    ],
+    "input_id": "00000000-0000-4000-8000-000000000002",
+    "meta": {
+      "created_at": "2026-08-21T14:30:00.000000Z",
+      "producer_version": "p3a.1",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "schema_version": "1.0.0"
+    },
+    "portfolio_snapshot": {
+      "as_of": "2026-08-21T14:30:00.000000Z",
+      "borrow_statuses": [
+        {
+          "availability": "AVAILABLE",
+          "located_quantity": "100.000000",
+          "symbol": "TSLA"
+        }
+      ],
+      "buying_power": "50000.00",
+      "cash": "35000.00",
+      "content_hash": "83fd7fbe6e01bd463c67a02da24e19ead5815864cea6b1fc56f7ff99aea6364c",
+      "nav": "100000.00",
+      "open_orders": [
+        {
+          "reference_id": "open.1",
+          "remaining_quantity": "2.000000",
+          "side": "LONG",
+          "symbol": "AAPL"
+        }
+      ],
+      "positions": [
+        {
+          "average_entry_price": "200.00",
+          "current_price": "210.00",
+          "market_value": "2100.00",
+          "opened_at": "2026-08-20T14:30:00.000000Z",
+          "quantity": "10.000000",
+          "realized_pnl_today": "0.00",
+          "same_day": false,
+          "side": "LONG",
+          "signed_weight": "0.100000",
+          "symbol": "AAPL",
+          "unrealized_pnl": "100.00"
+        },
+        {
+          "average_entry_price": "300.00",
+          "current_price": "290.00",
+          "market_value": "1450.00",
+          "opened_at": "2026-08-21T13:30:00.000000Z",
+          "quantity": "5.000000",
+          "realized_pnl_today": "-10.00",
+          "same_day": true,
+          "side": "SHORT",
+          "signed_weight": "-0.050000",
+          "symbol": "TSLA",
+          "unrealized_pnl": "50.00"
+        }
+      ],
+      "remaining_limits": {
+        "long_gross_room": "0.650000",
+        "net_lower_room": "0.050000",
+        "net_upper_room": "0.550000",
+        "remaining_slots": 13,
+        "short_gross_room": "0.150000",
+        "single_name_room": "0.100000",
+        "total_gross_room": "0.800000",
+        "turnover_room": "0.300000"
+      },
+      "same_day_fills": [
+        {
+          "occurred_at": "2026-08-21T13:30:00.000000Z",
+          "price": "300.00",
+          "quantity": "5.000000",
+          "reference_id": "fill.1",
+          "side": "SHORT",
+          "symbol": "TSLA"
+        }
+      ]
+    },
+    "universe_hash": "10d686bb43f4634be4b4601e73aead5c236cd0e15894219bc004a7b99937d869",
+    "window": "EMERGENCY"
+  },
+  "first_proposal": {
+    "analysis_input_id": "00000000-0000-4000-8000-000000000002",
+    "attempt": 1,
+    "data_version": "data.1",
+    "expiration_at": "2026-08-21T14:45:00.000000Z",
+    "graph_version": "graph.1",
+    "memory_version": "memory.1",
+    "meta": {
+      "created_at": "2026-08-21T14:30:00.000000Z",
+      "producer_version": "p3a.1",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "schema_version": "1.0.0"
+    },
+    "model_version": "model.1",
+    "prompt_version": "prompt.1",
+    "proposal_id": "00000000-0000-4000-8000-000000000011",
+    "provider_version": "provider.1",
+    "requests": [
+      {
+        "action": "OPEN",
+        "confidence": "0.8000",
+        "evidence_refs": [
+          "evidence.1"
+        ],
+        "invalidators": [
+          "margin compression"
+        ],
+        "reason_codes": [
+          "FUNDAMENTAL"
+        ],
+        "same_day_exit_reason": null,
+        "side": "LONG",
+        "symbol": "MSFT",
+        "target_weight": "0.050000"
+      },
+      {
+        "action": "OPEN",
+        "confidence": "0.7500",
+        "evidence_refs": [
+          "evidence.2"
+        ],
+        "invalidators": [
+          "growth acceleration"
+        ],
+        "reason_codes": [
+          "VALUATION"
+        ],
+        "same_day_exit_reason": null,
+        "side": "SHORT",
+        "symbol": "NVDA",
+        "target_weight": "-0.030000"
+      },
+      {
+        "action": "REDUCE",
+        "confidence": "0.7000",
+        "evidence_refs": [
+          "evidence.3"
+        ],
+        "invalidators": [
+          "new product cycle"
+        ],
+        "reason_codes": [
+          "REBALANCE"
+        ],
+        "same_day_exit_reason": null,
+        "side": "LONG",
+        "symbol": "AAPL",
+        "target_weight": "0.060000"
+      },
+      {
+        "action": "CLOSE",
+        "confidence": "0.9000",
+        "evidence_refs": [
+          "evidence.4"
+        ],
+        "invalidators": [
+          "event disproved"
+        ],
+        "reason_codes": [
+          "NEWS"
+        ],
+        "same_day_exit_reason": "MATERIAL_NEW_EVENT",
+        "side": "FLAT",
+        "symbol": "TSLA",
+        "target_weight": "0.000000"
+      },
+      {
+        "action": "HOLD",
+        "confidence": "0.6499",
+        "evidence_refs": [
+          "evidence.5"
+        ],
+        "invalidators": [],
+        "reason_codes": [
+          "SENTIMENT"
+        ],
+        "same_day_exit_reason": null,
+        "side": "FLAT",
+        "symbol": "AMZN",
+        "target_weight": "0.000000"
+      }
+    ],
+    "snapshot_hash": "83fd7fbe6e01bd463c67a02da24e19ead5815864cea6b1fc56f7ff99aea6364c",
+    "status": "VALID",
+    "superseded_proposal_id": null,
+    "universe_hash": "6a401be0d31b26d7eed24e3f96ac9e8410cbd9982467d14f217c88b098483635",
+    "window": "PRIMARY"
+  },
+  "invalid_report": {
+    "catalysts": [
+      "catalyst"
+    ],
+    "confidence": "0.0000",
+    "counterevidence_refs": [],
+    "evidence_refs": [
+      "evidence.1"
+    ],
+    "input_id": "00000000-0000-4000-8000-000000000002",
+    "invalidators": [
+      "invalidator"
+    ],
+    "material_claims": [],
+    "meta": {
+      "created_at": "2026-08-21T14:30:00.000000Z",
+      "producer_version": "p3a.1",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "schema_version": "1.0.0"
+    },
+    "missing_evidence": [
+      "missing item"
+    ],
+    "observations": [
+      "observation"
+    ],
+    "report_id": "00000000-0000-4000-8000-000000000020",
+    "risks": [
+      "risk"
+    ],
+    "role": "FUNDAMENTALS",
+    "status": "INVALID",
+    "summary": "bounded summary",
+    "symbol": "MSFT"
+  },
+  "primary": {
+    "as_of": "2026-08-21T14:30:00.000000Z",
+    "candidate_symbols": [
+      "MSFT",
+      "NVDA",
+      "AMZN",
+      "META",
+      "GOOG",
+      "NFLX",
+      "AMD",
+      "INTC",
+      "IBM",
+      "ORCL",
+      "CRM",
+      "ADBE"
+    ],
+    "data_snapshot_refs": [
+      "market.1"
+    ],
+    "deadline": "2026-08-21T14:45:00.000000Z",
+    "evidence_refs": [
+      "evidence.1"
+    ],
+    "focus_symbols": [
+      "AAPL",
+      "TSLA",
+      "MSFT",
+      "NVDA",
+      "AMZN",
+      "META",
+      "GOOG",
+      "NFLX",
+      "AMD",
+      "INTC",
+      "IBM",
+      "ORCL",
+      "CRM",
+      "ADBE"
+    ],
+    "holding_symbols": [
+      "AAPL",
+      "TSLA"
+    ],
+    "input_id": "00000000-0000-4000-8000-000000000002",
+    "meta": {
+      "created_at": "2026-08-21T14:30:00.000000Z",
+      "producer_version": "p3a.1",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "schema_version": "1.0.0"
+    },
+    "portfolio_snapshot": {
+      "as_of": "2026-08-21T14:30:00.000000Z",
+      "borrow_statuses": [
+        {
+          "availability": "AVAILABLE",
+          "located_quantity": "100.000000",
+          "symbol": "TSLA"
+        }
+      ],
+      "buying_power": "50000.00",
+      "cash": "35000.00",
+      "content_hash": "83fd7fbe6e01bd463c67a02da24e19ead5815864cea6b1fc56f7ff99aea6364c",
+      "nav": "100000.00",
+      "open_orders": [
+        {
+          "reference_id": "open.1",
+          "remaining_quantity": "2.000000",
+          "side": "LONG",
+          "symbol": "AAPL"
+        }
+      ],
+      "positions": [
+        {
+          "average_entry_price": "200.00",
+          "current_price": "210.00",
+          "market_value": "2100.00",
+          "opened_at": "2026-08-20T14:30:00.000000Z",
+          "quantity": "10.000000",
+          "realized_pnl_today": "0.00",
+          "same_day": false,
+          "side": "LONG",
+          "signed_weight": "0.100000",
+          "symbol": "AAPL",
+          "unrealized_pnl": "100.00"
+        },
+        {
+          "average_entry_price": "300.00",
+          "current_price": "290.00",
+          "market_value": "1450.00",
+          "opened_at": "2026-08-21T13:30:00.000000Z",
+          "quantity": "5.000000",
+          "realized_pnl_today": "-10.00",
+          "same_day": true,
+          "side": "SHORT",
+          "signed_weight": "-0.050000",
+          "symbol": "TSLA",
+          "unrealized_pnl": "50.00"
+        }
+      ],
+      "remaining_limits": {
+        "long_gross_room": "0.650000",
+        "net_lower_room": "0.050000",
+        "net_upper_room": "0.550000",
+        "remaining_slots": 13,
+        "short_gross_room": "0.150000",
+        "single_name_room": "0.100000",
+        "total_gross_room": "0.800000",
+        "turnover_room": "0.300000"
+      },
+      "same_day_fills": [
+        {
+          "occurred_at": "2026-08-21T13:30:00.000000Z",
+          "price": "300.00",
+          "quantity": "5.000000",
+          "reference_id": "fill.1",
+          "side": "SHORT",
+          "symbol": "TSLA"
+        }
+      ]
+    },
+    "universe_hash": "6a401be0d31b26d7eed24e3f96ac9e8410cbd9982467d14f217c88b098483635",
+    "window": "PRIMARY"
+  },
+  "request_cases": [
+    {
+      "action": "OPEN",
+      "confidence": "0.8000",
+      "evidence_refs": [
+        "evidence.1"
+      ],
+      "invalidators": [
+        "margin compression"
+      ],
+      "reason_codes": [
+        "FUNDAMENTAL"
+      ],
+      "same_day_exit_reason": null,
+      "side": "LONG",
+      "symbol": "MSFT",
+      "target_weight": "0.050000"
+    },
+    {
+      "action": "OPEN",
+      "confidence": "0.7500",
+      "evidence_refs": [
+        "evidence.2"
+      ],
+      "invalidators": [
+        "growth acceleration"
+      ],
+      "reason_codes": [
+        "VALUATION"
+      ],
+      "same_day_exit_reason": null,
+      "side": "SHORT",
+      "symbol": "NVDA",
+      "target_weight": "-0.030000"
+    },
+    {
+      "action": "REDUCE",
+      "confidence": "0.7000",
+      "evidence_refs": [
+        "evidence.3"
+      ],
+      "invalidators": [
+        "new product cycle"
+      ],
+      "reason_codes": [
+        "REBALANCE"
+      ],
+      "same_day_exit_reason": null,
+      "side": "LONG",
+      "symbol": "AAPL",
+      "target_weight": "0.060000"
+    },
+    {
+      "action": "CLOSE",
+      "confidence": "0.9000",
+      "evidence_refs": [
+        "evidence.4"
+      ],
+      "invalidators": [
+        "event disproved"
+      ],
+      "reason_codes": [
+        "NEWS"
+      ],
+      "same_day_exit_reason": "MATERIAL_NEW_EVENT",
+      "side": "FLAT",
+      "symbol": "TSLA",
+      "target_weight": "0.000000"
+    },
+    {
+      "action": "HOLD",
+      "confidence": "0.6499",
+      "evidence_refs": [
+        "evidence.5"
+      ],
+      "invalidators": [],
+      "reason_codes": [
+        "SENTIMENT"
+      ],
+      "same_day_exit_reason": null,
+      "side": "FLAT",
+      "symbol": "AMZN",
+      "target_weight": "0.000000"
+    }
+  ],
+  "risk_rejection": {
+    "constraints_snapshot_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "meta": {
+      "created_at": "2026-08-21T14:30:00.000000Z",
+      "producer_version": "p3a.1",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "schema_version": "1.0.0"
+    },
+    "rejected_proposal_id": "00000000-0000-4000-8000-000000000011",
+    "rejected_symbols": [
+      "MSFT"
+    ],
+    "rejection_codes": [
+      "TURNOVER",
+      "SINGLE_NAME"
+    ],
+    "remaining_limits": {
+      "long_gross_room": "0.650000",
+      "net_lower_room": "0.050000",
+      "net_upper_room": "0.550000",
+      "remaining_slots": 13,
+      "short_gross_room": "0.150000",
+      "single_name_room": "0.100000",
+      "total_gross_room": "0.800000",
+      "turnover_room": "0.300000"
+    },
+    "review_round": 1,
+    "reviewed_at": "2026-08-21T14:31:00.000000Z"
+  },
+  "second_proposal": {
+    "analysis_input_id": "00000000-0000-4000-8000-000000000002",
+    "attempt": 2,
+    "data_version": "data.1",
+    "expiration_at": "2026-08-21T14:45:00.000000Z",
+    "graph_version": "graph.1",
+    "memory_version": "memory.1",
+    "meta": {
+      "created_at": "2026-08-21T14:30:00.000000Z",
+      "producer_version": "p3a.1",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "schema_version": "1.0.0"
+    },
+    "model_version": "model.1",
+    "prompt_version": "prompt.1",
+    "proposal_id": "00000000-0000-4000-8000-000000000012",
+    "provider_version": "provider.1",
+    "requests": [
+      {
+        "action": "OPEN",
+        "confidence": "0.8000",
+        "evidence_refs": [
+          "evidence.1"
+        ],
+        "invalidators": [
+          "margin compression"
+        ],
+        "reason_codes": [
+          "FUNDAMENTAL"
+        ],
+        "same_day_exit_reason": null,
+        "side": "LONG",
+        "symbol": "MSFT",
+        "target_weight": "0.050000"
+      },
+      {
+        "action": "OPEN",
+        "confidence": "0.7500",
+        "evidence_refs": [
+          "evidence.2"
+        ],
+        "invalidators": [
+          "growth acceleration"
+        ],
+        "reason_codes": [
+          "VALUATION"
+        ],
+        "same_day_exit_reason": null,
+        "side": "SHORT",
+        "symbol": "NVDA",
+        "target_weight": "-0.030000"
+      },
+      {
+        "action": "REDUCE",
+        "confidence": "0.7000",
+        "evidence_refs": [
+          "evidence.3"
+        ],
+        "invalidators": [
+          "new product cycle"
+        ],
+        "reason_codes": [
+          "REBALANCE"
+        ],
+        "same_day_exit_reason": null,
+        "side": "LONG",
+        "symbol": "AAPL",
+        "target_weight": "0.060000"
+      },
+      {
+        "action": "CLOSE",
+        "confidence": "0.9000",
+        "evidence_refs": [
+          "evidence.4"
+        ],
+        "invalidators": [
+          "event disproved"
+        ],
+        "reason_codes": [
+          "NEWS"
+        ],
+        "same_day_exit_reason": "MATERIAL_NEW_EVENT",
+        "side": "FLAT",
+        "symbol": "TSLA",
+        "target_weight": "0.000000"
+      },
+      {
+        "action": "HOLD",
+        "confidence": "0.6499",
+        "evidence_refs": [
+          "evidence.5"
+        ],
+        "invalidators": [],
+        "reason_codes": [
+          "SENTIMENT"
+        ],
+        "same_day_exit_reason": null,
+        "side": "FLAT",
+        "symbol": "AMZN",
+        "target_weight": "0.000000"
+      }
+    ],
+    "snapshot_hash": "83fd7fbe6e01bd463c67a02da24e19ead5815864cea6b1fc56f7ff99aea6364c",
+    "status": "VALID",
+    "superseded_proposal_id": "00000000-0000-4000-8000-000000000011",
+    "universe_hash": "6a401be0d31b26d7eed24e3f96ac9e8410cbd9982467d14f217c88b098483635",
+    "window": "PRIMARY"
+  },
+  "secondary": {
+    "as_of": "2026-08-21T14:30:00.000000Z",
+    "candidate_symbols": [
+      "MSFT",
+      "NVDA",
+      "AMZN",
+      "META",
+      "GOOG"
+    ],
+    "data_snapshot_refs": [
+      "market.1"
+    ],
+    "deadline": "2026-08-21T14:45:00.000000Z",
+    "evidence_refs": [
+      "evidence.1"
+    ],
+    "focus_symbols": [
+      "AAPL",
+      "TSLA",
+      "MSFT",
+      "NVDA",
+      "AMZN",
+      "META",
+      "GOOG"
+    ],
+    "holding_symbols": [
+      "AAPL",
+      "TSLA"
+    ],
+    "input_id": "00000000-0000-4000-8000-000000000002",
+    "meta": {
+      "created_at": "2026-08-21T14:30:00.000000Z",
+      "producer_version": "p3a.1",
+      "run_id": "00000000-0000-4000-8000-000000000001",
+      "schema_version": "1.0.0"
+    },
+    "portfolio_snapshot": {
+      "as_of": "2026-08-21T14:30:00.000000Z",
+      "borrow_statuses": [
+        {
+          "availability": "AVAILABLE",
+          "located_quantity": "100.000000",
+          "symbol": "TSLA"
+        }
+      ],
+      "buying_power": "50000.00",
+      "cash": "35000.00",
+      "content_hash": "83fd7fbe6e01bd463c67a02da24e19ead5815864cea6b1fc56f7ff99aea6364c",
+      "nav": "100000.00",
+      "open_orders": [
+        {
+          "reference_id": "open.1",
+          "remaining_quantity": "2.000000",
+          "side": "LONG",
+          "symbol": "AAPL"
+        }
+      ],
+      "positions": [
+        {
+          "average_entry_price": "200.00",
+          "current_price": "210.00",
+          "market_value": "2100.00",
+          "opened_at": "2026-08-20T14:30:00.000000Z",
+          "quantity": "10.000000",
+          "realized_pnl_today": "0.00",
+          "same_day": false,
+          "side": "LONG",
+          "signed_weight": "0.100000",
+          "symbol": "AAPL",
+          "unrealized_pnl": "100.00"
+        },
+        {
+          "average_entry_price": "300.00",
+          "current_price": "290.00",
+          "market_value": "1450.00",
+          "opened_at": "2026-08-21T13:30:00.000000Z",
+          "quantity": "5.000000",
+          "realized_pnl_today": "-10.00",
+          "same_day": true,
+          "side": "SHORT",
+          "signed_weight": "-0.050000",
+          "symbol": "TSLA",
+          "unrealized_pnl": "50.00"
+        }
+      ],
+      "remaining_limits": {
+        "long_gross_room": "0.650000",
+        "net_lower_room": "0.050000",
+        "net_upper_room": "0.550000",
+        "remaining_slots": 13,
+        "short_gross_room": "0.150000",
+        "single_name_room": "0.100000",
+        "total_gross_room": "0.800000",
+        "turnover_room": "0.300000"
+      },
+      "same_day_fills": [
+        {
+          "occurred_at": "2026-08-21T13:30:00.000000Z",
+          "price": "300.00",
+          "quantity": "5.000000",
+          "reference_id": "fill.1",
+          "side": "SHORT",
+          "symbol": "TSLA"
+        }
+      ]
+    },
+    "universe_hash": "1f43c1702f650943ea7f3a46c10c169d40833417bcefe90bc12b5b3a5e7d9353",
+    "window": "SECONDARY"
+  }
+}

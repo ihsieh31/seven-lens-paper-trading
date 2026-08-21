@@ -23,11 +23,11 @@ remote acceptance。
 | R-07 | X／公開資料缺漏或遭移除 | 高 | 中 | coverage metadata、cache、棄權、非即時依賴 | Data | Open |
 | R-08 | Tavily 額度用盡或七帳號彙總不被允許 | 中 | 高 | 合規 Gate；未確認只用 1,000；授權後 7,000 全域／每帳號 ledger；硬拒絕 PAYGO | Data | Open |
 | R-09 | 單台 Mac 斷電／睡眠 | 中 | 高 | launchd、heartbeat、missed-window NO_TRADE | Ops | Open |
-| R-10 | 七套 doctrine 仍可能形成共同盲點或風格集中 | 高 | 高 | 相關性、sector cap、base-rate／macro／valuation／forensic 交叉反駁 | Portfolio | Open |
-| R-11 | 公開人物被錯誤模仿或背書 | 中 | 高 | doctrine-only、日期／來源標記、禁止人格聲稱 | Governance | Open |
+| R-10 | 四分析員與 Bull/Bear 共享模型／來源，可能形成相關盲點與虛假共識 | 高 | 高 | 獨立 report、source/data overlap haircut、角色 ablation、簡單 baseline、unresolved conflict 保留 | Research/Portfolio | Open |
+| R-11 | Future Analyst Plugin 的公開人物被錯誤模仿或背書 | 中 | 高 | plugin disabled；若重啟採 doctrine-only、日期／來源標記、禁止人格聲稱與人工 gate | Governance | Deferred（2026-08-21；不在 P3 主線） |
 | R-12 | 缺乏付費基本面導致錯誤估值 | 中 | 高 | SEC/IR primary sources、多源核對、confidence haircut | Research | Open |
 | R-13 | Live credential 誤用 | 低 | 極高 | 無 live adapter、Paper endpoint allowlist、啟動斷言 | Security | Open |
-| R-14 | 過度擬合七人權重 | 高 | 高 | blinded eval、ablation、walk-forward、權重正則化 | Validation | Open |
+| R-14 | 過度擬合 graph、prompt、角色權重或 analysis-to-portfolio translation | 高 | 高 | frozen versions、held-out、ablation、walk-forward、簡單 baseline、變更 ADR | Validation | Open |
 | R-15 | Alpaca adapter 僅經 fake-transport 驗證，真實 endpoint 行為（status/pagination/timestamp 格式）未經實測 | 中 | 高 | P2-E 嚴格解析 fail closed、408/429/5xx→UNKNOWN；真實 read-only 驗證已執行（PROGRESS.md P2-E 節，2026-08-17）；本輪補 status pagination（after-cursor 循環）與重複 id 解析（GET by_client_order_id），`TestDuplicateClientOrderId`/`TestFillPagination`+PG timestamps 整合全綠；真實下單留 P7 | Execution | Mitigated（P2-E real read-only run；補強輪 integration evidence，2026-08-17） |
 | R-16 | Order 狀態轉移未逐筆寫入 P1 typed audit event registry，事件軌跡依賴狀態表 guard+append-only fills+control_commands | 低 | 中 | ADR-018 已記錄；如需 event 化須擴充封閉 registry（含 migration 與測試）；任何 order-path 變更時重審 | Execution | Accepted |
 | R-25 | 無人值守卻沒有完整人工緊急控制入口 | 中 | 極高 | `pause_entries`、`cancel_open_orders`、`flatten_paper` 已有 application path；control shell CLI 留 P6/P7 | Ops | Deferred（CLI 尚未交付） |
@@ -41,3 +41,9 @@ remote acceptance。
 | R-23 | 對未知/不可交易 symbol 建立 in-flight 狀態與 broker 呼叫 | 中 | 高 | submit 前 `get_asset` 資產閘 fail-closed（含 RISK_EXIT）；flatten 對全部部位預檢後才進 generation | Execution | Mitigated（ADR-022；TestAssetGate 3 案＋flatten asset abort，2026-08-18） |
 | R-24 | 對帳證據只有 kind 無 detail，終態漏報無法稽核 | 中 | 中 | append-only `reconciliation_mismatches`（kind+detail+穩定 ordinal）；`latest()` 以 parent/child 一致性驗證重建 detail（mismatch_count/kinds/空 CLEAN 檢查，任一不一致拋 `PersistenceInvariantError`）；closed-history pass 補 UNKNOWN 等 | Execution | Mitigated（ADR-022 + P2-CUR-001；`test_reconciliation_and_ledger.py` + PG latest detail roundtrip/ordinal/corruption + append-only，2026-08-20；migration 0008） |
 | R-27 | P2 final acceptance 的併發、checkpoint accounting、baseline authority、遷移與 late-fill evidence 尚未完整結案 | 中 | 極高 | ADR-026：exclusive new-entry lock、full-ledger NAV + post-cutoff cash delta、genesis-vs-first-fill real-PG race、runtime baseline read-only、0008→0009 checksum-compatible provenance、typed expected failures、conflicting fill durable pause；ACC-001~009 regression | Execution/DB | Mitigated（ACC-001~009 Closed；676 unit/non-integration、83 PG integration、exact SHA `488f170` remote run `32360443947` 兩 jobs success，2026-08-20） |
+| R-28 | TradingAgents upstream/provider/data drift 破壞 P3 語意、可重播性或隔離邊界 | 中 | 高 | 固定 SHA/dependency lock、semantic-parity/record-replay、graph/prompt/model/provider versions、季度 drift review、free-text fallback fail closed | Research/Security | Open（P3） |
+| R-29 | LLM Portfolio Manager 忽略 cash／持倉／open orders 或在被拒後反覆改寫直到繞過限制 | 高 | 極高 | 每次強制完整去識別化 snapshot；strict PortfolioProposal；deterministic Risk reason codes；只允許一次重申；第二次拒絕 NO_TRADE | Portfolio/Risk | Open（P3/P4） |
+| R-30 | long/short 與同日交易放大 gross、borrow、turnover 或虧損追殺風險 | 中 | 極高 | long 100%／short 20%／gross 120%／net 40–100%、15 檔／單股 15%、borrow gate、40% turnover、same-day loss reason/evidence gate | Portfolio/Risk | Open（P4/Paper calibration） |
+| R-31 | 單點壞價、延遲新聞或來源衝突被誤判為突發事件 | 高 | 極高 | 雙來源＋三 fresh samples、官方 primary-source news 例外、timestamp gate、DATA_CONFLICT、緊急 graph 只減風險 | Data/Risk | Open（P3） |
+| R-32 | Agnes／Muse reasoning 參數或 API 類型不一致造成未察覺降級 | 高 | 高 | capability negotiation、requested/effective audit、Chat/Responses adapters、一次 failover、schema/held-out eval | Research | Open（P3） |
+| R-33 | 反思記憶無限增長、被壓縮器改寫事實或把 future outcome 洩漏給歷史 run | 中 | 高 | immutable raw audit、每日 lineage、週六專用 skill、LLM-visible ≤4,000 行、as-of/time-travel tests | Research/Data | Open（P3/P5） |

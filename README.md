@@ -1,15 +1,18 @@
 # Seven-Lens Paper Trading System
 
-本專案是一套只供本人使用、只連接 Alpaca Paper Trading、以七種公開投資研究方法論作為辯論委員的美股中期持有系統。
+本專案是一套只供本人使用、只連接 Alpaca Paper Trading、以 TradingAgents 多角色分析與組合提案作為核心的美股系統。`Seven-Lens` repository/package 名稱暫為歷史相容識別，不代表七人蒸餾仍是主線。
 
-核心原則：LLM 只能產生有來源的研究判斷；確定性的投資組合、風控與執行核心才可產生委託，而且第一版完全不存在實盤交易路徑。
+核心原則：LLM 只能產生有來源、符合 schema 的 target-weight 提案；deterministic Risk Engine 才能核准，確定性執行核心才可產生委託，而且第一版完全不存在實盤交易路徑。
 
 ## 已確定範圍
 
-- 每個美股交易日前開盤分析選股，開盤後執行主要再平衡。
-- 收盤前再次評估既有持倉與最優候選，允許第二次再平衡。
-- 不做當沖；正常持有期 10–60 個交易日，除風控退出外至少持有 5 個交易日。
-- 七位委員：Howard Marks、Muddy Waters Research、Aswath Damodaran、Serenity / `@aleabitoreddit`、Terry Smith / Fundsmith、Michael Mauboussin、Lyn Alden。
+- 開盤後 60 分鐘分析全部持倉與最多 12 個 long/short 候選；收盤前 90 分鐘重跑全部持倉與最多 5 個候選。
+- 不設定最短持有期；允許有證據的同日退出與再進場，正常 turnover 上限 40%，verified `RISK_EXIT` 可隨時執行。
+- P3 完整鏈：四分析員 → 兩輪 Bull/Bear → Research Manager → Trader → 兩輪三方 Risk Debate → LLM Portfolio Manager → 結構化 `PortfolioProposal`。
+- Risk 第一次駁回會回傳理由與剩餘額度，只允許 Portfolio Manager 重申一次；第二次拒絕為 `NO_TRADE`。P4 deterministic Risk 與既有 P2 execution 保持隔離。
+- long/short 合計最多 15 檔，單股 absolute weight 15%；long gross 100%、short gross 20%、total gross 120%、net 40%–100%。
+- 每日反思包含持倉中間狀態與 Risk rejection；週六把 LLM-visible memory 壓縮至最多 4,000 行，immutable raw audit 保留。
+- 七人蒸餾暫停，僅保留為 disabled Future Analyst Plugin，不阻塞 P3。
 - 僅使用免費公開內容與免費資料 API；LLM 費用不設上限。
 - 系統可無人值守，但任何資料、模型、帳務或券商狀態不明時一律停止新增風險。
 
@@ -18,8 +21,11 @@
 - [新對話／驗收工作交接](PROJECT_HANDOFF.md)
 - [主企劃書](docs/MASTER_PLAN.md)
 - [系統架構](docs/ARCHITECTURE.md)
-- [七人蒸餾規格](docs/DISTILLATION_SPEC.md)
+- [Future Analyst Plugin／七人蒸餾保留規格](docs/DISTILLATION_SPEC.md)
 - [TradingAgents 評估](docs/TRADINGAGENTS_ASSESSMENT.md)
+- [P3 每週交易記憶整理 Skill 規格](docs/MEMORY_CURATION_SKILL_SPEC.md)
+- [P3-A 實作提示詞](docs/P3A_IMPLEMENTATION_PROMPT.md)
+- [P3-A 獨立驗收提示詞](docs/P3A_ACCEPTANCE_PROMPT.md)
 - [營運與安全](docs/OPERATIONS_AND_SAFETY.md)
 - [安全政策與信任邊界](SECURITY.md)
 - [開發路線圖與驗收](docs/ROADMAP_AND_ACCEPTANCE.md)
@@ -37,6 +43,8 @@
 `P1-C3 — CI／zero-skip／clean-machine gate` 已通過獨立驗收，P1 Core Gate 已關閉並有遠端 CI 證據。`P2 — Alpaca Paper 執行安全` 於 2026-08-20 完成 final remediation，**P2 Gate Closed**；ACC-001~009 全部關閉，exact code-bearing SHA `488f170` 的 GitHub Actions [`32360443947`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/32360443947) 中 `quality-unit`／`postgres-integration` 均成功。已交付基礎包含 Paper-only adapter、exclusive new-entry linearization、durable UNKNOWN/conflicting-fill pause、cash checkpoint + full-ledger NAV、runtime baseline read-only、checksum-compatible 0008→0009，以及 typed `MarkPriceUnavailableError`（任意 `ValueError`/程式缺陷不再降級）。legacy compatibility revision 的 `created_at` 是 legacy `effective_at`／authority-effective timestamp，source-row original `created_at` 保留；不是 migration execution time。`P2-E` 真實 Alpaca Paper GET-only 驗證已執行（見 `PROGRESS.md`）；關閉 P2 不授權真實下單，真實下單仍留 `P7` supervised gate，WebSocket transport 與 control shell CLI 依 ADR-019 留 `P6/P7`。
 
 安全邊界：structured logging 只接受經 bounded redaction 轉成的 JSON-safe 值；cycle、過深、非字串 mapping key 或序列化異常會產生不含原始 fields 的固定 fallback audit event。Tavily `AUTHORIZED_ACCOUNT_POOL` 目前固定 fail closed，直到未來存在可獨立驗證外部授權的 verifier；使用者輸入的 reference、ticket 或 evidence record 不會自行升級權限。
+
+下一個主線 gate 是 `P3 — TradingAgents 分析核心整合`。目前只完成規劃改版，尚未實作 P3，也未授權真實下單；P7 supervised Paper 與 P8 unattended Paper 的安全門檻保留。
 
 ## 開發環境與驗證
 
@@ -65,6 +73,8 @@ production secret lookup 只使用 Security.framework read-only exact generic-pa
 - `seven-lens.paper-trading.alpaca-paper.secret-key` / `primary`
 - `seven-lens.paper-trading.openai.api-key` / `primary`
 - `seven-lens.paper-trading.tavily.api-key` / validated non-secret Tavily account id
+
+P3 尚未實作的 provider boundary 會另加入 exact refs：`seven-lens.paper-trading.agnes.api-key`／`primary` 與 `seven-lens.paper-trading.opencode.api-key`／`primary`。目前程式不應假裝已支援這兩個 refs；新增時必須擴充 sealed mapping、scope 與 fake-only tests。
 
 查詢預設在 spawned worker 內使用 2 秒 hard timeout，且禁止 authentication UI。missing、duplicate、denied、locked、timeout、malformed 或 backend failure 全部停止，不會換來源。unit tests 只注入 fake provider/native bridge/process，絕不讀取使用者 Keychain。
 

@@ -10,11 +10,14 @@ flowchart LR
     A["Alpaca market data / calendar"] --> I
     I --> E["Immutable evidence store"]
     E --> Q["Quant & evidence screening"]
-    Q --> C["Seven doctrine agents"]
-    C --> V["Evidence verifier & rebuttal"]
-    V --> H["Neutral committee chair"]
-    H --> P["Deterministic portfolio engine"]
-    P --> R["Deterministic risk engine"]
+    Q --> A4["Technical / Fundamentals / News / Sentiment"]
+    A4 --> DB["Bull / Bear debate"]
+    DB --> RM["Research Manager"]
+    RM --> TR["Trader"]
+    TR --> RD["Aggressive / Conservative / Neutral risk debate"]
+    RD --> PM["LLM Portfolio Manager -> PortfolioProposal"]
+    PM --> R["Deterministic risk engine"]
+    R -. "one structured rejection + resubmission" .-> PM
     R --> O["Transactional outbox"]
     O --> B["Alpaca Paper adapter"]
     B --> X["Order / fill reconciliation"]
@@ -23,7 +26,8 @@ flowchart LR
     M["Control plane / kill switches"] --> R
     M --> B
     T["Telemetry & alerts"] --- I
-    T --- C
+    T --- A4
+    T --- DB
     T --- B
     T --- X
 ```
@@ -33,9 +37,8 @@ flowchart LR
 | 區域 | 可讀 | 可寫 | 明確禁止 |
 |---|---|---|---|
 | Source ingestion | 公開網頁、API、cache | raw store、source metadata | broker credentials、orders |
-| LLM research workers | sanitized EvidencePacket、doctrine version | assessment table | shell、網路任意存取、portfolio ledger、broker |
-| Portfolio engine | verified verdicts、positions、constraints | TargetPortfolio | broker calls、修改 evidence |
-| Risk engine | targets、ledger、market state | RiskDecision、OrderIntent | 放寬 runtime limits |
+| LLM analysis workers | sanitized `AnalysisInput`／EvidencePacket、固定 graph/prompt/model versions、去識別化完整 portfolio snapshot | analyst reports、兩種 debate state、Trader plan、`PortfolioProposal` | shell、任意網路、portfolio/order/ledger DB write、broker calls／credentials |
+| Risk engine | proposal、權威 ledger/account/market state、limits | RiskDecision、一次 rejection feedback、核准 TargetPortfolio／OrderIntent | 讓 LLM 放寬 runtime limits、接受自由文字 action |
 | Execution worker | approved OrderIntent、Paper credential | outbox/broker order mapping | 研究內容、live endpoint |
 | Reconciler | broker account/orders/positions/fills | authoritative broker mirror | 新增策略委託 |
 | Control plane | system state | pause/cancel/paper-flatten commands | live account operations |
@@ -54,9 +57,11 @@ src/seven_lens/
   market_data/     bars, quotes, corporate actions, quality checks
   universe/        point-in-time universe and filters
   screening/       quant factors and evidence prioritization
-  doctrines/       seven versioned doctrine packages
-  committee/       blinded passes, verifier, rebuttal, chair
-  portfolio/       forecasts, optimizer, target portfolio
+  analysis/        TradingAgents analysts, two debates, managers, trader, reflection
+  analysis/providers/ capability-aware Chat/Responses provider adapters
+  analysis/schemas/ reports, debate states, snapshots and PortfolioProposal
+  memory/          immutable reflections + weekly bounded LLM-visible memory
+  portfolio/       proposal normalization and approved target portfolio
   risk/            pre/post-trade constraints and kill switches
   execution/       intents, outbox, Alpaca Paper adapter, price collars
   reconciliation/ broker mirror and ledger repair workflow
@@ -64,7 +69,8 @@ src/seven_lens/
   observability/   logs, metrics, traces, alerts, reports
   control/         CLI/API for pause, cancel, status, paper flatten
   backtest/        as-of simulation and economic fill model
-  evals/           doctrine, committee, safety and model evals
+  evals/           analysis parity, evidence, portfolio, safety and model evals
+  plugins/         future analyst plugins; disabled by default
 ```
 
 依賴方向只能由外向內透過 interface：domain 不 import Alpaca/Tavily/OpenAI SDK；adapter 實作 domain ports。
@@ -95,35 +101,49 @@ freshness_status, coverage_score, prompt_injection_flags
 packet_hash
 ```
 
-### 4.3 DoctrineAssessment
+### 4.3 AnalystReport
 
 ```text
-doctrine_id, doctrine_version, symbol, horizon
-stance: SUPPORT | OPPOSE | ABSTAIN
-thesis, causal_chain[], material_claims[]
-citation_ids[], counterevidence_ids[]
-catalysts[], invalidators[], uncertainty_sources[]
-expected_return_band, downside_band, confidence
-domain_relevance, freshness, assessment_status
+role: TECHNICAL | FUNDAMENTALS | NEWS | SENTIMENT
+symbol, as_of, horizon, input_snapshot_ids[]
+summary, observations[], material_claims[]
+citation_ids[], counterevidence_ids[], missing_evidence[]
+risks[], catalysts[], invalidators[], confidence
+prompt_version, model_version, provider_version
+status: VALID | INVALID | ABSTAIN
 ```
 
 禁止直接輸出 `BUY 100 shares`、券商 order type 或 unrestricted target price。
 
-### 4.4 CommitteeVerdict
+### 4.4 Research/Risk debate → PortfolioProposal
 
 ```text
-symbol, assessments[], verified_claims[]
-consensus_points[], dissent_points[], unresolved_conflicts[]
-alpha_band, downside_band, confidence
-correlation_haircut, evidence_quality, expiration_at
-status: VALID | INVALID | ABSTAIN
+InvestmentDebateState: symbol, bull_arguments[], bear_arguments[], round_count=2,
+                       verified_claims[], disputed_claims[], unresolved_conflicts[]
+RiskDebateState: aggressive_arguments[], conservative_arguments[],
+                 neutral_arguments[], round_count=2, unresolved_conflicts[]
+PortfolioSnapshot: nav, cash, buying_power, positions[], open_orders[],
+                   same_day_fills[], borrow_status[], remaining_limits,
+                   snapshot_hash, as_of
+PortfolioProposal: proposal_id, portfolio_snapshot_hash, window,
+                   requests[{symbol, action: OPEN|INCREASE|REDUCE|CLOSE|HOLD,
+                             side: LONG|SHORT|FLAT, target_weight,
+                             confidence, evidence_ids[], reason_codes[],
+                             same_day_exit_reason_code?, invalidators[]}],
+                   graph/prompt/model/provider/data/memory versions,
+                   expiration_at, status: VALID|INVALID|ABSTAIN
 ```
+
+`PortfolioProposal` 是要求，不是已核准委託。它不含 share quantity、order type、broker endpoint、credential 或長篇建議文字；只有 `VALID` 可交給 deterministic Risk Engine。每個 target weight 的絕對值上限 15%，但 schema 通過不代表風控通過。
 
 ### 4.5 TargetPortfolio → OrderIntent
 
 ```text
-TargetPortfolio: nav_ref, target_weights, cash_target, constraints_snapshot
-RiskDecision: accepted_targets, rejected_targets, reason_codes, limit_usage
+RiskDecision: review_round: 1|2, status: APPROVED|REJECTED|NO_TRADE,
+              accepted_targets, rejected_targets, reason_codes,
+              remaining_limits, constraints_snapshot
+TargetPortfolio: nav_ref, signed_target_weights, constraints_snapshot,
+                 approved_risk_decision_id
 OrderIntent: symbol, side, quantity, intent_type, price_collar,
              earliest_submit_at, cancel_at, target_version, idempotency_key
 ```
@@ -142,12 +162,14 @@ ReconciliationResult: broker_snapshot_hash, ledger_snapshot_hash,
 ### 5.1 Research run
 
 ```text
-PLANNED -> INGESTING -> SCREENING -> DEBATING -> VERIFYING
-        -> TARGET_FROZEN -> RISK_APPROVED -> EXECUTION_WINDOW
+PLANNED -> INGESTING -> SCREENING -> ANALYZING -> DEBATING
+        -> MANAGING_RESEARCH -> TRADER_DECIDING -> RISK_DEBATING
+        -> PORTFOLIO_PROPOSING -> VERIFYING -> RISK_REVIEW
+        -> RESUBMISSION_OR_TARGET_FROZEN -> RISK_APPROVED -> EXECUTION_WINDOW
         -> RECONCILING -> COMPLETE
 ```
 
-任何前置狀態可到 `INVALID`；deadline 到達且尚未 `RISK_APPROVED` 則 `EXPIRED`。`INVALID/EXPIRED` 不得復活成同一窗口的可交易 run。
+Risk 第一次拒絕後只能以同一已驗證研究、刷新後的完整 portfolio snapshot 與 rejection feedback 回到 `PORTFOLIO_PROPOSING` 一次；不重跑 Analysts／debates，也不能加入本 run 候選集合外的標的。第二次拒絕進 `NO_TRADE`。任何前置狀態可到 `INVALID`；deadline 到達且尚未 `RISK_APPROVED` 則 `EXPIRED`。`INVALID/EXPIRED/NO_TRADE` 不得復活成同一窗口的可交易 run。
 
 ### 5.2 Order intent
 
@@ -173,7 +195,8 @@ CREATED -> RISK_APPROVED -> OUTBOX_PENDING -> SUBMITTING
 ### PostgreSQL（權威）
 
 - run/job 狀態、設定 snapshot、universe metadata；
-- assessment/verdict/target/risk decisions；
+- analyst reports/debate states/investment decisions/target/risk decisions；
+- immutable daily reflection、open-position observations、Risk rejection history 與 memory-curation versions；
 - intents/outbox/orders/fills；
 - broker account/position mirrors、lots、NAV；
 - audit events、control commands、alerts、model calls。
@@ -199,11 +222,26 @@ serialized byte budgets。大型raw evidence只能進未來另行驗收的conten
 - 以 SHA-256 保存必要的 raw capture、normalized text、SEC filing；
 - repository 只提交 manifests/fixtures，不提交大批受著作權保護內容。
 
+### LLM-visible memory
+
+- 每日即使部位未平倉也寫入 bounded reflection；權威原始 decisions/outcomes/rejections 只追加，不刪除。
+- 每週六以獨立 memory-curation skill 產生濃縮版本，最多 4,000 行；只保留反覆錯誤、Risk rejection、有效／失敗模式、forecast calibration、position lesson 與 regime。
+- 濃縮 memory 是衍生資料，可重建且有 source record ids；不得回寫或取代 immutable audit，也不得讓未來 outcome 進入歷史 `as_of` run。
+
+### LLM provider adapters
+
+- Analysts：`agnes-2.5-flash`，一次備援 `agnes-2.0-flash`。
+- Research Manager、Trader、Risk Debate、Portfolio Manager：`muse-spark-1.2-contributor`，一次備援 `agnes-2.5-flash`。
+- `deepseek-v4-flash` 是 disabled-by-default 的 OpenCode 可配置候選；通過同一 eval 後才可人工設定，不加入自動 failover chain。
+- 內部設定一律 `reasoning_requested=max`；adapter 依 provider capability 映射 Chat Completions／Responses 與實際 thinking/effort 參數，記錄 effective value，不傳未支援參數。
+- `gpt-5.6` 只在未來通過同一 held-out/safety/latency/schema gate 後加入。任何模型切換都不得改變內部 schema 或 deterministic risk semantics。
+
 ### Secrets
 
 - `SecretProvider` application port 只接受 typed、exact `SecretRef`，不提供 list/search/write/update/delete/export；domain/application 不依賴 PyObjC、Keychain、環境變數或資料庫。
 - macOS production adapter 只以 Security.framework `SecItemCopyMatching` 查 generic password，固定 service/account mapping、`match all` 與禁止 authentication UI；零筆、多筆、拒絕、locked、timeout、malformed 或 backend failure 全部 fail closed，沒有 env／argv／DB／第二 provider fallback。
-- `ScopedSecretProvider` 在 backend call 前強制 exact-reference allowlist。execution scope 才可取得 Alpaca Paper refs；research/LLM scope 只可取得 OpenAI／Tavily refs。這是 application capability boundary，不是 OS sandbox。
+- `ScopedSecretProvider` 在 backend call 前強制 exact-reference allowlist。execution scope 才可取得 Alpaca Paper refs；research/LLM scope 只可取得 Agnes／OpenCode／未來經核准的 OpenAI／Tavily refs。這是 application capability boundary，不是 OS sandbox。
+- P3 新增 exact refs `seven-lens.paper-trading.agnes.api-key/primary` 與 `seven-lens.paper-trading.opencode.api-key/primary`；在 sealed mapping、scope、fake-only tests 與 composition gate 完成前不得使用或 fallback 到現有 OpenAI ref。
 - Alpaca/OpenAI account 固定為 `primary`；Tavily account 使用既有規則驗證的非秘密 `account_id`。Tavily 每個 key 只有 account metadata、compliance、quota、usage、reset/cooldown 狀態可進 DB，只有 `AUTHORIZED_ACCOUNT_POOL` 才能啟用多 key router。
 - `SecretValue` 只降低 `str/repr/log/serialization` 意外洩漏，不是程序記憶體加密或 OS isolation；plaintext 只能在未來 client composition boundary 透過明確 reveal 方法取得。
 - `.env.example` 只列非秘密設定；測試與未來 CI 只使用明顯 fake secret，絕不查詢使用者 Keychain。
@@ -219,12 +257,14 @@ serialized byte budgets。大型raw evidence只能進未來另行驗收的conten
 7. 到 `cancel_at` 取消未成交；partial fill 更新實際部位，不為達 target 盲目追價。
 8. 每次 window 後比較 broker cash/orders/positions/fills 與本地 ledger。
 
-## 9. 收盤前再交易的限制
+## 9. 正常窗口、同日交易與緊急分析
 
-- 只處理既有持倉、上午未達 target、以及預先排入 top list 的少數候選。
-- 新增 gross exposure 不得超過 NAV 5%；日換手上限仍適用。
-- 15:15 後沒有新的完整 evidence packet，不因一則新聞即興建立部位。
-- 同日買入的部位不可賣出，除明確 `RISK_EXIT`。
+- 第一窗口在開盤後 60 分鐘開始，處理全部持倉與最多 12 個候選；第二窗口在收盤前 90 分鐘開始，處理全部持倉與最多 5 個候選。
+- 完整 graph deadline 15 分鐘；時間不足、provider failover 仍失敗或 Risk 第二次拒絕都 `NO_TRADE`。
+- 正常日 turnover 上限 NAV 40%。同日獲利退出可用；同日虧損退出需結構化 reason code 與 evidence，不能只因為虧損。
+- 同日退出後可在正常窗口重新進場；不得藉此繞過 turnover、gross/net/name 或 borrow limits。
+- event monitor 只把經二次確認的事件送入緊急 graph：價格需雙來源且連續三個 fresh samples；官方 primary announcement 可單源確認新聞。衝突或延遲為 `DATA_CONFLICT`。
+- 緊急 graph 只分析受影響與高度相關持倉，只允許 `HOLD/REDUCE/CLOSE`，deadline 3 分鐘。未驗證事件不交給 LLM；deterministic hard-risk 仍可獨立產生 `RISK_EXIT`。
 - 半日市的各 cutoff 由 close time 相對計算。
 
 ## 10. Control plane
@@ -249,8 +289,8 @@ serialized byte budgets。大型raw evidence只能進未來另行驗收的conten
 - P1-C2 只有 secret lookup 與 fenced `transition_job_with_audit` instrumentation；secret bridge 不含 telemetry，job 成功 metrics 只在 DB commit 與 UoW 正常退出後記錄。
 - recorder `Exception` 轉為 process-local drop count與固定、無 exception detail diagnostic；不觸發 transaction commit/rollback/retry。`BaseException` 不被吞掉。
 - P1-C2 不引入 OpenTelemetry、Prometheus、Sentry、exporter/backend SDK 或 network client；未來 adapter 必須在 infrastructure/composition boundary 實作現有 ports。
-- metrics：job latency、source freshness、Tavily global/per-account credits、account-pool compliance mode、LLM calls、schema failures、abstention、orders、fills、slippage、reconciliation mismatches、limit usage。
-- 每次 LLM call 保存 model、prompt template version、input packet hash、output hash、tokens、latency、status；不記 secret。
+- metrics：job latency、source freshness、Tavily global/per-account credits、account-pool compliance mode、各 analyst/debate/manager/trader/portfolio latency、provider failover、requested/effective reasoning、schema failures、abstention、Risk rejection/resubmission、data conflicts、orders、fills、slippage、reconciliation mismatches、limit usage。
+- 每次 LLM call 保存 model、prompt template version、input packet hash、output hash、tokens、latency、status、requested/effective reasoning；不記 secret或帳戶識別資訊。
 - 告警分 `INFO/WARN/HIGH/CRITICAL`；CRITICAL 觸發 `pause_entries`，告警傳送失敗不取消 fail-closed 行為。
 - 日報必須同時顯示「策略想做什麼」「風控拒絕什麼」「券商實際發生什麼」。
 

@@ -516,3 +516,39 @@
   R-21～R-24（Mitigated）；PROGRESS.md 追加段落，gate 陳述為唯一寫法
   "P2 second remediation implementation completed; pending independent re-acceptance."。
 - 未 stage/commit/push（等待使用者指示）。
+
+## 2026-08-21 — P3 改為 TradingAgents 分析核心，七人蒸餾降為未來插件
+
+- 依使用者要求先詳細盤點 `PROJECT_HANDOFF.md`、Master Plan、Architecture、Roadmap、Distillation Spec、TradingAgents Assessment、Sources、ADR、Progress、Issues、Risk 與 README 的交叉引用。
+- 以 `git ls-remote` 與暫存 clone 重新核對 `TauricResearch/TradingAgents`：upstream `main` 仍為固定 commit `a33fd4c0f134485a43553a2c23a63cb14adbd88f`；確認現行四分析員、Bull/Bear、structured Research Manager/Trader、三方 risk debate 與 LLM Portfolio Manager 邊界。
+- ADR-027 決定 P3 採 Technical/Market、Fundamentals、News、Sentiment → Bull/Bear → Research Manager → Trader；Trader 只輸出 versioned `InvestmentDecision`，不得產生委託。上游 risk debate／Portfolio Manager 不進主線，P4 deterministic Portfolio/Risk 與 P2 execution 保持隔離。
+- 七人 corpus 與蒸餾設計未刪除，改為 disabled Future Analyst Plugin；未經重新核准，不讀取／審查 `skill/`、不做 proposition extraction、不阻塞 P3。
+- P3 拆為 A contracts、B point-in-time inputs、C analysts、D debate/decision、E provider isolation/evals；P4 候選漏斗與 deterministic portfolio/risk；P5 validation；P6 Shadow、P7 supervised Paper、P8 unattended Paper 全保留。
+- 本輪只修改本地規劃／治理文件；未改 production code、未執行真實 broker/API、未 stage/commit/push。
+
+## 2026-08-21 — P3 最終需求凍結為完整 TradingAgents 提案鏈
+
+- 使用者完成 P3 需求討論；ADR-028 取代 ADR-027 的「只到 Trader」部分，納入兩輪 Risk Debate 與 LLM Portfolio Manager，但 deterministic Risk 保留唯一核准權，P2 execution 不變。
+- 凍結完整 portfolio snapshot、strict target-weight proposal、一次 Risk rejection／一次重申／第二次 `NO_TRADE`，以及 long/short 15 檔、單股 15%、gross/net/turnover/borrow hard limits。
+- 移除最短持有期；加入同日虧損退出 reason/evidence gate、獲利短線退出、verified `RISK_EXIT`、兩個正常窗口與突發事件二次確認／`DATA_CONFLICT`。
+- 凍結 Agnes／Muse runtime model routing、最高可用 reasoning capability negotiation、一次 failover、去識別化與未來 GPT-5.6 eval gate。
+- 加入每日 open-position reflection、Risk rejection memory、immutable raw audit 與週六最多 4,000 行的 memory-curation skill 規劃。
+- 直接移植固定 SHA 所需 TradingAgents 模組，不 fork；要求 Apache-2.0 attribution／NOTICE（若有）與 modified-file manifest。
+- Tavily 七帳號輪替要求未取得可驗證外部授權，ADR-011／OPEN-007 保持 fail closed；未將規避額度方案寫入可實作規格。
+- 本輪只修改本地規劃／治理文件；未改 production code、未使用 credential、未呼叫 broker/data/model API、未 stage/commit/push。
+
+## 2026-08-21 — P3-A Upstream／License／Contracts 實作
+
+- 依 `PROJECT_HANDOFF.md` §4–9 實作：固定 TradingAgents SHA，從該 SHA read-only 取得 Apache-2.0
+  LICENSE並驗證指定 hash；建立 23-path planned-source manifest、第三方 notice與未 vendoring runtime
+  聲明。
+- 新增 `seven_lens.analysis.contracts`：dependency-free frozen/slots dataclasses、closed StrEnum、
+  schema 1.0.0、fixed-scale Decimal wire、exact field/type parser、tuple snapshot、resource budgets、
+  de-identification、snapshot/universe hash重算、proposal/input executable boundary。
+- 新增 golden bundle及 normal/round-trip/mutation/adversarial/source-invariant tests；targeted最終
+  `70 passed`。
+- 最終本機證據：`verify_p1.sh` exit 0；Ruff format/check全綠；mypy strict 100 files無 issue；
+  non-integration `746 passed, 91 deselected`；真實 disposable PostgreSQL 16
+  `83 passed, 8 deselected, 0 skipped`；`git diff --check`通過。
+- 未改 dependency、lock、migration、P2、CI；未使用 credential或 broker/data/model API，未讀
+  `skill/`，未 stage/commit/push。結論僅為 implementation completed，待獨立 acceptance。

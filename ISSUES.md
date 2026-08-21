@@ -2,14 +2,15 @@
 
 此檔記錄具體問題、阻塞和需要驗證的假設；關閉時保留原因與證據位置。
 
-## OPEN-001：七人公開語料完整性不均
+## DEFERRED-001：Future Analyst Plugin 七人公開語料完整性不均
 
 - 嚴重度：High
-- 狀態：Open
+- 狀態：Deferred（2026-08-21；七人蒸餾已移出 P3 主線）
 - 問題：沒有 X Developer API 或付費訂閱，無法保證完整歷史貼文、刪文或即時性。
 - 影響：蒸餾可能有選擇偏差；runtime 不能假定已看完某人的所有公開觀點。
-- 處置：保存 coverage window、query、URL、擷取時間和缺口；委員可 `ABSTAIN`；交易流程不依賴即時 X。
-- 關閉條件：每位委員達到蒸餾規格最低來源與 held-out evaluation 門檻。
+- 處置：若插件重啟，保存 coverage window、query、URL、擷取時間和缺口；plugin 可 `ABSTAIN`；交易流程不依賴即時 X。
+- 重啟條件：使用者核准可測試的蒸餾方法與獨立 Future Analyst Plugin 工作包；否則不讀取或審查 corpus。
+- 關閉條件：每個啟用 plugin 達到保留規格的來源、rights、held-out、ablation 與 incremental-value 門檻。
 
 ## OPEN-002：免費來源的授權與再散布邊界
 
@@ -35,11 +36,11 @@
 - 處置：禁止睡眠、啟動自我檢查、missed-window = NO_TRADE、重啟 reconciliation、免費外部 heartbeat 告警。
 - 關閉條件：故障注入演練與重啟恢復報告通過。
 
-## OPEN-005：歷史回測可能有蒸餾前視偏差
+## OPEN-005：歷史回測可能有分析／來源前視偏差
 
 - 嚴重度：Critical
 - 狀態：Open
-- 問題：把 2026 年整理出的 doctrine 用於更早日期會把未來資訊帶進回測。
+- 問題：用今天抓取的新聞、社群、基本面、prompt/model 行為或未來才形成的 plugin/doctrine 回放更早日期，會把未來資訊帶進回測。
 - 處置：每個 source fragment 必須有 `published_at` 和 `available_at`；as-of retrieval；不足時只做 forward shadow。
 - 關閉條件：time-travel tests 能證明未來內容不可被歷史 run 讀取。
 
@@ -59,6 +60,31 @@
 - 影響：未確認前不能把七個免費帳號自動輪替視為合法的 7,000 credits 池。
 - 處置：向 Tavily support 取得書面確認，或保存後台／Order Form 明確允許同一 Customer 彙總七帳號的證據；程式預設 `SINGLE_ACCOUNT_UNVERIFIED`。P1-A 已新增 immutable evidence-record schema，但本地 record／reference 不構成授權；外部 verifier 尚不存在時 `AUTHORIZED_ACCOUNT_POOL` 無條件 fail closed。
 - 關閉條件：建立可信任的外部驗證流程、授權證據保存、目前帳號集合綁定、ADR 更新與 `AUTHORIZED_ACCOUNT_POOL` 驗收全部通過。
+
+## OPEN-024：TradingAgents 分析語意相容與隔離尚未實作驗證
+
+- 嚴重度：High
+- 狀態：Open（P3 blocker）
+- 問題：P3-A 已建立 versioned strict contracts、固定 upstream/license inventory 與 contract adversarial/source-invariant tests，待獨立驗收；semantic-parity、provider isolation 與 point-in-time record/replay 仍屬 P3-B~F 未完成範圍。
+- 影響：若直接沿用上游 free-text fallback、live data、單檔 portfolio view 或可改寫 memory，可能造成不可重播決策、future leakage，或讓語言模型越過 deterministic Risk authority。
+- 處置：P3-A implementation 已完成並保留獨立 acceptance gate；後續 P3-B~F 再完成 evidence/schema verifier、semantic parity、隔離 provider、memory lineage、record/replay 與模型 adversarial evals。
+- 關閉條件：P3 Definition of Done 全部有 source/test evidence，且 `INVALID/ABSTAIN` 無法進 P4、Portfolio Manager無 broker/order/ledger capability，第二次 Risk rejection 必為 `NO_TRADE`。
+
+## OPEN-025：Agnes／OpenCode 模型能力、隱私與輸出穩定性尚未實測
+
+- 嚴重度：High
+- 狀態：Open（P3 blocker）
+- 問題：公開文件不能保證每個模型都接受同名 `thinking/effort=max` 參數；Agnes Chat Completions 與 Muse Responses 類型不同，Muse Spark Contributor 不是 ZDR 且資料可用於訓練。
+- 處置：capability-aware adapters 記錄 requested/effective reasoning；Analysts 用 Agnes 2.5／2.0 failover，深度角色用 Muse／Agnes 2.5 failover；每角色只備援一次。portfolio input 去識別化，使用者已接受 Muse data policy。
+- 關閉條件：真實但不含 broker credential 的 contract smoke、schema/timeout/failover/privacy audit 與 held-out eval 通過；任何不支援參數不被假裝成功。
+
+## OPEN-026：緊急事件驗證與 bounded memory 尚未實作
+
+- 嚴重度：High
+- 狀態：Open（P3 blocker）
+- 問題：未驗證的壞價、延遲新聞或可改寫 memory 可能觸發錯誤同日平倉或 future leakage。
+- 處置：價格雙來源／三 fresh samples、官方 primary news 規則、`DATA_CONFLICT`、3 分鐘緊急 graph、每日 immutable reflection、週六 4,000-line memory-curation skill。
+- 關閉條件：故障注入證明單點壞價／舊 timestamp／來源衝突不進 LLM；緊急 graph 不開新倉；weekly compaction 可追溯且不修改 raw records／不洩漏未來結果。
 
 ## CLOSED-008：P1-A structured logging 可能洩漏 secret 或遺失 audit event
 

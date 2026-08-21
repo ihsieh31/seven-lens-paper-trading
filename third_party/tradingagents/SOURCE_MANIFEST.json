@@ -1,0 +1,38 @@
+{
+  "commit": "a33fd4c0f134485a43553a2c23a63cb14adbd88f",
+  "license": {
+    "id": "Apache-2.0",
+    "path": "LICENSE",
+    "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+  },
+  "manifest_version": "1.0.0",
+  "notice_present": false,
+  "planned_source_paths": [
+    "tradingagents/agents/analysts/fundamentals_analyst.py",
+    "tradingagents/agents/analysts/market_analyst.py",
+    "tradingagents/agents/analysts/news_analyst.py",
+    "tradingagents/agents/analysts/sentiment_analyst.py",
+    "tradingagents/agents/managers/portfolio_manager.py",
+    "tradingagents/agents/managers/research_manager.py",
+    "tradingagents/agents/researchers/bear_researcher.py",
+    "tradingagents/agents/researchers/bull_researcher.py",
+    "tradingagents/agents/risk_mgmt/aggressive_debator.py",
+    "tradingagents/agents/risk_mgmt/conservative_debator.py",
+    "tradingagents/agents/risk_mgmt/neutral_debator.py",
+    "tradingagents/agents/schemas.py",
+    "tradingagents/agents/trader/trader.py",
+    "tradingagents/agents/utils/agent_states.py",
+    "tradingagents/agents/utils/memory.py",
+    "tradingagents/agents/utils/rating.py",
+    "tradingagents/agents/utils/structured.py",
+    "tradingagents/graph/analyst_execution.py",
+    "tradingagents/graph/conditional_logic.py",
+    "tradingagents/graph/propagation.py",
+    "tradingagents/graph/reflection.py",
+    "tradingagents/graph/setup.py",
+    "tradingagents/graph/trading_graph.py"
+  ],
+  "repository": "https://github.com/TauricResearch/TradingAgents",
+  "retrieved_at": "2026-08-21T09:25:56Z",
+  "runtime_code_vendored": false
+}

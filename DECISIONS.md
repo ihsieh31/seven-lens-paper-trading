@@ -12,14 +12,14 @@
 ## ADR-002：七人委員是唯一策略
 
 - 日期：2026-08-14
-- 狀態：Accepted
+- 狀態：Superseded by ADR-027（2026-08-21）
 - 決策：第一版不維護其他獨立策略或策略帳戶；七種方法論共同形成一個目標投資組合。
 - 理由：控制研究、評估與歸因複雜度。
 
 ## ADR-003：蒸餾方法論，不模仿人格
 
 - 日期：2026-08-14
-- 狀態：Accepted
+- 狀態：Deferred；若 Future Analyst Plugin 重啟仍適用（ADR-027）
 - 決策：只萃取公開可引用的分析框架、證據偏好、失效條件和常見盲點；不得聲稱本人背書，不複製語氣，不推定未公開觀點。
 
 ## ADR-004：Paper-only 且程式上不存在 live path
@@ -32,13 +32,13 @@
 ## ADR-005：LLM 不得擁有下單權
 
 - 日期：2026-08-14
-- 狀態：Accepted
+- 狀態：Amended by ADR-028（無核准／下單權保留；輸出範圍擴充為結構化 portfolio proposal）
 - 決策：LLM 只輸出符合 schema 的研究評估。確定性 Portfolio、Risk、Execution 模組才可產生與提交委託；研究程序拿不到券商憑證。
 
 ## ADR-006：TradingAgents 只作設計參考與隔離式 AnalysisProvider
 
 - 日期：2026-08-14
-- 狀態：Accepted
+- 狀態：Superseded by ADR-027（隔離邊界保留，定位由參考升為 P3 分析方法基準）
 - 決策：採用其多角色辯論概念，不把其 Portfolio Manager 或自由文字交易訊號直接接上券商，也不直接 fork 成交易核心。
 
 ## ADR-007：零付費資料是硬限制
@@ -51,14 +51,14 @@
 
 - 日期：2026-08-14
 - 狀態：Accepted
-- 決策：Codex 排程用於程式維護、測試、文件與離線蒸餾；交易時鐘由常駐 Python 服務、Alpaca 市場日曆與資料庫 job lease 控制。
+- 決策：Codex 排程用於程式維護、測試、文件與 analysis/provider drift 報告；交易時鐘由常駐 Python 服務、Alpaca 市場日曆與資料庫 job lease 控制。Future Analyst Plugin 若停用，不得自動蒸餾 `skill/`。
 - 理由：桌面自動化依賴電腦和應用程式運行，不應作為券商工作流的唯一時鐘。
 - 補充（2026-08-19）：工作副本已移回 Codex；本 ADR 的排程隔離與權限邊界同樣約束 Codex Automations。
 
 ## ADR-009：長倉、無槓桿、正常時段、整股
 
 - 日期：2026-08-14
-- 狀態：Provisional
+- 狀態：Superseded by ADR-028（2026-08-21）
 - 決策：第一版只做美國上市普通股與未槓桿 ETF；不做空、不做選擇權、加密貨幣、OTC、ETN、槓桿／反向 ETF、盤前盤後交易或碎股。
 - 重審條件：完成至少 60 個交易日 Paper gate 後，另立 ADR。
 
@@ -392,3 +392,33 @@
 - Reconciliation failure taxonomy：mark provider 只有 `MarkPriceUnavailableError` 可轉為 `ACCOUNT_RECONCILIATION_UNAVAILABLE`；missing baseline 仍是 fail-closed mismatch。`ValueError`、`AttributeError`、`TypeError`、`PersistenceInvariantError` 與 configuration/programming defects 不得被降級，ledger corruption 由 `Reconciler.run` 轉為 durable `LOCAL_LEDGER_INVARIANT`。
 - 本機證據：676 non-integration passed / 91 deselected；PostgreSQL 16 integration 83 passed / 8 deselected；新增雙連線 thread race 證明 genesis 持有 `LOCK TABLE fills IN EXCLUSIVE MODE` 時第一筆 fill 阻塞，genesis commit 後 fill 才 commit；`verify_p1.sh` 與 `verify_p1.sh --postgres` 均 exit 0。
 - 遠端證據：GitHub Actions [`32360443947`](https://github.com/ihsieh31/seven-lens-paper-trading/actions/runs/32360443947) 在 exact code-bearing SHA `488f170` 上 `quality-unit` 與 `postgres-integration` 均成功；ACC-009 關閉。
+
+## ADR-027：P3 改採 TradingAgents 分析主線，七人蒸餾降為 Future Analyst Plugin
+
+- 日期：2026-08-21
+- 狀態：Superseded by ADR-028（2026-08-21；Future Analyst Plugin 決策仍保留）
+- 取代：ADR-002；取代 ADR-006 的「只作設計參考」定位，但保留其 `AnalysisProvider`、無 broker/order authority 與不採上游 LLM Portfolio Manager 邊界。ADR-003 只在 Future Analyst Plugin 重新啟動時適用。
+- 決策：P3 以 `TauricResearch/TradingAgents` 固定 commit `a33fd4c0f134485a43553a2c23a63cb14adbd88f` 為分析方法基準，實作 Technical/Market、Fundamentals、News、Sentiment 四分析員，接有限輪次 Bull/Bear、Research Manager 與 Trader。
+- 輸出：Trader 只產生 versioned `InvestmentDecision`，五級 research rating 為 `BUY/OVERWEIGHT/HOLD/UNDERWEIGHT/SELL`；它不是委託，且不得含 quantity、target weight、order type、broker endpoint 或 credential。schema、evidence、timeout、429、provider/data failure 必須 `INVALID/ABSTAIN`，不得以自由文字 fallback 猜測。
+- 排除：上游 aggressive/conservative/neutral risk debate 不作資金風控；上游 LLM Portfolio Manager、simulated-exchange order path、memory side effects 與 data vendor defaults 不直接納入。P4 deterministic Portfolio/Risk 接受 `InvestmentDecision + quant factors + holdings + authoritative account state`，P2 execution boundary 不變。
+- 實作策略：要求 graph 順序、角色責任、最大輪次與資料流的 semantic parity，不要求 fork 上游或逐位元重現。所有 input 必須 point-in-time/frozen/versioned；provider 必須隔離 broker credential、order/ledger write、shell 與任意 network。
+- 七人處置：原七套方法論與 `skill/` corpus 不刪除，但改為 disabled Future Analyst Plugin。未經使用者重新核准蒸餾方法與獨立 plugin gate，不讀取／審查 corpus、不做 proposition extraction、不進 P3/P4/P5/P6/P7/P8 critical path。
+- Gate：P3 驗證 analysis contracts、point-in-time/evidence、semantic parity、record/replay 與 adversarial failures；P4 驗證 production candidate funnel、deterministic optimizer/hard risk；P5 保留 walk-forward/backtest/attribution；P6 Shadow、P7 Supervised Paper、P8 Unattended Paper 均保留。
+
+## ADR-028：P3 納入完整 TradingAgents 提案鏈，deterministic Risk 保留最終核准權
+
+- 日期：2026-08-21
+- 狀態：Accepted（規劃決策；P3 implementation 尚未開始）
+- 取代：ADR-027 的「只到 Trader」與排除 risk debate／Portfolio Manager 部分；取代 ADR-005 的「LLM 只輸出研究評估」狹義描述，但保留 LLM 無核准／下單權；取代 ADR-009 的 long-only／禁止同日交易部分。ADR-027 的固定 upstream、隔離、Future Analyst Plugin 與 P2 boundary 仍有效。
+- Upstream：直接移植 `TauricResearch/TradingAgents` commit `a33fd4c0f134485a43553a2c23a63cb14adbd88f` 所需 analysis/data/debate/risk/Portfolio Manager/memory 模組，不 fork、不移植 CLI、simulated exchange 或 order path。保留 Apache-2.0 LICENSE、attribution／NOTICE（若有）並標示修改。
+- Graph：Technical/Market、Fundamentals、News、Sentiment → Bull/Bear（兩輪）→ Research Manager → Trader → Aggressive/Conservative/Neutral Risk Debate（兩輪）→ LLM Portfolio Manager。
+- Context：每次 Portfolio Manager 必須讀去識別化完整 portfolio/account snapshot：NAV、cash、buying power、全部持倉權重／成本／損益、open orders、same-day fills、borrow status 與 remaining limits；缺少即 `INVALID/NO_TRADE`。
+- Output：只能產生 versioned `PortfolioProposal`，每列為 `OPEN/INCREASE/REDUCE/CLOSE/HOLD`、`LONG/SHORT/FLAT`、signed target weight、confidence、evidence ids、短 reason codes 與 invalidators；不得產生長篇交易建議、quantity、order type、broker call 或 `OrderIntent`。confidence < 0.65 強制 `HOLD`。
+- Review：deterministic Risk Engine 回傳 `APPROVED` 或 `REJECTED(reason_codes, remaining_limits)`。第一次拒絕只允許 Portfolio Manager 重申一次；第二次拒絕固定 `NO_TRADE`。P2 execution authority 不變。
+- Limits：long gross ≤ 100%、short gross ≤ 20%、total gross ≤ 120%、net exposure 40%–100%、long+short 最多 15 檔、單股 absolute target weight ≤ 15%、daily turnover ≤ 40%。short 必須由權威 snapshot 證明 shortable 且符合 borrow policy；`RISK_EXIT` 可隨時執行且不計 turnover。
+- Same-day：無最短持有期；允許 long→sell、short→cover、獲利短線退出及正常窗口內再進場。同日虧損退出不能只因帳面虧損，必須有 downside band exceeded、thesis invalidated、material event、borrow/liquidity anomaly 或 hard-risk trigger 的 reason/evidence。
+- Schedule：第一完整分析在開盤後 60 分鐘，全部持倉 + 最多 12 候選；第二次在收盤前 90 分鐘，全部持倉 + 最多 5 候選。一般流程 deadline 15 分鐘；未來 Paper evidence 顯示交易時間不足時再以 ADR 校準。
+- Emergency：event monitor 涵蓋 price/volume、halt、borrow 與重大新聞。價格需雙獨立來源且連續三個 fresh samples；官方 primary announcement 可單源確認新聞。來源衝突／延遲為 `DATA_CONFLICT`，不啟動 LLM；verified emergency graph 只分析受影響與高度相關持倉，只能 `HOLD/REDUCE/CLOSE`，deadline 3 分鐘。deterministic hard-risk 可獨立減倉並告警。
+- Models：Analysts 預設 `agnes-2.5-flash`、備援 `agnes-2.0-flash`；Research Manager、Trader、Risk Debate、Portfolio Manager 預設 `muse-spark-1.2-contributor`、備援 `agnes-2.5-flash`。`deepseek-v4-flash` 保留為通過相同 eval 後才能明確指定的候選，不是第三次 failover。所有角色要求最高可用 reasoning，adapter 記錄 requested/effective capability；只備援一次，再失敗 `INVALID/NO_TRADE`。Muse 的 non-ZDR／訓練政策已由使用者接受。未來 `gpt-5.6` 必須通過相同 eval gate。
+- Memory：持倉期間每日保存 outcome/reflection 與 Risk rejection。immutable raw records 不刪除；每週六由新的 memory-curation skill 整理 LLM-visible memory，最多 4,000 行，只保留高重要性經驗並防 future leakage。
+- Tavily：使用者要求七帳號輪替；因外部條款授權仍未有可驗證證據，ADR-011／`OPEN-007` 保持 fail closed，本 ADR 不擴張該權限。
