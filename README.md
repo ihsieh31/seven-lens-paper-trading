@@ -44,7 +44,7 @@
 
 安全邊界：structured logging 只接受經 bounded redaction 轉成的 JSON-safe 值；cycle、過深、非字串 mapping key 或序列化異常會產生不含原始 fields 的固定 fallback audit event。Tavily `AUTHORIZED_ACCOUNT_POOL` 目前固定 fail closed，直到未來存在可獨立驗證外部授權的 verifier；使用者輸入的 reference、ticket 或 evidence record 不會自行升級權限。
 
-下一個主線 gate 是 `P3 — TradingAgents 分析核心整合`。目前只完成規劃改版，尚未實作 P3，也未授權真實下單；P7 supervised Paper 與 P8 unattended Paper 的安全門檻保留。
+`P3-A — upstream/license/contracts` 已完成 remediation-R1 並通過獨立重新驗證；目前下一個主線 gate 是 `P3-B — point-in-time input/event verification`，P3-C~F、P4 deterministic Risk 與後續驗證鏈仍未實作。這不授權真實下單；P7 supervised Paper 與 P8 unattended Paper 的安全門檻保留。
 
 ## 開發環境與驗證
 
@@ -74,7 +74,7 @@ production secret lookup 只使用 Security.framework read-only exact generic-pa
 - `seven-lens.paper-trading.openai.api-key` / `primary`
 - `seven-lens.paper-trading.tavily.api-key` / validated non-secret Tavily account id
 
-P3 尚未實作的 provider boundary 會另加入 exact refs：`seven-lens.paper-trading.agnes.api-key`／`primary` 與 `seven-lens.paper-trading.opencode.api-key`／`primary`。目前程式不應假裝已支援這兩個 refs；新增時必須擴充 sealed mapping、scope 與 fake-only tests。
+P3-E 尚未實作的 provider boundary 會另加入 exact refs：`seven-lens.paper-trading.agnes.api-key`／`primary` 與 `seven-lens.paper-trading.opencode.api-key`／`primary`。目前程式不應假裝已支援這兩個 refs；新增時必須擴充 sealed mapping、scope 與 fake-only tests。
 
 查詢預設在 spawned worker 內使用 2 秒 hard timeout，且禁止 authentication UI。missing、duplicate、denied、locked、timeout、malformed 或 backend failure 全部停止，不會換來源。unit tests 只注入 fake provider/native bridge/process，絕不讀取使用者 Keychain。
 

@@ -65,9 +65,9 @@
 
 - 嚴重度：High
 - 狀態：Open（P3 blocker）
-- 問題：P3-A 已建立 versioned strict contracts、固定 upstream/license inventory 與 contract adversarial/source-invariant tests，待獨立驗收；semantic-parity、provider isolation 與 point-in-time record/replay 仍屬 P3-B~F 未完成範圍。
+- 問題：P3-A 已建立 versioned strict contracts、固定 upstream/license inventory 與 contract adversarial/source-invariant tests，並於 2026-08-21 通過獨立重新驗證（remediation-R1 Accepted，Gate Closed）；semantic-parity、provider isolation 與 point-in-time record/replay 仍屬 P3-B~F 未完成範圍。
 - 影響：若直接沿用上游 free-text fallback、live data、單檔 portfolio view 或可改寫 memory，可能造成不可重播決策、future leakage，或讓語言模型越過 deterministic Risk authority。
-- 處置：P3-A implementation 已完成並保留獨立 acceptance gate；後續 P3-B~F 再完成 evidence/schema verifier、semantic parity、隔離 provider、memory lineage、record/replay 與模型 adversarial evals。
+- 處置：P3-A 已通過獨立重新驗收並關閉（Gate Closed，證據見 PROGRESS／WORKLOG 2026-08-21）；後續 P3-B~F 再完成 evidence/schema verifier、semantic parity、隔離 provider、memory lineage、record/replay 與模型 adversarial evals。
 - 關閉條件：P3 Definition of Done 全部有 source/test evidence，且 `INVALID/ABSTAIN` 無法進 P4、Portfolio Manager無 broker/order/ledger capability，第二次 Risk rejection 必為 `NO_TRADE`。
 
 ## OPEN-025：Agnes／OpenCode 模型能力、隱私與輸出穩定性尚未實測

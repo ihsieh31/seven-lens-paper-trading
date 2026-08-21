@@ -245,6 +245,11 @@ def _decimal_text(value: Decimal, scale: int) -> str:
     return format(value, f".{scale}f")
 
 
+def _reject_negative_zero(value: Decimal, field: str) -> None:
+    if value.is_zero() and value.is_signed():
+        raise ValueError(f"{field} must not be negative zero")
+
+
 def _sequence(
     value: object,
     field: str,
@@ -636,6 +641,7 @@ class BorrowStatus:
             or self.located_quantity < 0
         ):
             raise ValueError("located_quantity must be a non-negative scale-6 Decimal")
+        _reject_negative_zero(self.located_quantity, "located_quantity")
         if self.availability is not BorrowAvailability.AVAILABLE and self.located_quantity != 0:
             raise ValueError("unavailable or unknown borrow must have zero located_quantity")
 
@@ -762,6 +768,8 @@ class PortfolioSnapshot:
                 or value < 0
             ):
                 raise ValueError(f"{name} must be a non-negative scale-2 Decimal")
+        _reject_negative_zero(self.cash, "cash")
+        _reject_negative_zero(self.buying_power, "buying_power")
         if self.nav <= 0:
             raise ValueError("nav must be positive")
         for name, item_type, maximum in (
@@ -1133,6 +1141,7 @@ class AnalystReport:
             or not Decimal("0") <= self.confidence <= Decimal("1")
         ):
             raise ValueError("confidence must be a scale-4 Decimal from zero to one")
+        _reject_negative_zero(self.confidence, "confidence")
         if self.status is AnalysisStatus.VALID and not self.material_claims:
             raise ValueError("VALID analyst report requires material claims")
         if self.status is not AnalysisStatus.VALID and self.confidence != 0:
@@ -1319,6 +1328,7 @@ class ResearchConclusion:
             or not Decimal("0") <= self.confidence <= Decimal("1")
         ):
             raise ValueError("confidence must be a scale-4 Decimal from zero to one")
+        _reject_negative_zero(self.confidence, "confidence")
         if self.status is not AnalysisStatus.VALID and self.confidence != 0:
             raise ValueError("non-VALID conclusion confidence must be zero")
 
@@ -1620,6 +1630,7 @@ class PortfolioRequest:
             or not Decimal("0") <= self.confidence <= Decimal("1")
         ):
             raise ValueError("confidence must be a scale-4 Decimal from zero to one")
+        _reject_negative_zero(self.confidence, "confidence")
         object.__setattr__(
             self, "evidence_refs", _refs(self.evidence_refs, "evidence_refs", nonempty=True)
         )

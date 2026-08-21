@@ -552,3 +552,84 @@
   `83 passed, 8 deselected, 0 skipped`；`git diff --check`通過。
 - 未改 dependency、lock、migration、P2、CI；未使用 credential或 broker/data/model API，未讀
   `skill/`，未 stage/commit/push。結論僅為 implementation completed，待獨立 acceptance。
+
+## 2026-08-21 — P3-A remediation-R1（驗收後修復）
+
+- 依獨立 acceptance session 後續深度對抗審查之已實證發現執行 remediation-R1；只修改
+  `src/seven_lens/analysis/contracts.py`、`tests/test_analysis_contract_adversarial.py`、
+  `tests/test_analysis_contract_source_invariants.py`，不擴大範圍。
+- 修復 A（Medium）：`contracts.py` 新增模組層 `_reject_negative_zero` helper，並於六處
+  typed constructor 補 `is_zero() and is_signed()` 拒絕（`BorrowStatus.located_quantity`、
+  `PortfolioSnapshot.cash`／`buying_power`、`AnalystReport.confidence`、
+  `ResearchConclusion.confidence`、`PortfolioRequest.confidence`）；`nav` 語意未動，
+  錯誤訊息統一 `must not be negative zero`，其餘行為不變。
+- 修復 B（Medium）：新增 OPEN+LONG／HOLD+FLAT 帶 `MATERIAL_NEW_EVENT` 的 ctor 與 wire
+  雙層拒絕測試（2 個 parametrized 案例）。
+- 修復 C（Medium）：新增 `validate_against` 身份比對五案例（input_id／universe_hash/
+  snapshot_hash/window 不符、expiration 晚於 deadline）。
+- 修復 D（Low）：新增八條規則測試：proposal status/requests 矛盾、UNAVAILABLE/UNKNOWN
+  borrow 非零 located_quantity、entry band low>high、normal focus 超出 universe、
+  VALID report 缺 material_claims／INVALID/ABSTAIN 與 non-VALID conclusion confidence
+  非零、started debate 缺任一 viewpoint、emergency proposal INCREASE、ctor 層跨 enum
+  混淆與六欄位 ctor 負零。
+- 修復 E（Low）：source-invariant AST 掃描升級為解析具體 import 目標（相對匯入解析為
+  `seven_lens.<module>`、ImportFrom alias 以 `<module>.<alias>` 檢查），新增 snippet
+  自我測試涵蓋 `from .execution import helper`、`from seven_lens import execution`、
+  `from . import infrastructure`、`import seven_lens.infrastructure as infra` 四種寫法。
+- 驗證（本機實際數字）：targeted 三模組 `83 passed`（原 70，+13）；`uv lock --check
+  --offline` exit 0；Ruff format/check exit 0（100 files）；mypy strict exit 0（100
+  source files）；non-integration `759 passed, 91 deselected`（原 746）；真實 disposable
+  PostgreSQL 16 `83 passed, 8 deselected, 0 skipped`，exit 0，owner-label 容器清點 0；
+  `git diff --check` exit 0。
+- 狀態固定為 `remediation completed; pending independent re-verification`；不宣告 P3-A
+  Gate 變更。未新增 dependency、未改 `uv.lock`／migration／P2／broker／Keychain／CI；
+  未使用 credential/API、未讀 `skill/`、未 stage/commit/push。
+
+## 2026-08-21 — P3-A remediation-R1 獨立重新驗證（Accepted）
+
+### 驗收結論
+
+- 判定 remediation-R1 **Accepted**：P3-A 維持 Accepted、五項修復結案，P3-A Gate Closed。
+- 本節由獨立 acceptance session 撰寫；所有數字為本機實際重跑結果，非轉述 implementation
+  session 聲明。
+
+### 完成工作
+
+- 核對 handoff §10、WORKLOG、PROGRESS 的 remediation 聲明與實際 diff 一致；文件狀態為
+  pending independent re-verification，無自行宣告 gate 變更。
+- 範圍稽核：變更僅 `contracts.py`（+11）、兩個測試檔、三份治理文件；golden fixture、主測試檔、
+  `third_party/**`、`THIRD_PARTY_NOTICES.md`、`uv.lock`、`pyproject.toml` 零 diff；HEAD
+  `45f3c6b` 未變、未 stage/commit/push。
+- 修復 A 精讀＋PoC（`/tmp/poc_negzero_a.py`，31/31 通過）：六欄位 ctor 負零全數拒絕、wire
+  層未放鬆、合法零值接受、`nav=-0.00` 仍走 positive 規則且訊息不變、PortfolioPosition／
+  RemainingLimits／TraderPlan／OpenOrderSummary／SameDayFillSummary 行為不變、21 個 golden
+  實例 round-trip 成立。
+- 修復 B~D：13 個新案例逐條對照 source 規則位置通過；基線對照實驗——以 Edit 工具暫時移除
+  11 行修復使 contracts.py 與 `45f3c6b` SHA-256 逐位元一致，跑測試後原樣恢復並復驗 hash——
+  顯示未修復碼上恰好僅負零 ctor 測試失敗（`1 failed, 54 passed`），證明該測試釘住代碼修復，
+  其餘新測試釘住既有正確行為且非空殼（pytest.raises 帶 match 通過＝例外確實拋出且訊息吻合）。
+- 修復 E PoC（`/tmp/poc_scan_e.py`）：新掃描器抓到全部六種匯入寫法；舊邏輯實證漏掉
+  `from .execution import helper`、`from seven_lens import execution`、
+  `from . import infrastructure` 三種規避寫法。
+
+### 實際驗證
+
+- `uv lock --check --offline` exit 0。
+- `uv run --locked ruff format --check .` exit 0（100 files already formatted）。
+- `uv run --locked ruff check .` exit 0。
+- `uv run --locked mypy` exit 0（100 source files）。
+- targeted 三模組 exit 0：`83 passed`。
+- `uv run --locked pytest -m "not integration" -ra --tb=short` exit 0：
+  `759 passed, 91 deselected`。
+- `./scripts/run_postgres_integration.sh` exit 0：真實 disposable PostgreSQL 16
+  （digest-pinned `postgres:16.15-alpine`）`83 passed, 8 deselected, 0 skipped`；
+  owner-label 容器清點 0。
+- `git diff --check` exit 0。
+
+### 發現與殘留
+
+- 無 Critical／High／Medium finding。Low：未追蹤 `.mimosa/` hook-state 目錄（Mimosa plugin
+  工具產物，非專案變更）。資訊性：wire 層非負欄位的負零字串以 canonical-string 訊息拒絕
+  （既有 fail-closed 設計）。
+- 驗收期間的基線對照實驗已逐位元還原（SHA-256 復驗）；除本治理更新外未修改 production
+  code、tests 或規劃文件語意。未 stage、commit 或 push。

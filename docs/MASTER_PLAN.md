@@ -2,7 +2,7 @@
 
 版本：0.3
 日期：2026-08-21
-狀態：P3 主線改版；P1/P2 已完成，P3 尚未實作
+狀態：P1/P2 已完成；P3-A contracts/license Gate Closed，P3-B~F 尚未實作
 
 ## 1. 專案定義
 

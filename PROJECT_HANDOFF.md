@@ -4,7 +4,7 @@
 
 專案：`/Users/zongen/Downloads/codex/trading`
 
-目前 gate：P3-A implementation completed; pending independent acceptance
+目前 gate：P3-A Gate Closed（2026-08-21 remediation-R1 獨立重新驗證 Accepted）
 
 本輪唯一目標：完成固定上游來源／授權清單與 dependency-free、versioned、strict P3 contracts
 
@@ -17,9 +17,9 @@
 ## 1. 已驗證基線
 
 - P0、P1、P2 已完成；P2 Gate Closed。
-- 目前 `main`／`origin/main` 基線為 `22a121f64c5520d4e06d774ed04ce1dce37f3700`；P2 exact-main CI run `32361310657` 已通過。
+- P2 關門基線為 `22a121f64c5520d4e06d774ed04ce1dce37f3700`，exact-main CI run `32361310657` 已通過；其後 P3-A 初始實作已發布於 `45f3c6b1ffcaa0597a0ffa5e543b78c4a137a57d`，exact-main CI run `32472009439` 已通過。remediation-R1 的發布證據記錄於本文件最新段落。
 - P2 關門不授權真實下單。真實 Alpaca Paper order mutation 仍只屬 P7。
-- 現有工作樹含使用者已核准的 P3 規劃文件修改與本 handoff／prompt 變更；不得 reset、checkout、清理或覆寫。
+- P3-A remediation-R1 與獨立重新驗證紀錄屬同一發布包；不得 reset、checkout、清理或覆寫其中任何檔案。
 - 未經使用者另行要求，不 stage、commit、push、建立 PR 或修改 remote／branch protection。
 
 ## 2. 不可變更的安全邊界
@@ -262,3 +262,70 @@ LICENSE/tree retrieval；未使用任何 credential，未呼叫 broker/data/mode
 未 stage/commit/push。
 
 下一步：交給獨立 acceptance session，不由 implementation session 自行關閉 P3-A Gate。
+
+### remediation-R1（2026-08-21）：P3-A 驗收後修復
+
+目前：`P3-A remediation completed; pending independent re-verification`。本 session 不宣告
+P3-A Gate 狀態變更。
+
+依獨立驗收後深度對抗審查之已實證發現完成五項修復；只動 `src/seven_lens/analysis/
+contracts.py` 與兩個對抗／source-invariant 測試檔：
+
+1. 修復 A（Medium）：`contracts.py` 新增模組層 `_reject_negative_zero` helper，於六處
+   typed constructor 加入與 `PortfolioPosition` 相同的 `is_zero() and is_signed()` 拒絕：
+   `BorrowStatus.located_quantity`、`PortfolioSnapshot.cash`／`buying_power`（`nav`
+   語意未動）、`AnalystReport.confidence`、`ResearchConclusion.confidence`、
+   `PortfolioRequest.confidence`。錯誤訊息統一 `must not be negative zero`；其餘接受/
+   拒絕行為不變。
+2. 修復 B（Medium）：補 OPEN+LONG 與 HOLD+FLAT 帶 `SameDayExitReason.MATERIAL_NEW_EVENT`
+   的 ctor（`replace`）與 wire（`from_wire`）雙層拒絕測試。
+3. 修復 C（Medium）：補 `validate_against` 五個身份比對拒絕案例：input_id／universe_hash/
+   snapshot_hash/window 不符與 expiration 晚於 input deadline。
+4. 修復 D（Low）：補八條已實證規則測試：INVALID proposal 帶 requests／VALID 無 requests、
+   UNAVAILABLE/UNKNOWN borrow 帶非零 located_quantity、entry band low>high、normal 窗口
+   focus 超出 universe、VALID report 缺 material_claims／INVALID/ABSTAIN confidence 非
+   零／non-VALID conclusion confidence 非零、started debate 任一方 arguments 為空、
+   emergency proposal INCREASE 被 boundary 拒絕、ctor 層跨 enum 混淆與六欄位 ctor 負零。
+5. 修復 E（Low）：source-invariant AST 掃描改為解析具體 import 目標——相對匯入
+   （`level>0`）解析為 `seven_lens.<module>`、ImportFrom alias 以 `<module>.<alias>` 檢查，
+   並新增自我測試以 snippet 字串證明四種規避寫法會被抓到。
+
+targeted tests：同前述三個 test modules，`83 passed`（原 70，新增 13 案例）。
+`uv lock --check --offline` exit 0；Ruff format/check exit 0（100 files）；mypy strict
+exit 0（100 source files）；non-integration `759 passed, 91 deselected`（原 746）；
+真實 disposable PostgreSQL 16 integration exit 0，`83 passed, 8 deselected, 0 skipped`；
+`git diff --check` 通過；integration container owner-label 清點為 0。
+
+未新增 dependency、未改 `uv.lock`、migration、P2 execution/application/infrastructure、
+broker、Keychain、CI；未使用 credential/API、未讀 `skill/`、未 stage/commit/push。
+狀態固定為 remediation completed; pending independent re-verification，不由本 session
+自行宣告重新驗證通過。
+
+### 獨立重新驗證（2026-08-21）：remediation-R1 Accepted — P3-A Gate Closed
+
+由獨立 acceptance session 完成 remediation-R1 定點重新驗證，判定 **Accepted**；P3-A 維持
+Accepted、五項修復結案。以下為該 session 實際重跑的證據。
+
+- 範圍核對：`git diff 45f3c6b..工作樹` 僅含 `src/seven_lens/analysis/contracts.py`（+11）、
+  `tests/test_analysis_contract_adversarial.py`、`tests/test_analysis_contract_source_invariants.py`
+  與三份治理文件；golden fixture、`tests/test_analysis_contracts.py`、`third_party/**`、
+  `THIRD_PARTY_NOTICES.md`、`uv.lock`、`pyproject.toml` 零 diff。HEAD 仍為 `45f3c6b`，
+  未 stage/commit/push。
+- 修復 A：`_reject_negative_zero` 六處呼叫逐一精讀確認走共用 helper；31 項親自 PoC 全過——
+  六欄位 ctor 負零拒絕、wire 層未放鬆、合法零值無過度拒絕、`nav=-0.00` 仍走既有 positive
+  規則且訊息不變、PortfolioPosition／RemainingLimits／TraderPlan／OpenOrderSummary／
+  SameDayFillSummary 行為不變、21 個 golden 實例 round-trip 成立。
+- 修復 B~D：13 個新案例逐條對照 source 規則位置；基線對照實驗（暫時還原 contracts.py 至
+  `45f3c6b` 版本，SHA-256 逐位元驗證後原樣恢復並復驗 hash）顯示未修復碼上恰好僅負零 ctor
+  測試失敗（1 failed, 54 passed），其餘新測試釘住既有正確行為且非空殼。
+- 修復 E：新舊掃描器對照 PoC——新掃描器抓到全部六種匯入寫法（含 `from .execution import x`
+  與 `from seven_lens import execution`），舊邏輯實證漏掉其中三種規避寫法；自我測試真實
+  執行四種 snippet。
+- 命令證據（全 exit 0）：`uv lock --check --offline`；Ruff format/check（100 files）；mypy
+  strict（100 source files）；targeted 三模組 `83 passed`；non-integration
+  `759 passed, 91 deselected`；真實 disposable PostgreSQL 16（digest-pinned
+  `postgres:16.15-alpine`）`83 passed, 8 deselected, 0 skipped`，owner-label 容器清點 0；
+  `git diff --check`。
+- 殘留事項：未追蹤 `.mimosa/` hook-state 目錄（Mimosa plugin 工具產物，非專案變更）；
+  wire 層非負欄位的負零字串以 canonical-string 訊息拒絕（既有 fail-closed 設計）。均為
+  Low／資訊性，不阻斷驗收。

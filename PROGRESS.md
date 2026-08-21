@@ -2,10 +2,10 @@
 
 ## 狀態摘要
 
-- 專案階段：P3 — TradingAgents 分析核心整合；P3-A implementation completed，待獨立驗收。P2 Gate Closed，這不授權真實下單。
+- 專案階段：P3 — TradingAgents 分析核心整合；P3-A Gate Closed（2026-08-21 remediation-R1 獨立重新驗證 Accepted）。P2 Gate Closed，這不授權真實下單。
 - 完成度定義：只以路線圖的可驗證交付物計算，不以主觀百分比計算。
 - 最近更新：2026-08-21
-- 下一個 gate：以 `docs/P3A_ACCEPTANCE_PROMPT.md` 執行獨立 P3-A 驗收；WS/CLI 與真實下單仍分別留 P6/P7，P8 無人值守門檻保留。
+- 下一個 gate：P3-B 起的分析管線工作包（point-in-time inputs、四分析員、兩輪辯論、Research Manager、Trader、Risk Debate、Portfolio Manager，見 OPEN-024~026）；WS/CLI 與真實下單仍分別留 P6/P7，P8 無人值守門檻保留。
 - 歷史：P2 曾於 2026-08-19 及 P2-CUR 修復後標示 Closed；2026-08-20 依 final remediation ACC-001~009 再次重開。歷史 Closed 紀錄保留，但不是目前狀態。
 
 ## 已完成
@@ -68,7 +68,7 @@
       暫停、runtime role 權限）。已於 2026-08-19 完成並 Closed；2026-08-20 依 P2-CUR-001~006
       remediation 重開並再次 Closed（見下方「P2 Remediation 2026-08-20」節）。P2-E 真實 read-only 連線驗證已完成首次執行（2026-08-17，見下方 P2-E 證據）。
 - [ ] WebSocket 傳輸本體與 control shell CLI（ADR-019 範圍聲明，P6/P7 bring-up）。
-- [ ] P3-A：implementation completed、待獨立驗收；已固定 upstream SHA／Apache-2.0 inventory，建立 strict contracts、canonical wire、golden／adversarial／source-invariant tests。只有獨立 acceptance session 可勾選 Gate Closed。
+- [x] P3-A：implementation 與 remediation-R1 均已完成；2026-08-21 獨立 acceptance session 完成重新驗證，判定 remediation-R1 Accepted，**P3-A Gate Closed**（證據見下方「P3-A 獨立重新驗證」節）。已固定 upstream SHA／Apache-2.0 inventory，建立 strict contracts、canonical wire、golden／adversarial／source-invariant tests，並完成驗收後五項修復。
 - [ ] P3-B~F：point-in-time inputs/event verification、四分析員、兩輪 Bull/Bear、Research Manager、Trader、兩輪 Risk Debate、Portfolio Manager、Agnes/OpenCode provider isolation、daily reflection、weekly 4,000-line memory skill、record/replay 與 adversarial evals。
 - [ ] Future Analyst Plugin 七人 corpus 審查／蒸餾：`DEFERRED/DISABLED`；未經使用者重新核准，不讀取 `skill/`、不排入主線。
 - [ ] 取得 Tavily 對同一 Customer 彙總使用 7 個免費帳號的書面／後台授權證據。
@@ -400,3 +400,44 @@ re-acceptance.**
   `git diff --check` 通過。
 - 未新增 dependency、未改 `uv.lock`／migration／P2／CI；只做固定 SHA 的無 credential read-only
   GitHub retrieval，未使用 credential/API、未讀 `skill/`、未 stage/commit/push。
+
+## P3-A remediation-R1（2026-08-21）：completed，待獨立重新驗證
+
+- 依獨立 acceptance session 後續深度對抗審查之已實證發現，完成五項範圍內修復：
+  A 六個 decimal 欄位 typed constructor 負零拒絕（共用 `_reject_negative_zero` helper，
+  `nav` 語意不變）；B OPEN/HOLD 帶 same-day exit reason 的 ctor+wire 拒絕測試；
+  C `validate_against` 身份比對五案例；D 八條已實證規則測試（proposal status/requests、
+  borrow located_quantity、entry band 順序、focus universe、report/conclusion status-
+  confidence 規則、debate viewpoints、emergency INCREASE、跨 enum 混淆＋六欄位負零）；
+  E source-invariant 掃描解析相對／alias 匯入並附 snippet 自我測試。
+- 變更僅限 `src/seven_lens/analysis/contracts.py` 與兩個對抗／source-invariant 測試檔。
+- 本機證據：targeted 三模組 `83 passed`（原 70，+13）；`uv lock --check --offline` exit 0；
+  Ruff format/check exit 0；mypy strict exit 0（100 files）；non-integration
+  `759 passed, 91 deselected`（原 746）；真實 disposable PostgreSQL 16
+  `83 passed, 8 deselected, 0 skipped` exit 0、無容器殘留；`git diff --check` exit 0。
+- 未新增 dependency、未改 `uv.lock`／migration／P2 execution/application/infrastructure/
+  broker/Keychain/CI；未使用 credential/API、未讀 `skill/`、未 stage/commit/push。
+  狀態固定為 `remediation completed; pending independent re-verification`，不自行宣告
+  P3-A Gate 變更。
+
+## P3-A 獨立重新驗證（2026-08-21）：remediation-R1 Accepted — Gate Closed
+
+- 獨立 acceptance session 完成 remediation-R1 定點重新驗證，判定 **Accepted**；P3-A 維持
+  Accepted、五項修復結案，P3-A Gate **Closed**。
+- 範圍：`git diff 45f3c6b..工作樹` 僅含 `contracts.py`（+11）、兩個 P3-A 對抗／
+  source-invariant 測試檔與三份治理文件；golden fixture、主測試檔、`third_party/**`、
+  `uv.lock`、`pyproject.toml` 零 diff；HEAD 未變、未 stage/commit/push。
+- 修復 A：六處 `_reject_negative_zero` 呼叫精讀確認；31 項親自 PoC 全過（ctor 負零全拒、
+  wire 層未放鬆、合法零值無過度拒絕、nav 語意不變、未動類別行為不變、21 golden 實例
+  round-trip 成立）。
+- 修復 B~D：13 個新案例逐條對照 source 規則通過；基線還原實驗（SHA-256 逐位元驗證後原樣
+  恢復）證明負零 ctor 測試確實釘住代碼修復——未修復碼上 `1 failed, 54 passed`，其餘新測試
+  釘住既有正確行為且非空殼。
+- 修復 E：新掃描器抓到全部六種匯入寫法（含相對匯入與 alias 匯入），舊邏輯實證漏掉三種；
+  自我測試真實執行四種 snippet。
+- 命令證據（全 exit 0）：`uv lock --check --offline`；Ruff format/check（100 files）；mypy
+  strict（100 files）；targeted 三模組 `83 passed`；non-integration `759 passed,
+  91 deselected`；真實 disposable PostgreSQL 16（digest-pinned 16.15-alpine）
+  `83 passed, 8 deselected, 0 skipped`，owner-label 容器清點 0；`git diff --check`。
+- 殘留：未追蹤 `.mimosa/` hook-state 目錄（工具產物）；wire 層非負欄位負零字串以
+  canonical-string 訊息拒絕（既有 fail-closed 設計）。均為 Low／資訊性，不阻斷。
