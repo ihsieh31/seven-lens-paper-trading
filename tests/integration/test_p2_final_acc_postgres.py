@@ -840,3 +840,91 @@ def test_pg_conflicting_fill_preserves_fact_and_durable_gate(migrated_postgres: 
         )
         with pytest.raises(ExecutionPausedError):
             engine.submit_from_outbox(uow, b2.client_order_id)
+
+
+# ---------------------------------------------------------------------------
+# Status-update conflicts converge on the real PostgreSQL guards
+# ---------------------------------------------------------------------------
+
+
+def test_pg_status_quantity_regression_is_typed_rolled_back_and_durable_paused(
+    migrated_postgres: str,
+) -> None:
+    from seven_lens.execution.trade_updates import (
+        OrderStatusUpdate,
+        TradeUpdateConsumer,
+        TradeUpdateError,
+    )
+
+    intent = _intent(711)
+    with PostgresUnitOfWork(migrated_postgres) as uow:
+        uow.orders.add(intent)
+        for s in (
+            OrderStatus.RISK_APPROVED,
+            OrderStatus.OUTBOX_PENDING,
+            OrderStatus.SUBMITTING,
+            OrderStatus.ACKNOWLEDGED,
+        ):
+            uow.orders.transition_status(intent.client_order_id, s)
+        uow.orders.record_broker_order(
+            BrokerOrder(
+                broker_order_id="b-status-regression",
+                client_order_id=intent.client_order_id,
+                symbol=intent.symbol,
+                side=intent.side,
+                quantity=intent.quantity,
+                filled_quantity=5,
+                limit_price=intent.limit_price,
+                status=BrokerOrderStatus.PARTIALLY_FILLED,
+                submitted_at=_BASE,
+                updated_at=_BASE,
+            )
+        )
+        uow.commit()
+
+    regression_observed_at = UtcTimestamp.from_isoformat("2026-08-17T13:35:05.000000Z")
+    with PostgresUnitOfWork(migrated_postgres) as uow:
+        with pytest.raises(TradeUpdateError) as conflict:
+            TradeUpdateConsumer().apply(
+                uow,
+                OrderStatusUpdate(
+                    client_order_id=intent.client_order_id,
+                    broker_order_id="b-status-regression",
+                    status=BrokerOrderStatus.PARTIALLY_FILLED,
+                    filled_quantity=4,
+                    observed_at=regression_observed_at,
+                ),
+            )
+        assert type(conflict.value) is TradeUpdateError
+
+    # A fresh connection must observe zero derived mutation plus a durable pause.
+    with psycopg.connect(migrated_postgres) as conn:
+        mirror_row = conn.execute(
+            "SELECT filled_quantity, status FROM broker_orders WHERE broker_order_id=%s",
+            ("b-status-regression",),
+        ).fetchone()
+        assert mirror_row == (5, "PARTIALLY_FILLED")
+        intent_row = conn.execute(
+            "SELECT status FROM order_intents WHERE client_order_id=%s",
+            (intent.client_order_id.value,),
+        ).fetchone()
+        assert intent_row == ("ACKNOWLEDGED",)
+        control_row = conn.execute(
+            "SELECT entries_paused, paused_reason FROM control_state WHERE singleton"
+        ).fetchone()
+        assert control_row[0] is True
+        assert control_row[1] == "reconciliation required; conflicting status"
+        command_row = conn.execute(
+            "SELECT command FROM control_commands WHERE reason=%s",
+            ("automatic pause on conflicting status",),
+        ).fetchone()
+        assert command_row == ("PAUSE_ENTRIES",)
+
+    # The database trigger stays the last authority against a regression write.
+    with psycopg.connect(migrated_postgres, autocommit=True) as conn:
+        with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState) as rejected:
+            conn.execute(
+                "UPDATE broker_orders SET filled_quantity = 4 WHERE broker_order_id=%s",
+                ("b-status-regression",),
+            )
+        assert rejected.value.sqlstate == "55000"

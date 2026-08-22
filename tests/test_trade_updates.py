@@ -8,6 +8,7 @@ import pytest
 from fakes.control import FakeControlRepository
 from fakes.orders import FakeOrderRepository
 from seven_lens.domain.value_objects import RunId, TradingDate, UtcTimestamp
+from seven_lens.execution.control import ControlCommand
 from seven_lens.execution.orders import (
     BrokerOrder,
     BrokerOrderStatus,
@@ -31,6 +32,8 @@ from seven_lens.execution.trade_updates import (
 _T0 = UtcTimestamp.from_isoformat("2026-08-17T13:35:00.000000Z")
 _T1 = UtcTimestamp.from_isoformat("2026-08-17T13:35:01.000000Z")
 _T2 = UtcTimestamp.from_isoformat("2026-08-17T13:35:02.000000Z")
+_T3 = UtcTimestamp.from_isoformat("2026-08-17T13:35:03.000000Z")
+_T4 = UtcTimestamp.from_isoformat("2026-08-17T13:35:04.000000Z")
 _CANCEL_AT = UtcTimestamp.from_isoformat("2026-08-17T13:45:00.000000Z")
 _TRADING_DATE = TradingDate.from_isoformat("2026-08-17")
 
@@ -40,8 +43,10 @@ class _UnitOfWork:
         self.orders = orders
         self.control = FakeControlRepository(_T0)
         self.commit_count = 0
+        self.rollback_count = 0
 
     def rollback(self) -> None:
+        self.rollback_count += 1
         self.orders.rollback()
 
     def commit(self) -> None:
@@ -233,3 +238,215 @@ class TestStatusUpdates:
                 observed_at=_T1,
             )
         del unit_of_work, intent
+
+
+class TestStatusConflictConvergence:
+    """Unrepresentable status updates converge to TradeUpdateError + durable pause."""
+
+    def _partially_filled_state(self) -> tuple[_UnitOfWork, OrderIntent]:
+        unit_of_work, intent, _ = _setup()
+        outcome = TradeUpdateConsumer().apply(
+            unit_of_work, _status_update(intent, BrokerOrderStatus.PARTIALLY_FILLED, 5, _T2)
+        )
+        assert outcome is TradeUpdateOutcome.APPLIED
+        return unit_of_work, intent
+
+    def _assert_typed_conflict_result(
+        self,
+        unit_of_work: _UnitOfWork,
+        intent: OrderIntent,
+        conflict: pytest.ExceptionInfo[TradeUpdateError],
+        commits_before: int,
+        rollbacks_before: int,
+        expected_status: BrokerOrderStatus,
+        expected_filled: int,
+        expected_intent_status: OrderStatus,
+    ) -> None:
+        del intent
+        assert type(conflict.value) is TradeUpdateError
+        mirror = unit_of_work.orders.get_broker_order_by_id("b-1")
+        assert mirror is not None and mirror.filled_quantity == expected_filled
+        assert mirror.status is expected_status
+        current = unit_of_work.orders.get(
+            unit_of_work.orders.get_broker_order_by_id("b-1").client_order_id
+        )
+        assert current is not None and current.status is expected_intent_status
+        assert unit_of_work.rollback_count == rollbacks_before + 1
+        # Rollback happens first; the only commit afterwards is the pause itself.
+        assert unit_of_work.commit_count == commits_before + 1
+        state = unit_of_work.control.state()
+        assert state.entries_paused is True
+        assert state.paused_reason == "reconciliation required; conflicting status"
+        pause_commands = [
+            command
+            for command in unit_of_work.control.commands
+            if command.command is ControlCommand.PAUSE_ENTRIES
+        ]
+        assert len(pause_commands) == 1
+        assert pause_commands[0].reason == "automatic pause on conflicting status"
+        assert pause_commands[0].actor == "trade_update_consumer"
+
+    def test_filled_quantity_regression_is_typed_rolled_back_and_paused(self) -> None:
+        unit_of_work, intent = self._partially_filled_state()
+        consumer = TradeUpdateConsumer()
+        commits_before = unit_of_work.commit_count
+        rollbacks_before = unit_of_work.rollback_count
+
+        with pytest.raises(TradeUpdateError) as conflict:
+            consumer.apply(
+                unit_of_work,
+                _status_update(intent, BrokerOrderStatus.PARTIALLY_FILLED, 4, _T3),
+            )
+
+        assert "b-1" not in str(conflict.value)
+        self._assert_typed_conflict_result(
+            unit_of_work,
+            intent,
+            conflict,
+            commits_before,
+            rollbacks_before,
+            BrokerOrderStatus.PARTIALLY_FILLED,
+            5,
+            OrderStatus.PARTIALLY_FILLED,
+        )
+
+    def test_filled_status_with_mismatched_quantity_is_typed_rolled_back_and_paused(
+        self,
+    ) -> None:
+        unit_of_work, intent, _mirror = _setup()
+        consumer = TradeUpdateConsumer()
+        commits_before = unit_of_work.commit_count
+        rollbacks_before = unit_of_work.rollback_count
+
+        with pytest.raises(TradeUpdateError) as conflict:
+            consumer.apply(unit_of_work, _status_update(intent, BrokerOrderStatus.FILLED, 4, _T2))
+
+        self._assert_typed_conflict_result(
+            unit_of_work,
+            intent,
+            conflict,
+            commits_before,
+            rollbacks_before,
+            BrokerOrderStatus.ACCEPTED,
+            0,
+            OrderStatus.ACKNOWLEDGED,
+        )
+
+    def test_overfill_beyond_order_quantity_is_typed_rolled_back_and_paused(self) -> None:
+        unit_of_work, intent, _mirror = _setup()
+        consumer = TradeUpdateConsumer()
+        commits_before = unit_of_work.commit_count
+        rollbacks_before = unit_of_work.rollback_count
+
+        with pytest.raises(TradeUpdateError) as conflict:
+            consumer.apply(
+                unit_of_work,
+                _status_update(intent, BrokerOrderStatus.PARTIALLY_FILLED, 12, _T2),
+            )
+
+        self._assert_typed_conflict_result(
+            unit_of_work,
+            intent,
+            conflict,
+            commits_before,
+            rollbacks_before,
+            BrokerOrderStatus.ACCEPTED,
+            0,
+            OrderStatus.ACKNOWLEDGED,
+        )
+
+    def test_illegal_broker_transition_is_typed_rolled_back_and_paused(self) -> None:
+        unit_of_work, intent = self._partially_filled_state()
+        consumer = TradeUpdateConsumer()
+        canceled = consumer.apply(
+            unit_of_work, _status_update(intent, BrokerOrderStatus.CANCELED, 5, _T3)
+        )
+        assert canceled is TradeUpdateOutcome.APPLIED
+        commits_before = unit_of_work.commit_count
+        rollbacks_before = unit_of_work.rollback_count
+
+        with pytest.raises(TradeUpdateError) as conflict:
+            consumer.apply(unit_of_work, _status_update(intent, BrokerOrderStatus.ACCEPTED, 5, _T4))
+
+        self._assert_typed_conflict_result(
+            unit_of_work,
+            intent,
+            conflict,
+            commits_before,
+            rollbacks_before,
+            BrokerOrderStatus.CANCELED,
+            5,
+            OrderStatus.CANCELED,
+        )
+
+    def test_equal_timestamp_conflicting_payload_is_typed_rolled_back_and_paused(
+        self,
+    ) -> None:
+        unit_of_work, intent, _mirror = _setup()
+        consumer = TradeUpdateConsumer()
+        commits_before = unit_of_work.commit_count
+        rollbacks_before = unit_of_work.rollback_count
+
+        with pytest.raises(TradeUpdateError) as conflict:
+            consumer.apply(
+                unit_of_work, _status_update(intent, BrokerOrderStatus.PARTIALLY_FILLED, 4, _T1)
+            )
+
+        assert type(conflict.value) is TradeUpdateError
+        assert "b-1" not in str(conflict.value)
+        self._assert_typed_conflict_result(
+            unit_of_work,
+            intent,
+            conflict,
+            commits_before,
+            rollbacks_before,
+            BrokerOrderStatus.ACCEPTED,
+            0,
+            OrderStatus.ACKNOWLEDGED,
+        )
+
+    def test_equal_timestamp_identical_payload_stays_duplicate_without_pause(self) -> None:
+        unit_of_work, intent, _mirror = _setup()
+        consumer = TradeUpdateConsumer()
+
+        outcome = consumer.apply(
+            unit_of_work, _status_update(intent, BrokerOrderStatus.ACCEPTED, 0, _T1)
+        )
+
+        assert outcome is TradeUpdateOutcome.DUPLICATE
+        state = unit_of_work.control.state()
+        assert state.entries_paused is False
+        assert state.paused_reason is None
+        assert unit_of_work.control.commands == []
+        assert unit_of_work.rollback_count == 0
+        assert unit_of_work.commit_count == 0
+
+    def test_stale_unknown_and_monotonic_paths_never_pause(self) -> None:
+        unit_of_work, intent = self._partially_filled_state()
+        consumer = TradeUpdateConsumer()
+
+        stale = consumer.apply(
+            unit_of_work, _status_update(intent, BrokerOrderStatus.PARTIALLY_FILLED, 4, _T1)
+        )
+        assert stale is TradeUpdateOutcome.STALE
+        assert unit_of_work.control.state().entries_paused is False
+        assert unit_of_work.control.commands == []
+
+        forged = OrderStatusUpdate(
+            client_order_id=intent.client_order_id,
+            broker_order_id="b-other",
+            status=BrokerOrderStatus.FILLED,
+            filled_quantity=10,
+            observed_at=_T3,
+        )
+        assert consumer.apply(unit_of_work, forged) is TradeUpdateOutcome.UNKNOWN_ORDER
+        assert unit_of_work.control.state().entries_paused is False
+
+        applied = consumer.apply(
+            unit_of_work, _status_update(intent, BrokerOrderStatus.FILLED, 10, _T3)
+        )
+        assert applied is TradeUpdateOutcome.APPLIED
+        final = unit_of_work.orders.get(intent.client_order_id)
+        assert final is not None and final.status is OrderStatus.FILLED
+        assert unit_of_work.control.state().entries_paused is False
+        assert unit_of_work.control.commands == []

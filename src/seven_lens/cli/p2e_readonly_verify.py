@@ -86,16 +86,26 @@ def _backoff(retry_after: float | None, maximum_wait: float) -> float:
     return max(0.25, min(maximum_wait, retry_after if retry_after is not None else 1.0))
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse every redirect before urllib can build or send a second request."""
+
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
+        raise BrokerTransportError("Alpaca endpoint attempted to redirect; refusing to follow it")
+
+
 class RealHttpTransport:
     """GET-only stdlib HTTPS transport with bounded 429 retries and fail-closed mapping.
 
-    The request journal records only the method and path of every request so
+    Requests go through an instance-local opener whose redirect handler fails
+    closed, so credentials can never be forwarded to a redirect target.  The
+    request journal records only the method and path of every request so
     evidence can assert that no POST or DELETE was ever issued; headers, bodies,
     and credentials are never stored.
     """
 
     __slots__ = (
         "_max_retry_wait_seconds",
+        "_opener",
         "_request_log",
         "_retry_429_attempts",
         "_timeout_seconds",
@@ -137,6 +147,7 @@ class RealHttpTransport:
         self._retry_429_attempts = retry_429_attempts
         self._max_retry_wait_seconds = float(max_retry_wait_seconds)
         self._url_allowlist = url_allowlist
+        self._opener = urllib.request.build_opener(_NoRedirectHandler)
         self._request_log: tuple[tuple[str, str], ...] = ()
 
     @property
@@ -179,7 +190,7 @@ class RealHttpTransport:
     def _single_request(self, url: str, headers: dict[str, str]) -> tuple[int, bytes, float | None]:
         request = urllib.request.Request(url, headers=headers, method="GET")
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout_seconds) as raw:
+            with self._opener.open(request, timeout=self._timeout_seconds) as raw:
                 return (
                     raw.status,
                     _bounded_read(raw),

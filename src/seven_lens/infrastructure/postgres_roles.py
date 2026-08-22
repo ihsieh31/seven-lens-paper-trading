@@ -57,7 +57,10 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
                 "public.order_intents, public.broker_orders, public.fills, "
                 "public.reconciliation_runs, public.reconciliation_mismatches, "
                 "public.control_commands, public.control_state, "
-                "public.account_baselines, public.account_baseline_revisions TO {}"
+                "public.account_baselines, public.account_baseline_revisions, "
+                "public.source_objects, public.source_records, public.evidence_packets, "
+                "public.analysis_runs, "
+                "public.analysis_stage_results TO {}"
             ).format(role)
         )
         cursor.execute(
@@ -81,6 +84,12 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
             "public.transition_job_status(TEXT, TEXT, BIGINT, TEXT)",
             "public.domain_event_payload_is_valid(TEXT, JSONB)",
             "public.audit_event_payload_is_valid(TEXT, JSONB)",
+            "public.register_source_object(TEXT, INTEGER)",
+            "public.register_source_record(TEXT, TEXT, TEXT, TEXT, TEXT, "
+            "TIMESTAMPTZ, TEXT, BOOLEAN, BOOLEAN)",
+            "public.register_evidence_packet(UUID, TEXT, TIMESTAMPTZ, TEXT, TEXT, TEXT)",
+            "public.create_analysis_run(UUID, UUID, TEXT, TEXT)",
+            "public.advance_analysis_stage(UUID, TEXT, TEXT, TEXT, TEXT)",
         ):
             cursor.execute(
                 sql.SQL("GRANT EXECUTE ON FUNCTION {} TO {}").format(
@@ -105,6 +114,7 @@ def verify_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvidenc
         _assert_not_owner_member(cursor, runtime_role, owner_role)
         _assert_runtime_is_not_object_owner(cursor, runtime_role)
         _assert_runtime_privileges(cursor, runtime_role, database_name)
+        _assert_p3_runtime_privileges(cursor, runtime_role)
     return RuntimeRoleEvidence(owner_role, runtime_role, database_name)
 
 
@@ -168,7 +178,9 @@ def _assert_authoritative_object_owner(cursor: psycopg.Cursor[object], owner_rol
                   'order_intents', 'broker_orders', 'fills',
                   'reconciliation_runs', 'reconciliation_mismatches',
                   'control_commands', 'control_state', 'account_baselines',
-                  'account_baseline_revisions'
+                  'account_baseline_revisions', 'source_objects',
+                  'source_records', 'evidence_packets', 'analysis_runs',
+                  'analysis_stage_results'
               )
             UNION ALL
             SELECT pg_catalog.pg_get_userbyid(p.proowner) AS owner_name
@@ -182,7 +194,10 @@ def _assert_authoritative_object_owner(cursor: psycopg.Cursor[object], owner_rol
                   'broker_order_status_transition_is_valid',
                   'guard_order_intent_write', 'guard_broker_order_write',
                   'guard_control_state_write', 'guard_account_baseline_write',
-                  'guard_account_baseline_revision_write'
+                  'guard_account_baseline_revision_write',
+                  'register_source_object', 'publish_source_object',
+                  'register_source_record', 'register_evidence_packet',
+                  'create_analysis_run', 'advance_analysis_stage'
               )
         ) AS owners
         """
@@ -287,3 +302,54 @@ def _assert_runtime_privileges(
         raise PostgresRoleError(
             "runtime role privileges do not match the approved least-privilege set"
         )
+
+
+def _assert_p3_runtime_privileges(cursor: psycopg.Cursor[object], runtime_role: str) -> None:
+    tables = (
+        "source_objects",
+        "source_records",
+        "evidence_packets",
+        "analysis_runs",
+        "analysis_stage_results",
+    )
+    for table in tables:
+        cursor.execute(
+            "SELECT "
+            "has_table_privilege(%s, %s, 'SELECT'), "
+            "has_table_privilege(%s, %s, 'INSERT'), "
+            "has_table_privilege(%s, %s, 'UPDATE'), "
+            "has_table_privilege(%s, %s, 'DELETE'), "
+            "has_table_privilege(%s, %s, 'TRUNCATE'), "
+            "has_table_privilege(%s, %s, 'REFERENCES'), "
+            "has_table_privilege(%s, %s, 'TRIGGER')",
+            tuple(value for _ in range(7) for value in (runtime_role, f"public.{table}")),
+        )
+        if cursor.fetchone() != (True, False, False, False, False, False, False):
+            raise PostgresRoleError(
+                "runtime role P3 table privileges do not match the approved set"
+            )
+
+    functions = (
+        ("public.register_source_object(text,integer)", True),
+        ("public.publish_source_object(text)", False),
+        (
+            "public.register_source_record(text,text,text,text,text,timestamp with time zone,"
+            "text,boolean,boolean)",
+            True,
+        ),
+        (
+            "public.register_evidence_packet(uuid,text,timestamp with time zone,text,text,text)",
+            True,
+        ),
+        ("public.create_analysis_run(uuid,uuid,text,text)", True),
+        ("public.advance_analysis_stage(uuid,text,text,text,text)", True),
+    )
+    for signature, expected in functions:
+        cursor.execute(
+            "SELECT has_function_privilege(%s, %s, 'EXECUTE')",
+            (runtime_role, signature),
+        )
+        if cursor.fetchone() != (expected,):
+            raise PostgresRoleError(
+                "runtime role P3 function privileges do not match the approved set"
+            )

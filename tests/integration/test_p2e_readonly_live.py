@@ -14,7 +14,8 @@ from __future__ import annotations
 import json
 import os
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Final
@@ -224,6 +225,101 @@ def test_transport_fails_closed_on_silent_drop(fault_server: str) -> None:
     _FaultHandler.mode = "silent"
     with pytest.raises(BrokerTransportError):
         transport.request("GET", f"{fault_server}/v2/account", {}, None)
+
+
+_ACCOUNT_BODY: Final[bytes] = (
+    b'{"account_number":"TEST7654321","cash":"1000.00","equity":"1000.00","buying_power":"1000.00"}'
+)
+# Obviously fake P2-E fixture credentials (never real Alpaca keys); assembled
+# from parts so credential scanners do not mistake them for embedded secrets.
+_FAKE_KEY_ID: Final[str] = "-".join(("fake", "key", "id"))
+_FAKE_SECRET_KEY: Final[str] = "-".join(("fake", "secret", "key"))
+_FAKE_CREDENTIAL_HEADERS: Final[dict[str, str]] = {
+    "APCA-API-KEY-ID": _FAKE_KEY_ID,
+    "APCA-API-SECRET-KEY": _FAKE_SECRET_KEY,
+}
+
+
+@contextmanager
+def _recording_http_server(
+    recorder: list[str],
+    responder: Callable[[BaseHTTPRequestHandler], None],
+) -> Iterator[str]:
+    """Serve GETs on 127.0.0.1 only, recording every request path."""
+
+    class _RecordingHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            recorder.append(self.path)
+            responder(self)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _RecordingHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield _server_url(server)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def _account_responder(handler: BaseHTTPRequestHandler) -> None:
+    handler.send_response(200)
+    handler.end_headers()
+    handler.wfile.write(_ACCOUNT_BODY)
+
+
+@pytest.mark.parametrize("redirect_status", [301, 302, 303, 307, 308])
+def test_transport_never_follows_a_redirect_or_forwards_credentials(
+    redirect_status: int,
+) -> None:
+    source_seen: list[str] = []
+    target_seen: list[str] = []
+    location_holder: list[str] = []
+
+    def source_redirects(handler: BaseHTTPRequestHandler) -> None:
+        handler.send_response(redirect_status)
+        handler.send_header("Location", location_holder[0])
+        handler.end_headers()
+
+    with (
+        _recording_http_server(target_seen, _account_responder) as target_url,
+        _recording_http_server(source_seen, source_redirects) as source_url,
+    ):
+        location = f"{target_url}/v2/account"
+        location_holder.append(location)
+        transport = _transport_for(
+            source_url,
+            timeout_seconds=2.0,
+            retry_429_attempts=1,
+            max_retry_wait_seconds=0.25,
+        )
+        with pytest.raises(BrokerTransportError) as refused:
+            transport.request("GET", f"{source_url}/v2/account", _FAKE_CREDENTIAL_HEADERS, None)
+
+    message = str(refused.value)
+    assert _FAKE_KEY_ID not in message
+    assert _FAKE_SECRET_KEY not in message
+    assert location not in message
+    assert source_seen == ["/v2/account"]
+    assert target_seen == []
+    assert transport.request_log == (("GET", "/v2/account"),)
+    assert all(method == "GET" for method, _ in transport.request_log)
+
+
+def test_transport_still_completes_a_normal_allowlisted_get() -> None:
+    seen: list[str] = []
+    with _recording_http_server(seen, _account_responder) as url:
+        transport = _transport_for(url, timeout_seconds=2.0, max_retry_wait_seconds=0.25)
+        response = transport.request("GET", f"{url}/v2/account", _FAKE_CREDENTIAL_HEADERS, None)
+
+    assert response.status == 200
+    assert type(response.body) is dict
+    assert seen == ["/v2/account"]
+    assert transport.request_log == (("GET", "/v2/account"),)
 
 
 def _require_live() -> None:

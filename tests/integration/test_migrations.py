@@ -42,13 +42,13 @@ def test_clean_apply_repeat_verify_and_schema_contract(test_database_url: str) -
     try:
         assert current_version(test_database_url) == 0
 
-        assert migrate(test_database_url) == 9
-        assert current_version(test_database_url) == 9
-        assert verify_schema(test_database_url) == 9
+        assert migrate(test_database_url) == 10
+        assert current_version(test_database_url) == 10
+        assert verify_schema(test_database_url) == 10
 
         # Applying an already-applied migration is idempotent and checksum-checked.
-        assert migrate(test_database_url) == 9
-        assert verify_schema(test_database_url) == 9
+        assert migrate(test_database_url) == 10
+        assert verify_schema(test_database_url) == 10
 
         with _connection(test_database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
@@ -61,17 +61,22 @@ def test_clean_apply_repeat_verify_and_schema_contract(test_database_url: str) -
                       'audit_events', 'job_instances', 'job_leases',
                       'order_intents', 'broker_orders', 'fills', 'reconciliation_runs',
                       'control_commands', 'control_state',
+                      'source_objects', 'source_records', 'evidence_packets', 'analysis_runs',
+                      'analysis_stage_results',
                       'orders', 'positions', 'broker_accounts'
                   )
                 ORDER BY table_name
                 """
             )
             assert [row[0] for row in cursor.fetchall()] == [
+                "analysis_runs",
+                "analysis_stage_results",
                 "audit_events",
                 "broker_orders",
                 "control_commands",
                 "control_state",
                 "domain_events",
+                "evidence_packets",
                 "fills",
                 "job_instances",
                 "job_leases",
@@ -79,6 +84,8 @@ def test_clean_apply_repeat_verify_and_schema_contract(test_database_url: str) -
                 "reconciliation_runs",
                 "schema_metadata",
                 "schema_migrations",
+                "source_objects",
+                "source_records",
             ]
 
             cursor.execute(
@@ -108,7 +115,12 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
     _drop_all_migrations(test_database_url)
     try:
         assert current_version(test_database_url) == 0
-        assert migrate(test_database_url) == 9
+        assert migrate(test_database_url) == 10
+
+        assert rollback(test_database_url) == 9
+        assert current_version(test_database_url) == 9
+        with pytest.raises(MigrationError, match="migration version does not match"):
+            verify_schema(test_database_url)
 
         assert rollback(test_database_url) == 8
         assert current_version(test_database_url) == 8
@@ -156,8 +168,8 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
             verify_schema(test_database_url)
 
         # A restored/disposable database can be rebuilt exactly from the migration.
-        assert migrate(test_database_url) == 9
-        assert verify_schema(test_database_url) == 9
+        assert migrate(test_database_url) == 10
+        assert verify_schema(test_database_url) == 10
     finally:
         _drop_all_migrations(test_database_url)
 

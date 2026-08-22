@@ -1,8 +1,8 @@
 # TradingAgents 分析核心 Paper Trading 系統：第一性原理主企劃書
 
-版本：0.3
-日期：2026-08-21
-狀態：P1/P2 已完成；P3-A contracts/license Gate Closed，P3-B~F 尚未實作
+版本：0.4
+日期：2026-08-22
+狀態：P0～P2、P3-A、P3-B+C Closed；P3-D～F與P4～P8尚未實作
 
 ## 1. 專案定義
 

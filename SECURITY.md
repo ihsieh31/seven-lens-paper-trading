@@ -44,7 +44,7 @@ provider. The macOS adapter performs an exact read-only generic-password query w
 zero or multiple results, denial, timeout, malformed data, and backend failure are fatal. It has
 no environment, argv, database, shell, fake, or second-provider fallback.
 
-The native query uses exact service/account matching with `kSecMatchLimitOne` (exact hit) and a hard 2-second spawned-worker timeout with UI disabled; the prior `kSecMatchLimitAll` was replaced after `P2-E` live verification exposed `errSecParam` on `ReturnData+MatchAll` (see `PROGRESS.md` `P2-E`). `NSData` normalization handles PyObjC bridging. The fake contract suite does not constitute native Keychain smoke evidence; real Keychain happy-path has been exercised via live `P2-E` read-only verification, but formal disposable adversarial smoke (locked/denied/malformed/timeout) remains deferred and requires a dedicated namespace and separate authorization before execution.
+The native query uses exact service/account matching with `kSecMatchLimitOne` (exact hit) and a hard 2-second spawned-worker timeout with UI disabled; the prior `kSecMatchLimitAll` was replaced after the P2-E live verification exposed `errSecParam` on `ReturnData+MatchAll`. `NSData` normalization handles PyObjC bridging. The fake contract suite does not constitute native Keychain smoke evidence; real Keychain happy-path has been exercised via live P2-E read-only verification, but formal disposable adversarial smoke (locked/denied/malformed/timeout) remains deferred and requires a dedicated namespace and separate authorization before execution.
 
 ### PostgreSQL ownership and credentials
 
@@ -67,6 +67,15 @@ are never persisted as config snapshots and must not enter logs, telemetry, audi
 messages, or command-line arguments; application-layer code may not import `urllib` or any
 network/backend SDK. The current PostgreSQL integration DSN is disposable, fake, job-local
 test input only.
+
+P3 evidence adds a narrower publication boundary. Runtime may register bounded metadata and use
+approved analysis-stage functions, but it has read-only table access and no EXECUTE right on
+`publish_source_object(text)`. A trusted operator-side repository accepts only the exact local
+`FileContentStore` capability and publishes only after reading the object, recomputing its SHA-256,
+and matching its staged byte size. `verify_runtime_role()` checks every P3 table privilege
+(`SELECT` only) and function ACL, including TRUNCATE/REFERENCES/TRIGGER drift;
+`create_analysis_run` independently binds
+the run snapshot to the referenced evidence packet.
 
 The execution engine (`execution_service.py`) is the single submission entry point and
 enforces the pause contract in-process: `build_execution_stack(..., control=...)` injects

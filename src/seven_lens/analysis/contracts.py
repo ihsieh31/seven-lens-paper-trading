@@ -797,6 +797,20 @@ class PortfolioSnapshot:
         if self.content_hash != self.compute_content_hash():
             raise ValueError("portfolio snapshot content_hash does not match sanitized content")
 
+    def validate_integrity(self) -> None:
+        """Re-run nested and aggregate invariants on an already-built snapshot."""
+        self.__post_init__()
+        for position in self.positions:
+            position.__post_init__()
+        for order in self.open_orders:
+            order.__post_init__()
+        for fill in self.same_day_fills:
+            fill.__post_init__()
+        for borrow in self.borrow_statuses:
+            borrow.__post_init__()
+        self.remaining_limits.__post_init__()
+        self.__post_init__()
+
     def _content_wire(self) -> dict[str, JsonValue]:
         return {
             "as_of": str(self.as_of),
@@ -939,6 +953,8 @@ class AnalysisInput:
         _require_type(self.window, AnalysisWindow, "window")
         _require_type(self.deadline, UtcTimestamp, "deadline")
         _require_type(self.portfolio_snapshot, PortfolioSnapshot, "portfolio_snapshot")
+        if self.as_of != self.portfolio_snapshot.as_of:
+            raise ValueError("analysis input and portfolio snapshot must have the same as_of")
         for name, maximum in (
             ("holding_symbols", 15),
             ("candidate_symbols", 12),
@@ -978,6 +994,13 @@ class AnalysisInput:
         _hash(self.universe_hash, "universe_hash")
         if self.universe_hash != self.compute_universe_hash():
             raise ValueError("universe_hash does not match the exact input universe")
+
+    def validate_integrity(self) -> None:
+        """Re-run all frozen input and nested snapshot invariants."""
+        self.__post_init__()
+        self.meta.__post_init__()
+        self.portfolio_snapshot.validate_integrity()
+        self.__post_init__()
 
     def compute_universe_hash(self) -> str:
         payload = {

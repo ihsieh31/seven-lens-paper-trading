@@ -396,6 +396,36 @@ def test_sequences_are_snapshotted_and_contracts_are_frozen() -> None:
         inp.window = AnalysisWindow.EMERGENCY  # type: ignore[misc]
 
 
+@pytest.mark.parametrize("snapshot_minutes", [-10, 10], ids=["stale", "future"])
+def test_analysis_input_requires_exact_snapshot_as_of(snapshot_minutes: int) -> None:
+    base = snapshot()
+    drifted = build_portfolio_snapshot(
+        as_of=timestamp(snapshot_minutes),
+        nav=base.nav,
+        cash=base.cash,
+        buying_power=base.buying_power,
+        positions=base.positions,
+        open_orders=base.open_orders,
+        same_day_fills=base.same_day_fills,
+        borrow_statuses=base.borrow_statuses,
+        remaining_limits=base.remaining_limits,
+    )
+    with pytest.raises(ValueError, match="same as_of"):
+        build_analysis_input(
+            meta=meta(),
+            input_id=rid(2),
+            as_of=timestamp(),
+            window=AnalysisWindow.PRIMARY,
+            deadline=timestamp(15),
+            portfolio_snapshot=drifted,
+            holding_symbols=("AAPL", "TSLA"),
+            candidate_symbols=CANDIDATES,
+            focus_symbols=("MSFT",),
+            evidence_refs=("evidence.1",),
+            data_snapshot_refs=("market.1",),
+        )
+
+
 def test_snapshot_hash_is_recomputed_and_proposal_boundary_is_executable() -> None:
     inp = analysis_input()
     assert snapshot().content_hash == snapshot().compute_content_hash()

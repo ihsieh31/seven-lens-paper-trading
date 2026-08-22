@@ -67,4 +67,4 @@ MemoryArtifact:
 
 ## 7. 實作位置決策
 
-P3-F 實作時建立 versioned、provider-neutral runtime skill；不得放入已被 `.gitignore` 排除且保存第三方七人 corpus 的根目錄 `skill/`。實際目錄、prompt packaging 與 loader contract 需在 P3-A schema／license gate 後固定。
+P3-F 實作時建立 versioned、provider-neutral runtime skill；不得放入已被 `.gitignore` 排除且保存第三方七人 corpus 的根目錄 `skill/`。P3-A schema／license gate已完成；實際目錄、prompt packaging與loader contract需在P3-B+C frozen evidence/run identity及P3-E provider boundary完成後固定。

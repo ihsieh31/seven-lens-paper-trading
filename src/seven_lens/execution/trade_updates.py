@@ -147,18 +147,14 @@ class TradeUpdateConsumer:
             return self._apply_status(unit_of_work, update)
         raise TradeUpdateError("unknown trade update type")
 
-    def _persist_conflict_pause(self, unit_of_work: _ConsumerUnitOfWork) -> None:
-        """Persist entries_paused and an audit command after an unrepresentable fill."""
-        # Use the same connection as the fill fact when possible; rollback has
-        # already cleared derived state, so this is a fresh transaction.
+    def _persist_conflict_pause(self, unit_of_work: _ConsumerUnitOfWork, conflict: str) -> None:
+        """Persist entries_paused and an audit command after an unrepresentable update."""
+        # Use the same connection as the accepted fact when possible; rollback
+        # has already cleared derived state, so this is a fresh transaction.
         try:
-            unit_of_work.control.set_entries_paused(
-                True, "reconciliation required; conflicting fill"
-            )
+            unit_of_work.control.set_entries_paused(True, f"reconciliation required; {conflict}")
         except Exception as exc:
-            raise TradeUpdateError(
-                "failed to persist entries_paused after conflicting fill"
-            ) from exc
+            raise TradeUpdateError(f"failed to persist entries_paused after {conflict}") from exc
         try:
             from uuid import uuid4
 
@@ -167,7 +163,7 @@ class TradeUpdateConsumer:
                 ControlCommandRecord(
                     command_id=uuid4(),
                     command=ControlCommand.PAUSE_ENTRIES,
-                    reason="automatic pause on conflicting fill",
+                    reason=f"automatic pause on {conflict}",
                     actor="trade_update_consumer",
                     run_id=None,
                     requested_at=now,
@@ -177,11 +173,11 @@ class TradeUpdateConsumer:
         except TradeUpdateError:
             raise
         except Exception as exc:
-            raise TradeUpdateError("failed to persist pause audit after conflicting fill") from exc
+            raise TradeUpdateError(f"failed to persist pause audit after {conflict}") from exc
         try:
             unit_of_work.commit()
         except Exception as exc:
-            raise TradeUpdateError("failed to commit pause after conflicting fill") from exc
+            raise TradeUpdateError(f"failed to commit pause after {conflict}") from exc
 
     def _apply_fill(self, unit_of_work: _ConsumerUnitOfWork, fill: Fill) -> TradeUpdateOutcome:
         mirror = unit_of_work.orders.get_broker_order_by_id(fill.broker_order_id)
@@ -271,13 +267,13 @@ class TradeUpdateConsumer:
             with contextlib.suppress(Exception):
                 unit_of_work.rollback()
             # Durably pause for reconciliation; an exception is not a durable gate.
-            self._persist_conflict_pause(unit_of_work)
+            self._persist_conflict_pause(unit_of_work, "conflicting fill")
             raise
         except Exception as exc:
             with contextlib.suppress(Exception):
                 unit_of_work.rollback()
             # Preserve fill fact, persist pause, then surface typed error.
-            self._persist_conflict_pause(unit_of_work)
+            self._persist_conflict_pause(unit_of_work, "conflicting fill")
             raise TradeUpdateError(
                 "trade update cannot be applied fail-safely; reconciliation required"
             ) from exc
@@ -296,28 +292,63 @@ class TradeUpdateConsumer:
         if update.status is mirror.status and update.filled_quantity == mirror.filled_quantity:
             # A replayed observation that changes nothing is a duplicate, not a write.
             return TradeUpdateOutcome.DUPLICATE
-        if update.observed_at.value == mirror.updated_at.value:
-            raise TradeUpdateError(
-                "equal broker timestamp with a conflicting payload; ordering is ambiguous"
+        try:
+            if update.observed_at.value == mirror.updated_at.value:
+                raise TradeUpdateError(
+                    "equal broker timestamp with a conflicting payload; ordering is ambiguous"
+                )
+            # Defensive re-check of the database guards at the mutation boundary;
+            # the trigger stays the last authority, but a rejected application
+            # update must never surface as a raw persistence exception.
+            if update.filled_quantity < mirror.filled_quantity:
+                raise TradeUpdateError(
+                    "status update would regress filled quantity; reconciliation required"
+                )
+            if update.filled_quantity > mirror.quantity.value:
+                raise TradeUpdateError(
+                    "status update exceeds the recorded order quantity; reconciliation required"
+                )
+            if update.status is BrokerOrderStatus.FILLED and (
+                update.filled_quantity != mirror.quantity.value
+            ):
+                raise TradeUpdateError(
+                    "a filled status must carry exactly the full order quantity; "
+                    "reconciliation required"
+                )
+            if update.status is not mirror.status:
+                assert_broker_order_transition(mirror.status, update.status)
+            unit_of_work.orders.update_broker_order_status(
+                mirror.broker_order_id,
+                update.status,
+                update.filled_quantity,
+                broker_observed_at=update.observed_at,
             )
-        if update.status is not mirror.status:
-            assert_broker_order_transition(mirror.status, update.status)
-        unit_of_work.orders.update_broker_order_status(
-            mirror.broker_order_id,
-            update.status,
-            update.filled_quantity,
-            broker_observed_at=update.observed_at,
-        )
-        intent_target = _INTENT_STATUS_BY_BROKER[update.status]
-        if intent_target is OrderStatus.ACKNOWLEDGED and intent.status in (
-            OrderStatus.PARTIALLY_FILLED,
-            OrderStatus.CANCEL_PENDING,
-        ):
-            intent_target = intent.status
-        if intent_target is not intent.status:
-            _transition_intent(unit_of_work, update.client_order_id, intent.status, intent_target)
-        unit_of_work.commit()
-        return TradeUpdateOutcome.APPLIED
+            intent_target = _INTENT_STATUS_BY_BROKER[update.status]
+            if intent_target is OrderStatus.ACKNOWLEDGED and intent.status in (
+                OrderStatus.PARTIALLY_FILLED,
+                OrderStatus.CANCEL_PENDING,
+            ):
+                intent_target = intent.status
+            if intent_target is not intent.status:
+                _transition_intent(
+                    unit_of_work, update.client_order_id, intent.status, intent_target
+                )
+            unit_of_work.commit()
+            return TradeUpdateOutcome.APPLIED
+        except TradeUpdateError:
+            # Nothing here is an append-only fact: roll the whole attempt back.
+            with contextlib.suppress(Exception):
+                unit_of_work.rollback()
+            # Durably pause for reconciliation; an exception is not a durable gate.
+            self._persist_conflict_pause(unit_of_work, "conflicting status")
+            raise
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                unit_of_work.rollback()
+            self._persist_conflict_pause(unit_of_work, "conflicting status")
+            raise TradeUpdateError(
+                "trade update cannot be applied fail-safely; reconciliation required"
+            ) from exc
 
 
 def _transition_intent(

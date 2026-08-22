@@ -216,7 +216,8 @@ Codex automations 只能在獨立 worktree 或只讀模式執行測試、報告�
   interrupt 都只在 container ID、exact name 與 ownership label 相符後清理該 container。禁止
   `docker prune` 或停止其他 container。
 - `uv` 是 clean-machine 唯一 bootstrap prerequisite；verification script 不讀 `.env`、Keychain 或
-  credential。workflow 檔存在只代表待啟用實作，不能替代獨立 repository 的遠端 required-job 證據。
+  credential。既有workflow已在P1/P2/P3-A exact-SHA runs通過；歷史綠燈不能替代目前revision的
+  本機驗證、獨立驗收或未來exact-SHA CI。
 
 ## 14. PostgreSQL authority與credential runbook
 
@@ -230,5 +231,7 @@ Codex automations 只能在獨立 worktree 或只讀模式執行測試、報告�
   ALTER trigger、function replacement、TEMP relation、temp shadow、repository正常路徑與stale fencing。
 - 發現privilege drift時，先停止runtime writes並撤銷runtime role，再由owner核對catalog與migration
   checksum；修復、全量PostgreSQL gate與authoritative-state reconciliation完成前不得恢復後續交易能力。
-- 目前沒有service composition root；P2不得在runtime DB exact secret ref、bounded reveal與startup proof
-  完成前加入常駐process。native Keychain smoke若會建立／刪除item，需另行授權且只能用disposable namespace。
+- P2 composition root已提供typed runtime DB config、exact secret ref與bounded reveal；任何未先通過
+  `verify_runtime_role()`的常駐process都不得啟動。P3 runtime另外要求P3 tables/functions精確ACL，
+  且不能執行CAS publication。native Keychain smoke若會建立／刪除item，需另行授權且只能用
+  disposable namespace。

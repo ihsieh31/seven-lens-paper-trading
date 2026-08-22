@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Final, Protocol
+from urllib.parse import quote, urlencode
 
 from seven_lens.application.composition import AlpacaPaperCredentials
 from seven_lens.application.ports.broker import (
@@ -134,7 +135,7 @@ class AlpacaPaperAdapter:
         missing or unreadable order keeps the outcome ambiguous (the engine
         must stay UNKNOWN, never conclude REJECTED).
         """
-        query = f"client_order_id={intent.client_order_id.value}"
+        query = urlencode({"client_order_id": intent.client_order_id.value})
         response = self._request("GET", f"/v2/orders:by_client_order_id?{query}", None)
         if response.status == 404:
             raise DuplicateClientOrderIdUnknown(
@@ -308,7 +309,8 @@ class AlpacaPaperAdapter:
         )
 
     def cancel_order(self, broker_order_id: str) -> bool:
-        response = self._request("DELETE", f"/v2/orders/{broker_order_id}", None)
+        encoded_id = quote(broker_order_id, safe="")
+        response = self._request("DELETE", f"/v2/orders/{encoded_id}", None)
         if response.status == 404:
             return False
         if response.status // 100 != 2:
@@ -317,7 +319,7 @@ class AlpacaPaperAdapter:
 
     def _get_json(self, path: str, **params: str) -> object:
         if params:
-            query = "&".join(f"{key}={value}" for key, value in sorted(params.items()))
+            query = urlencode(sorted(params.items()))
             path = f"{path}?{query}"
         return self._request_json("GET", path, None)
 

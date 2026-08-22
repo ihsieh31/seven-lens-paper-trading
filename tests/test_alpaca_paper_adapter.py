@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from urllib.parse import parse_qs, quote, urlsplit
 
 import pytest
 
@@ -537,3 +538,61 @@ class TestOpenOrderPagination:
 
         with pytest.raises(BrokerTransportError, match="not advancing"):
             _adapter(transport).list_open_orders()
+
+
+class TestQueryAndPathEncoding:
+    """Broker-sourced identifiers must stay whole URL components, never syntax."""
+
+    def test_query_values_with_reserved_characters_are_url_encoded(self) -> None:
+        malicious_order_id = "broker/one&status=all?x=1%25"
+        transport = RecordingTransport(responder=lambda _method, _url: AlpacaResponse(200, []))
+
+        _adapter(transport).list_fills(malicious_order_id)
+
+        url = transport.requests[0][1]
+        parsed_query = parse_qs(urlsplit(url).query)
+        assert set(parsed_query) == {"order_id", "page_size", "direction"}
+        assert parsed_query["order_id"] == [malicious_order_id]
+
+    def test_broker_sourced_fill_cursor_stays_one_whole_parameter(self) -> None:
+        tricky_cursor = "exec-000100?next=/evil&x=1"
+        first_page = [_activity(index, "2026-08-17T13:35:00.000000Z") for index in range(1, 100)]
+        cursor_activity = dict(_activity(0, "2026-08-17T13:36:00.000000Z"))
+        cursor_activity["id"] = tricky_cursor
+        first_page.append(cursor_activity)
+
+        def responder(_method: str, url: str) -> AlpacaResponse:
+            if "page_token=" in url:
+                return AlpacaResponse(200, [])
+            return AlpacaResponse(200, first_page)
+
+        transport = RecordingTransport(responder=responder)
+        fills = _adapter(transport).list_fills("broker-000001")
+
+        assert len(fills) == 100
+        second_url = transport.requests[1][1]
+        parsed_query = parse_qs(urlsplit(second_url).query)
+        assert set(parsed_query) == {"order_id", "page_size", "direction", "page_token"}
+        assert parsed_query["page_token"] == [tricky_cursor]
+
+    def test_cancel_order_encodes_only_the_path_segment(self) -> None:
+        tricky_order_id = "b/1?x=1#f%2F&s=2"
+        transport = RecordingTransport(responder=lambda _m, _u: AlpacaResponse(204, None))
+
+        assert _adapter(transport).cancel_order(tricky_order_id) is True
+
+        method, url = transport.requests[0][0], transport.requests[0][1]
+        parsed = urlsplit(url)
+        assert method == "DELETE"
+        assert parsed.query == ""
+        assert parsed.fragment == ""
+        assert parsed.path == "/v2/orders/" + quote(tricky_order_id, safe="")
+
+    def test_safe_identifiers_keep_their_exact_request_semantics(self) -> None:
+        transport = RecordingTransport(responder=lambda _method, _url: AlpacaResponse(200, []))
+
+        _adapter(transport).list_fills("broker-000001")
+
+        parsed_query = parse_qs(urlsplit(transport.requests[0][1]).query)
+        assert parsed_query["order_id"] == ["broker-000001"]
+        assert set(parsed_query) == {"order_id", "page_size", "direction"}
