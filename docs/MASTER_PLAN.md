@@ -223,13 +223,14 @@ optimizer 的目標是最大化經 haircut 的預期報酬，減去 variance、c
 
 ### 9.2 每日研究模型路由
 
-- Technical/Market、Fundamentals、News、Sentiment 預設 `agnes-2.5-flash`，備援 `agnes-2.0-flash`。
-- Research Manager、Trader、Aggressive/Conservative/Neutral Risk Debate、Portfolio Manager 預設 OpenCode Go 的 `muse-spark-1.2-contributor`，備援 `agnes-2.5-flash`。
-- OpenCode Go 的 `deepseek-v4-flash` 保留為可配置候選 provider；通過同一 eval gate 後可由設定檔明確指派角色，但不成為第三次自動 failover。
-- 所有角色預設要求 thinking/reasoning 的最高可用 effort。因 provider 參數不一致，adapter 必須做 capability negotiation、只傳實際支援的參數，並記錄 `requested=max` 與 effective setting；不得假裝已啟用。
-- 每一角色只允許切換備援一次；備援仍失敗、輸出 schema 錯誤或超時即 `INVALID/NO_TRADE`，不可靜默更換其他模型。
-- adapter 同時支援 Chat Completions 與 Responses 類型，但對內只暴露同一 versioned schema；模型可按角色混用。
-- 傳給模型的 portfolio snapshot 必須去除姓名、account id、broker order id 等識別欄位，只保留分析必需數值。使用者已接受 Muse Spark Contributor 的非 ZDR／訓練資料政策。
+- Technical/Market、Fundamentals、News、Sentiment、Research Manager、Trader、三個Risk Debate角色及
+  Portfolio Manager全部固定`agnes-2.5-flash`，使用exact Chat Completions endpoint。
+- 此版本沒有fallback、automatic retry、可配置候選或Responses route；未來新增provider/model要先取得新決策並
+  通過相同eval gate，不得由runtime任意切換。
+- 所有角色記錄`reasoning_requested=MAX`，但在官方＋authorized live evidence證實前不傳未知參數，
+  `reasoning_effective=UNKNOWN`，不得假裝已啟用MAX。
+- 傳給模型的portfolio snapshot必須去除姓名、account id、broker order id等識別欄位，只保留分析必需數值；
+  Agnes不得標示ZDR／不訓練，live payload仍受每批明確授權限制。
 - 未來 `gpt-5.6` 只有通過相同 held-out、schema、safety、latency 與 cost eval gate 後才可加入，不自動升級或替換既有模型。
 
 ## 10. Codex 的正確角色

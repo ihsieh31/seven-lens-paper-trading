@@ -105,6 +105,69 @@
 - 兩個子Gate必須分別Accepted；implementation、commit、push或CI不能自行關閉Combined Gate。
 - P3-C止於`TraderPlan`；P3-D/E/F與P4不得因合併提前取得authority。
 
+### ADR-030 — P3-D per-symbol bundle、獨立proposal state與最多一次重申
+
+- 日期：2026-08-22
+- 狀態：Accepted（架構）；P3-D Gate獨立驗收，本ADR不是Gate證據
+- per-symbol research：P3-C `AnalysisPipeline.run(..., symbol)`在每個symbol完成後留下COMPLETE的
+  child run authority；P3-D以deterministic serial coordinator把parent `AnalysisInput`依
+  `focus_symbols`順序展開為child inputs（focus縮成恰好該symbol，universe/snapshot/packet/
+  data refs/as-of/window/deadline完全不變），全部child COMPLETE後才依parent順序join成不可混用的
+  `ResearchBundle`。child run/input ID由parent input ID＋canonical symbol以不同domain tag
+  deterministic衍生。
+- 獨立proposal state machine：`PLANNED -> RISK_DEBATE -> PROPOSAL -> COMPLETE`，
+  非終態可轉`INVALID|EXPIRED`；不把新stage塞入migration `0010`。
+- `ProposalContext`：attempt精確1|2、綁bundle id/hash與當時full sanitized snapshot hash；
+  attempt 2必須同時有previous context、superseded proposal與typed `RiskRejectionFeedback`
+  （沿用P3-A contract），只可刷新snapshot/remaining limits/feedback，不可改research bundle、
+  universe、window或evidence。時序固定：
+  initial context/proposal < Risk review <= refreshed snapshot/context <= deadline。
+- Risk Debate固定兩輪、AGGRESSIVE/CONSERVATIVE/NEUTRAL各恰好一次，citation屬frozen bundle set；
+  六個argument完整persist前不得呼叫Portfolio Manager。
+- 重申：只能由typed rejection＋refreshed snapshot啟動一次PM_RETRY；attempt 2精確supersede
+  attempt 1；相同attempt-2 same-hash僅bounded冪等，different hash、第二個attempt 2或第三次proposal
+  永遠拒絕（DB以UNIQUE(superseded_proposal_id)與UNIQUE(context_id)獨立強制）。
+- P4保留deterministic hard-risk approval權；P3-D不產生gross/net/turnover/borrow approval、
+  quantity、`TargetPortfolio`或`OrderIntent`，也不關閉R-29的P4部分。
+- evolved `PortfolioProposal`落於新的`analysis/proposal_contracts.py`並綁context/bundle
+  identity與hash；P3-A `contracts.py`的提案契約與golden bundle證據原樣保留。
+
+### ADR-031 — P3-E固定Agnes 2.5 Flash單一路由
+
+- 日期：2026-08-24
+- 狀態：Accepted（使用者route決策）；P3-E Gate Accepted
+- 所有P3-C/D logical roles固定使用`agnes-2.5-flash`，API flavor固定Chat Completions，exact
+  endpoint policy固定`https://apihub.agnes-ai.com/v1/chat/completions`；runtime不可覆寫scheme、host、
+  path、model或policy，也不呼叫model discovery自動升權。
+- fallback固定為none，automatic retry固定停用；未來新增provider/model必須有新的使用者決策與獨立gate，
+  不因本ADR取得fallback authority。
+- 內部`reasoning_requested=MAX`只表示policy意圖；官方文件及authorized live observation尚未證明
+  Agnes對應參數，因此不傳未知reasoning參數並記`reasoning_effective=UNKNOWN`。
+- Agnes privacy不得標示ZDR或不訓練。使用者已明確了解此邊界，並批准正常Paper分析傳送完整
+  portfolio、order content及verified source material；API key、Authorization header、account ID、
+  broker order identifier永遠禁止外送。本次E-live另縮限為六個synthetic／de-identified案例、最多六次
+  POST、無automatic retry／fallback／model discovery、無費用上限；使用者其後確認rotation並允許必要的
+  remediation案例。最終六案例6/6成功；完整無payload證據見`docs/P3E_LIVE_EVIDENCE_2026-08-24.json`。
+- secret identity固定Keychain generic password service
+  `seven-lens.paper-trading.agnes.api-key`、account`primary`。repository、env、argv、audit、telemetry與
+  prompt均不得保存credential；聊天中出現的credential視為已暴露，必須rotation後以互動式Keychain輸入。
+
+### ADR-032 — P3-F immutable reflection、bounded memory與eval治理
+
+- 日期：2026-08-24
+- 狀態：Accepted（架構）；P3-F Gate實作中
+- daily reflection與correction只追加；correction以typed supersedes lineage表示，raw row／bytes／hash不可更新。
+- `available_at`與requested cutoff雙重限制point-in-time可見性；memory是可丟棄derived context，永遠不是
+  proposal、Risk、order或broker authority。
+- weekly `MemoryArtifact`固定最多4,000行、512 entries、512 KiB；line count、importance、dedup、quota、
+  hash與selection均由deterministic policy重算，不信model自報。
+- artifact bytes使用exact CAS readback驗hash／size後，透過append-only promotion history維持單一current；
+  candidate失敗不改current，fallback只接受cutoff安全且完整性仍有效的previous artifact，否則注入none。
+- memory-curator使用獨立最小權限PostgreSQL role；無raw mutation、proposal/source publish、secret、broker、
+  order、control、owner DDL或trigger authority。
+- eval split／case／fixture／report hash immutable；held-out在final evaluation前封閉，threshold或case變更需新
+  split version與全量重跑。P3-F real-provider eval不繼承P3-E授權。
+
 ## Superseded／historical index
 
 | ADR | 狀態 | 取代關係／保留內容 |

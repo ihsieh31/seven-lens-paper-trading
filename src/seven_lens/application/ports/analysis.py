@@ -58,6 +58,7 @@ class AnalysisStateRepository(Protocol):
         self, run_id: str, input_id: str, packet_hash: str, snapshot_hash: str
     ) -> None: ...
     def current_stage(self, run_id: str) -> AnalysisStage: ...
+    def run_identity(self, run_id: str) -> tuple[str, str, str]: ...
     def load(self, run_id: str, stage: AnalysisStage) -> StoredStageResult | None: ...
     def advance(self, result: StoredStageResult, expected_current: AnalysisStage) -> bool: ...
 
@@ -84,6 +85,9 @@ class InMemoryAnalysisStateRepository:
 
     def current_stage(self, run_id: str) -> AnalysisStage:
         return self._runs[run_id]
+
+    def run_identity(self, run_id: str) -> tuple[str, str, str]:
+        return self._identities[run_id]
 
     def load(self, run_id: str, stage: AnalysisStage) -> StoredStageResult | None:
         return self._results.get((run_id, stage))

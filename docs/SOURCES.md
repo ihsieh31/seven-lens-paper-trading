@@ -49,11 +49,12 @@
 
 對架構的影響：
 
-- Analysts 預設 `agnes-2.5-flash`，備援 `agnes-2.0-flash`；兩者走 Chat Completions-compatible adapter。
-- Research Manager、Trader、Risk Debate、Portfolio Manager 預設 `muse-spark-1.2-contributor`，備援 `agnes-2.5-flash`；Muse 使用獨立 Responses adapter。使用者已接受其非 ZDR／提示與輸出可供訓練的政策。
-- OpenCode `deepseek-v4-flash` 保留為 disabled-by-default 可配置候選；必須先通過相同 eval，且不加入第三次自動 failover。
-- 公開文件沒有提供所有 provider 共用的 `effort=max` 契約；因此只設定內部 `reasoning_requested=max`，再由 capability-aware adapter 映射並保存 effective setting。
-- 每角色只 failover 一次；未來 `gpt-5.6` 需通過相同 held-out/schema/safety/latency gate 才能啟用。
+- P3-E所有logical roles固定`agnes-2.5-flash`及exact Chat Completions endpoint；無fallback、無automatic retry，
+  OpenCode與其他provider/model皆未啟用。
+- 公開文件未證實可用的MAX reasoning參數；只保存`reasoning_requested=MAX`，不傳未知參數並記
+  `reasoning_effective=UNKNOWN`。
+- Agnes不得標示ZDR／不訓練；每批live payload、request count與成本仍需新的明確授權。
+- 未來任何provider/model需通過相同held-out/schema/safety/latency gate並取得新決策，不能自動啟用。
 - Scheduled tasks 適合週期性檢查、報告與 code maintenance；本機任務依賴機器和應用程式運行，因此不作為盤中交易的唯一排程器。
 
 ## 5. Future Analyst Plugin 的七人 primary-source map（停用）

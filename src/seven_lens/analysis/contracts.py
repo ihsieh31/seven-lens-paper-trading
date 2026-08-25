@@ -21,6 +21,7 @@ from typing import ClassVar, Final, Self, cast
 
 from seven_lens.domain.json_values import JsonObject, JsonValue
 from seven_lens.domain.value_objects import RunId, SchemaVersion, UtcTimestamp
+from seven_lens.security.sanitized_text import validate_sanitized_text
 
 __all__ = [
     "SCHEMA_VERSION",
@@ -64,16 +65,6 @@ _DECIMAL = re.compile(r"^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
 _SIGNED_DECIMAL = re.compile(r"^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$")
 MAX_TEXT_BYTES: Final = 2_048
 MAX_SEQUENCE_ITEMS: Final = 32
-_SENSITIVE_TEXT_MARKERS: Final = (
-    "account_id",
-    "broker_order_id",
-    "raw_broker_payload",
-    "authorization:",
-    "bearer ",
-    "api_key",
-    "secret_key",
-    "credential",
-)
 
 
 class AnalysisWindow(StrEnum):
@@ -169,19 +160,7 @@ def _exact_enum(value: object, enum_type: type[StrEnum], field: str) -> StrEnum:
 
 
 def _text(value: object, field: str, *, maximum: int = MAX_TEXT_BYTES, empty: bool = False) -> str:
-    if type(value) is not str:
-        raise ValueError(f"{field} must be an exact string")
-    if "\x00" in value:
-        raise ValueError(f"{field} must not contain NUL")
-    if any(marker in value.lower() for marker in _SENSITIVE_TEXT_MARKERS):
-        raise ValueError(f"{field} contains prohibited identity or secret material")
-    try:
-        size = len(value.encode("utf-8", errors="strict"))
-    except UnicodeEncodeError as error:
-        raise ValueError(f"{field} must contain valid Unicode") from error
-    if size > maximum or (not empty and size == 0):
-        raise ValueError(f"{field} is outside its bounded length")
-    return value
+    return validate_sanitized_text(value, field, maximum=maximum, empty=empty)
 
 
 def _symbol(value: object) -> str:
@@ -998,6 +977,7 @@ class AnalysisInput:
     def validate_integrity(self) -> None:
         """Re-run all frozen input and nested snapshot invariants."""
         self.__post_init__()
+        _require_type(self.meta, ContractMeta, "meta")
         self.meta.__post_init__()
         self.portfolio_snapshot.validate_integrity()
         self.__post_init__()
@@ -1977,6 +1957,13 @@ class RiskRejectionFeedback:
         _require_type(self.remaining_limits, RemainingLimits, "remaining_limits")
         _hash(self.constraints_snapshot_hash, "constraints_snapshot_hash")
         _require_type(self.reviewed_at, UtcTimestamp, "reviewed_at")
+
+    def validate_integrity(self) -> None:
+        """Re-run nested feedback invariants at an authority boundary."""
+        _require_type(self.meta, ContractMeta, "meta")
+        self.meta.__post_init__()
+        self.remaining_limits.__post_init__()
+        self.__post_init__()
 
     def to_wire(self) -> dict[str, JsonValue]:
         return {

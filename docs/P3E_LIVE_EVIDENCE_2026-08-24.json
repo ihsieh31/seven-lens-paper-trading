@@ -1,0 +1,138 @@
+{
+  "schema": "seven-lens.p3e-live-acceptance-record.v1",
+  "authorization": {
+    "provider": "AGNES",
+    "model": "agnes-2.5-flash",
+    "endpoint": "https://apihub.agnes-ai.com/v1/chat/completions",
+    "payload_scope": "synthetic_deidentified_only",
+    "cost_cap": null,
+    "privacy_acknowledgement": "NOT_ZDR",
+    "additional_remediation_cases_authorized": true
+  },
+  "transport_policy": {
+    "api_flavor": "CHAT_COMPLETIONS",
+    "endpoint_policy_id": "p3e-agnes-2.5-flash-only-v1",
+    "temperature": 0.0,
+    "automatic_retry": false,
+    "fallback": null,
+    "model_discovery": false,
+    "reasoning_requested": "MAX",
+    "reasoning_effective": "UNKNOWN"
+  },
+  "remediation_history": {
+    "total_post_count": 31,
+    "maximum_posts_per_batch": 6,
+    "hidden_retry_count": 0,
+    "batches": [
+      {"posts": 1, "stopped_at": "ANALYST", "result": "PROTOCOL"},
+      {"posts": 1, "stopped_at": "ANALYST", "result": "PROTOCOL_SHAPE_CAPTURE"},
+      {"posts": 1, "stopped_at": "ANALYST", "result": "PROTOCOL_SHAPE_CLASSIFIED"},
+      {"posts": 1, "stopped_at": "ANALYST", "result": "SCHEMA_JSON_FENCE"},
+      {"posts": 1, "stopped_at": "ANALYST", "result": "SCHEMA_JSON_FENCE_AT_TEMPERATURE_ZERO"},
+      {"posts": 6, "stopped_at": "PORTFOLIO_MANAGER", "result": "SCHEMA"},
+      {"posts": 4, "stopped_at": "TRADER", "result": "SCHEMA"},
+      {"posts": 3, "stopped_at": "RESEARCH_MANAGER", "result": "SCHEMA_INVALID_UUID"},
+      {"posts": 1, "stopped_at": "ANALYST", "result": "SCHEMA_INVALID_STATUS_CONFIDENCE"},
+      {"posts": 6, "stopped_at": "PORTFOLIO_MANAGER", "result": "SCHEMA_CONFIDENCE_SCALE"},
+      {"posts": 6, "stopped_at": null, "result": "SUCCESS"}
+    ]
+  },
+  "final_batch": {
+    "started_at": "2026-08-24T06:06:57.000000Z",
+    "completed_at": "2026-08-24T06:07:34.075530Z",
+    "request_count": 6,
+    "audit_row_count": 6,
+    "success_count": 6,
+    "error_count": 0,
+    "latency_ms": {"method": "nearest-rank", "p50": 4820, "p95": 12546, "max": 12546},
+    "cases": [
+      {
+        "case_id": "P3E-LIVE-ANALYST",
+        "call_id": "4ef781cc-8a30-4e81-9c3d-e2513c7a05f6",
+        "stage": "ANALYST",
+        "role": "TECHNICAL",
+        "round_number": 0,
+        "request_envelope_hash": "0b2070b98801c47fb620675835c7b3853969461b5010349d8ba85fca11576800",
+        "latency_ms": 5356,
+        "input_tokens": 3682,
+        "output_tokens": 780,
+        "outcome": "SUCCESS",
+        "error_code": "NONE"
+      },
+      {
+        "case_id": "P3E-LIVE-DEBATE",
+        "call_id": "3553b6fe-2b00-4ffe-8356-e753dd5d18f3",
+        "stage": "INVESTMENT_DEBATE",
+        "role": "BULL",
+        "round_number": 1,
+        "request_envelope_hash": "d06e2f1af3df3efaf166103037e8f5047c8aed936f9076b082f7a112e7fc04f0",
+        "latency_ms": 2612,
+        "input_tokens": 4100,
+        "output_tokens": 268,
+        "outcome": "SUCCESS",
+        "error_code": "NONE"
+      },
+      {
+        "case_id": "P3E-LIVE-RESEARCH-MANAGER",
+        "call_id": "585481bf-4220-4c39-8ce5-aae96be8aad3",
+        "stage": "RESEARCH_MANAGER",
+        "role": "RESEARCH_MANAGER",
+        "round_number": 0,
+        "request_envelope_hash": "33a2bf39ead418fd65f658e65a6aada57b3140864dea4646b82ce6e8d0a15090",
+        "latency_ms": 4820,
+        "input_tokens": 4684,
+        "output_tokens": 649,
+        "outcome": "SUCCESS",
+        "error_code": "NONE"
+      },
+      {
+        "case_id": "P3E-LIVE-TRADER",
+        "call_id": "a8e62a0c-9600-4d79-9773-9936f5d98972",
+        "stage": "TRADER",
+        "role": "TRADER",
+        "round_number": 0,
+        "request_envelope_hash": "2882ed136f3f15f5c0af94f569a925abd73b4cbc0efcb983e3abf710fc4d6a2d",
+        "latency_ms": 3810,
+        "input_tokens": 4859,
+        "output_tokens": 526,
+        "outcome": "SUCCESS",
+        "error_code": "NONE"
+      },
+      {
+        "case_id": "P3E-LIVE-RISK",
+        "call_id": "62ec5fb2-0b86-41e5-8a51-71b50be5a624",
+        "stage": "RISK_DEBATE",
+        "role": "AGGRESSIVE",
+        "round_number": 1,
+        "request_envelope_hash": "3d17bc51cce9ab75a21b7cbb97a58d2d7ff80eed1a640b8403f452ec6b5b1f08",
+        "latency_ms": 7139,
+        "input_tokens": 4754,
+        "output_tokens": 1070,
+        "outcome": "SUCCESS",
+        "error_code": "NONE"
+      },
+      {
+        "case_id": "P3E-LIVE-PORTFOLIO-MANAGER",
+        "call_id": "2a8f45c6-735f-4acf-8777-6a5678215c8e",
+        "stage": "PORTFOLIO_MANAGER",
+        "role": "PORTFOLIO_MANAGER",
+        "round_number": 0,
+        "request_envelope_hash": "ed266c25695ca377ba8089928131654dd8ba04fc4efa0b066c033139e10edd8c",
+        "latency_ms": 12546,
+        "input_tokens": 7744,
+        "output_tokens": 2112,
+        "outcome": "SUCCESS",
+        "error_code": "NONE"
+      }
+    ]
+  },
+  "data_exclusions_verified": [
+    "api_key",
+    "authorization_header",
+    "account_id",
+    "broker_order_identifier",
+    "client_order_identifier",
+    "raw_fixture_order_identifier"
+  ],
+  "raw_prompt_or_response_retained": false
+}

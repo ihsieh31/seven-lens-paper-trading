@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from dataclasses import replace
 from decimal import Decimal
 
@@ -20,6 +19,11 @@ from seven_lens.analysis.contracts import (
     TraderPlan,
     build_portfolio_snapshot,
 )
+from seven_lens.analysis.model_envelope import (
+    EnvelopeRole,
+    EnvelopeStage,
+    derive_provider_output_id,
+)
 from seven_lens.analysis.pipeline import ROLE_ORDER, AnalysisPipeline, AnalysisPipelineError
 from seven_lens.analysis.ports import (
     DebateArgument,
@@ -33,6 +37,7 @@ from seven_lens.application.ports.analysis import (
     InMemoryAnalysisStateRepository,
     StoredStageResult,
 )
+from seven_lens.domain.json_values import JsonObject
 from seven_lens.sources.contracts import EvidencePacket, build_evidence_packet
 from test_analysis_contracts import analysis_input, meta, report, rid, timestamp
 from test_p3bc_evidence_and_infrastructure import evidence_packet
@@ -77,9 +82,17 @@ def scripted_outputs() -> dict[str, ProviderOutput | BaseException]:
     inp = analysis_input()
     packet = evidence_packet()
     outputs: dict[str, ProviderOutput | BaseException] = {}
-    for index, role in enumerate(ROLE_ORDER, 60):
+    for role in ROLE_ORDER:
         outputs[f"ANALYST:{role.value}:"] = replace(
-            report(AnalysisStatus.VALID), report_id=rid(index), role=role
+            report(AnalysisStatus.VALID),
+            report_id=derive_provider_output_id(
+                inp.meta.run_id,
+                inp.input_id,
+                EnvelopeStage.ANALYST,
+                EnvelopeRole(role.value),
+                None,
+            ),
+            role=role,
         )
     for round_number in (1, 2):
         for side in (ProviderStage.BULL, ProviderStage.BEAR):
@@ -94,7 +107,13 @@ def scripted_outputs() -> dict[str, ProviderOutput | BaseException]:
             )
     outputs["RESEARCH_MANAGER::"] = ResearchConclusion(
         meta(),
-        rid(70),
+        derive_provider_output_id(
+            inp.meta.run_id,
+            inp.input_id,
+            EnvelopeStage.RESEARCH_MANAGER,
+            EnvelopeRole.RESEARCH_MANAGER,
+            None,
+        ),
         inp.input_id,
         "MSFT",
         ResearchRating.BUY,
@@ -108,7 +127,13 @@ def scripted_outputs() -> dict[str, ProviderOutput | BaseException]:
     )
     outputs["TRADER::"] = TraderPlan(
         meta(),
-        rid(71),
+        derive_provider_output_id(
+            inp.meta.run_id,
+            inp.input_id,
+            EnvelopeStage.TRADER,
+            EnvelopeRole.TRADER,
+            None,
+        ),
         inp.input_id,
         "MSFT",
         ResearchRating.BUY,
@@ -123,9 +148,20 @@ def scripted_outputs() -> dict[str, ProviderOutput | BaseException]:
 
 
 def valid_reports() -> tuple[AnalystReport, ...]:
+    inp = analysis_input()
     return tuple(
-        replace(report(AnalysisStatus.VALID), report_id=rid(index), role=role)
-        for index, role in enumerate(ROLE_ORDER, 60)
+        replace(
+            report(AnalysisStatus.VALID),
+            report_id=derive_provider_output_id(
+                inp.meta.run_id,
+                inp.input_id,
+                EnvelopeStage.ANALYST,
+                EnvelopeRole(role.value),
+                None,
+            ),
+            role=role,
+        )
+        for role in ROLE_ORDER
     )
 
 
@@ -134,7 +170,7 @@ def persisted_stage(run_id: str, stage: AnalysisStage, payload: str) -> StoredSt
 
 
 def persisted_analysts_stage(reports: tuple[AnalystReport, ...]) -> StoredStageResult:
-    payload = json.dumps({"reports": [item.to_wire() for item in reports]})
+    payload = JsonObject.from_value({"reports": [item.to_wire() for item in reports]}).to_json()
     return persisted_stage(str(meta().run_id), AnalysisStage.ANALYSTS, payload)
 
 
@@ -165,18 +201,15 @@ def test_pipeline_has_fixed_role_join_two_rounds_and_trader_boundary() -> None:
     assert result.debate.complete is True
     assert result.trader_plan.status is AnalysisStatus.VALID
     assert repository.current_stage(str(meta().run_id)) is AnalysisStage.COMPLETE
-    assert provider.calls == [
+    assert set(provider.calls[:4]) == {
         "ANALYST:TECHNICAL:",
         "ANALYST:FUNDAMENTALS:",
         "ANALYST:NEWS:",
         "ANALYST:SENTIMENT:",
-        "BULL::1",
-        "BEAR::1",
-        "BULL::2",
-        "BEAR::2",
-        "RESEARCH_MANAGER::",
-        "TRADER::",
-    ]
+    }
+    assert set(provider.calls[4:6]) == {"BULL::1", "BEAR::1"}
+    assert set(provider.calls[6:8]) == {"BULL::2", "BEAR::2"}
+    assert provider.calls[8:] == ["RESEARCH_MANAGER::", "TRADER::"]
 
 
 def test_pipeline_fails_closed_on_provider_identity_and_exception() -> None:
@@ -335,19 +368,19 @@ def test_complete_run_resumes_only_from_persisted_results() -> None:
     [
         replace(
             report(AnalysisStatus.VALID),
-            report_id=rid(60),
+            report_id=valid_reports()[0].report_id,
             role=AnalystRole.TECHNICAL,
             meta=replace(meta(), run_id=rid(99)),
         ),
         replace(
             report(AnalysisStatus.VALID),
-            report_id=rid(60),
+            report_id=valid_reports()[0].report_id,
             role=AnalystRole.TECHNICAL,
             input_id=rid(99),
         ),
         replace(
             report(AnalysisStatus.VALID),
-            report_id=rid(60),
+            report_id=valid_reports()[0].report_id,
             role=AnalystRole.TECHNICAL,
             status=AnalysisStatus.ABSTAIN,
             confidence=Decimal("0.0000"),
@@ -355,13 +388,13 @@ def test_complete_run_resumes_only_from_persisted_results() -> None:
         ),
         replace(
             report(AnalysisStatus.VALID),
-            report_id=rid(60),
+            report_id=valid_reports()[0].report_id,
             role=AnalystRole.TECHNICAL,
             evidence_refs=("evidence.9",),
         ),
         replace(
             report(AnalysisStatus.VALID),
-            report_id=rid(60),
+            report_id=valid_reports()[0].report_id,
             role=AnalystRole.TECHNICAL,
             counterevidence_refs=("foreign.evidence",),
         ),
@@ -419,7 +452,11 @@ def test_resume_rejects_drifted_persisted_debate_payload() -> None:
     repository.advance(persisted_analysts_stage(valid_reports()), AnalysisStage.PLANNED)
     drifted = replace(valid_debate(), input_id=rid(99))
     repository.advance(
-        persisted_stage(run_id, AnalysisStage.DEBATE, json.dumps(drifted.to_wire())),
+        persisted_stage(
+            run_id,
+            AnalysisStage.DEBATE,
+            JsonObject.from_value(drifted.to_wire()).to_json(),
+        ),
         AnalysisStage.ANALYSTS,
     )
     with pytest.raises(AnalysisPipelineError, match="debate"):
@@ -442,7 +479,11 @@ def test_resume_rejects_persisted_debate_evidence_outside_packet() -> None:
     repository.advance(persisted_analysts_stage(valid_reports()), AnalysisStage.PLANNED)
     drifted = replace(valid_debate(), verified_claims=("foreign.evidence",))
     repository.advance(
-        persisted_stage(run_id, AnalysisStage.DEBATE, json.dumps(drifted.to_wire())),
+        persisted_stage(
+            run_id,
+            AnalysisStage.DEBATE,
+            JsonObject.from_value(drifted.to_wire()).to_json(),
+        ),
         AnalysisStage.ANALYSTS,
     )
     with pytest.raises(AnalysisPipelineError, match=r"debate.*evidence"):
@@ -489,24 +530,28 @@ def test_provider_request_requires_canonical_hex_digests() -> None:
     with pytest.raises(ValueError, match="packet hash"):
         ProviderRequest(
             ProviderStage.ANALYST,
+            inp.meta.run_id,
             inp.input_id,
             "z" * 64,
             inp.portfolio_snapshot.content_hash,
             "MSFT",
             inp.deadline,
             ("evidence.1",),
+            None,  # type: ignore[arg-type]
             AnalystRole.TECHNICAL,
             None,
         )
     with pytest.raises(ValueError, match="snapshot hash"):
         ProviderRequest(
             ProviderStage.ANALYST,
+            inp.meta.run_id,
             inp.input_id,
             packet.packet_hash,
             "G" * 64,
             "MSFT",
             inp.deadline,
             ("evidence.1",),
+            None,  # type: ignore[arg-type]
             AnalystRole.TECHNICAL,
             None,
         )
@@ -527,7 +572,13 @@ def test_pipeline_rejects_producer_version_drift_on_every_role_output() -> None:
     conclusion_drift = scripted_outputs()
     conclusion_drift["RESEARCH_MANAGER::"] = ResearchConclusion(
         drifted_meta,
-        rid(70),
+        derive_provider_output_id(
+            inp.meta.run_id,
+            inp.input_id,
+            EnvelopeStage.RESEARCH_MANAGER,
+            EnvelopeRole.RESEARCH_MANAGER,
+            None,
+        ),
         inp.input_id,
         "MSFT",
         ResearchRating.BUY,
@@ -549,7 +600,13 @@ def test_pipeline_rejects_producer_version_drift_on_every_role_output() -> None:
     plan_drift = scripted_outputs()
     plan_drift["TRADER::"] = TraderPlan(
         drifted_meta,
-        rid(71),
+        derive_provider_output_id(
+            inp.meta.run_id,
+            inp.input_id,
+            EnvelopeStage.TRADER,
+            EnvelopeRole.TRADER,
+            None,
+        ),
         inp.input_id,
         "MSFT",
         ResearchRating.BUY,

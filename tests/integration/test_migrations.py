@@ -42,13 +42,13 @@ def test_clean_apply_repeat_verify_and_schema_contract(test_database_url: str) -
     try:
         assert current_version(test_database_url) == 0
 
-        assert migrate(test_database_url) == 10
-        assert current_version(test_database_url) == 10
-        assert verify_schema(test_database_url) == 10
+        assert migrate(test_database_url) == 13
+        assert current_version(test_database_url) == 13
+        assert verify_schema(test_database_url) == 13
 
         # Applying an already-applied migration is idempotent and checksum-checked.
-        assert migrate(test_database_url) == 10
-        assert verify_schema(test_database_url) == 10
+        assert migrate(test_database_url) == 13
+        assert verify_schema(test_database_url) == 13
 
         with _connection(test_database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
@@ -63,6 +63,10 @@ def test_clean_apply_repeat_verify_and_schema_contract(test_database_url: str) -
                       'control_commands', 'control_state',
                       'source_objects', 'source_records', 'evidence_packets', 'analysis_runs',
                       'analysis_stage_results',
+                      'research_bundles', 'research_bundle_items',
+                      'risk_rejection_feedback', 'proposal_contexts', 'proposal_runs',
+                      'risk_debates', 'portfolio_proposals', 'proposal_stage_results',
+                      'model_call_claims', 'model_call_audits',
                       'orders', 'positions', 'broker_accounts'
                   )
                 ORDER BY table_name
@@ -80,8 +84,18 @@ def test_clean_apply_repeat_verify_and_schema_contract(test_database_url: str) -
                 "fills",
                 "job_instances",
                 "job_leases",
+                "model_call_audits",
+                "model_call_claims",
                 "order_intents",
+                "portfolio_proposals",
+                "proposal_contexts",
+                "proposal_runs",
+                "proposal_stage_results",
                 "reconciliation_runs",
+                "research_bundle_items",
+                "research_bundles",
+                "risk_debates",
+                "risk_rejection_feedback",
                 "schema_metadata",
                 "schema_migrations",
                 "source_objects",
@@ -115,7 +129,94 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
     _drop_all_migrations(test_database_url)
     try:
         assert current_version(test_database_url) == 0
-        assert migrate(test_database_url) == 10
+        assert migrate(test_database_url) == 13
+        with _connection(test_database_url) as connection:
+            checksum_0010 = connection.execute(
+                "SELECT checksum FROM public.schema_migrations WHERE version = 10"
+            ).fetchone()[0]
+            assert (
+                connection.execute(
+                    "SELECT EXISTS ("
+                    "SELECT 1 FROM pg_catalog.pg_proc AS procedure, "
+                    "LATERAL pg_catalog.aclexplode(COALESCE("
+                    "procedure.proacl, pg_catalog.acldefault('f', procedure.proowner))) AS acl "
+                    "WHERE procedure.oid = 'public.digest(text,text)'::regprocedure "
+                    "AND acl.grantee = 0 AND acl.privilege_type = 'EXECUTE')"
+                ).fetchone()[0]
+                is False
+            )
+
+        assert rollback(test_database_url) == 12
+        assert rollback(test_database_url) == 11
+        assert current_version(test_database_url) == 11
+        with _connection(test_database_url) as connection:
+            assert connection.execute(
+                "SELECT to_regclass('public.model_call_audits')"
+            ).fetchone() == (None,)
+            assert (
+                connection.execute(
+                    "SELECT EXISTS ("
+                    "SELECT 1 FROM pg_catalog.pg_proc AS procedure, "
+                    "LATERAL pg_catalog.aclexplode(COALESCE("
+                    "procedure.proacl, pg_catalog.acldefault('f', procedure.proowner))) AS acl "
+                    "WHERE procedure.oid = 'public.digest(text,text)'::regprocedure "
+                    "AND acl.grantee = 0 AND acl.privilege_type = 'EXECUTE')"
+                ).fetchone()[0]
+                is False
+            )
+        with pytest.raises(MigrationError, match="migration version does not match"):
+            verify_schema(test_database_url)
+
+        assert migrate(test_database_url) == 13
+        assert verify_schema(test_database_url) == 13
+        assert rollback(test_database_url) == 12
+        assert rollback(test_database_url) == 11
+        assert rollback(test_database_url) == 10
+        assert current_version(test_database_url) == 10
+        with _connection(test_database_url) as connection:
+            assert (
+                connection.execute(
+                    "SELECT checksum FROM public.schema_migrations WHERE version = 10"
+                ).fetchone()[0]
+                == checksum_0010
+            )
+            assert (
+                connection.execute(
+                    "SELECT EXISTS ("
+                    "SELECT 1 FROM pg_catalog.pg_proc AS procedure, "
+                    "LATERAL pg_catalog.aclexplode(COALESCE("
+                    "procedure.proacl, pg_catalog.acldefault('f', procedure.proowner))) AS acl "
+                    "WHERE procedure.oid = 'public.digest(text,text)'::regprocedure "
+                    "AND acl.grantee = 0 AND acl.privilege_type = 'EXECUTE')"
+                ).fetchone()[0]
+                is True
+            )
+        with pytest.raises(MigrationError, match="migration version does not match"):
+            verify_schema(test_database_url)
+
+        assert migrate(test_database_url) == 13
+        assert verify_schema(test_database_url) == 13
+        with _connection(test_database_url) as connection:
+            assert (
+                connection.execute(
+                    "SELECT checksum FROM public.schema_migrations WHERE version = 10"
+                ).fetchone()[0]
+                == checksum_0010
+            )
+            assert (
+                connection.execute(
+                    "SELECT EXISTS ("
+                    "SELECT 1 FROM pg_catalog.pg_proc AS procedure, "
+                    "LATERAL pg_catalog.aclexplode(COALESCE("
+                    "procedure.proacl, pg_catalog.acldefault('f', procedure.proowner))) AS acl "
+                    "WHERE procedure.oid = 'public.digest(text,text)'::regprocedure "
+                    "AND acl.grantee = 0 AND acl.privilege_type = 'EXECUTE')"
+                ).fetchone()[0]
+                is False
+            )
+        assert rollback(test_database_url) == 12
+        assert rollback(test_database_url) == 11
+        assert rollback(test_database_url) == 10
 
         assert rollback(test_database_url) == 9
         assert current_version(test_database_url) == 9
@@ -168,8 +269,8 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
             verify_schema(test_database_url)
 
         # A restored/disposable database can be rebuilt exactly from the migration.
-        assert migrate(test_database_url) == 10
-        assert verify_schema(test_database_url) == 10
+        assert migrate(test_database_url) == 13
+        assert verify_schema(test_database_url) == 13
     finally:
         _drop_all_migrations(test_database_url)
 

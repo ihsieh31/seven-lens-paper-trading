@@ -18,3 +18,6 @@ dist/
 
 # Local, unreviewed third-party distillation corpus. Keep out of the public repository.
 skill/
+
+# Sanitized but local-only P3-F live-provider evidence; never commit live captures.
+/.seven-lens-local/

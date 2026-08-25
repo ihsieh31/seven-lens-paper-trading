@@ -79,7 +79,7 @@ container_id="$(docker run --detach \
     --env "POSTGRES_PASSWORD=$postgres_password" \
     --env "POSTGRES_DB=$postgres_database" \
     --publish 127.0.0.1::5432 \
-    --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=512m \
+    --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=1g \
     "$postgres_image")"
 
 if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]; then

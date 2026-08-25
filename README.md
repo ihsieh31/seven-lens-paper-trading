@@ -15,13 +15,21 @@ execution 只能處理已核准的 Paper `OrderIntent`。本專案沒有 Alpaca 
 | P1 基礎／權威狀態 | Closed | typed config、Keychain、PostgreSQL、telemetry、CI 已驗收 |
 | P2 Paper 執行安全 | Closed | final remediation 與 exact-SHA CI 已完成；不授權真實下單 |
 | P3-A upstream／contracts | Closed | 固定 upstream、license inventory、strict contracts 已驗收 |
-| P3-B+C evidence／research pipeline | Closed | P3-B與P3-C均經獨立驗收Accepted；工作包仍未提交 |
-| P3-D～F、P4～P8 | Not started | 不得提前宣告能力或繞過後續 gate |
+| P3-B+C evidence／research pipeline | Closed | P3-B與P3-C均經獨立驗收Accepted；已發布至`main` |
+| P3-D risk／proposal | Accepted | 2026-08-24授權單session反覆重審完成；零High/Medium blocker |
+| P3-E | Accepted | authorized live六案例6/6與PG audit/full regression通過 |
+| P3-F | In progress | reflection、bounded memory、CAS、curator與eval實作中 |
+| P4～P8 | Not started | 不得提前宣告能力或繞過後續 gate |
 
-目前工作樹仍是未提交的 P3-B+C 工作包；`main`／`origin/main` 基線為
-`def706440c7dda1a61610a9ea42b42005dfe115a`。最新本機證據：Ruff／format／mypy／lock 全綠，
-non-integration `809 passed, 102 deselected`，真實 PostgreSQL 16
+P3-B+C已發布於commit `55c9a16ced2fbc2ec3b3d5cfd46abcdabcb56069`；本機與遠端
+`main`一致。exact-SHA GitHub Actions run `32558983841`的`quality-unit`與
+`postgres-integration`均成功。發布前獨立驗收證據：Ruff／format／mypy／lock全綠，
+non-integration `809 passed, 102 deselected`，真實PostgreSQL 16
 `94 passed, 8 deselected, 0 skipped`。
+
+P3-D工作包維持**Accepted**。P3-E final authorized live batch六案例6/6成功、6 PG audit rows，
+full `1174 passed, 165 deselected`、PG16 `150 passed, 15 deselected, 0 skipped`，狀態為**Accepted**。
+P3-F已開始；P4仍未開始。
 
 ## 核心邊界
 
@@ -43,6 +51,15 @@ non-integration `809 passed, 102 deselected`，真實 PostgreSQL 16
 2. [PROGRESS.md](PROGRESS.md)：phase/gate 狀態與最新證據。
 3. [docs/ROADMAP_AND_ACCEPTANCE.md](docs/ROADMAP_AND_ACCEPTANCE.md)：剩餘階段與完成條件。
 
+目前active執行文件已按Gate拆分；每份只授權一個明確任務：
+
+- [P3D_IMPLEMENTATION_PROMPT.md](P3D_IMPLEMENTATION_PROMPT.md)／
+  [P3D_ACCEPTANCE_PROMPT.md](P3D_ACCEPTANCE_PROMPT.md)
+- [P3E_IMPLEMENTATION_PROMPT.md](P3E_IMPLEMENTATION_PROMPT.md)／
+  [P3E_ACCEPTANCE_PROMPT.md](P3E_ACCEPTANCE_PROMPT.md)
+- [P3F_IMPLEMENTATION_PROMPT.md](P3F_IMPLEMENTATION_PROMPT.md)／
+  [P3F_ACCEPTANCE_PROMPT.md](P3F_ACCEPTANCE_PROMPT.md)
+
 設計與治理：
 
 - [docs/MASTER_PLAN.md](docs/MASTER_PLAN.md)：產品與投資流程基線。
@@ -61,8 +78,8 @@ Future／deferred：
 - [docs/MEMORY_CURATION_SKILL_SPEC.md](docs/MEMORY_CURATION_SKILL_SPEC.md)
 - [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 
-已完成階段的 implementation／acceptance／remediation prompts 已移除；不得把歷史 prompt 當作
-目前授權或 gate 狀態。
+已完成階段的implementation／acceptance／remediation prompts已移除；上列P3-D／E／F prompts是目前
+active文件。prompt只定義scope與操作，不是完成或Gate Accepted證據。
 
 ## 開發與驗證
 
@@ -88,5 +105,6 @@ uv run ruff format .
 
 ## 下一步
 
-P3-B+C Combined Gate已Closed。下一步由使用者決定是否提交／推送目前工作包；P3-D仍為
-Not started，必須另行授權後才能開始，也不得把本次關門解讀為Paper order readiness。
+P3-B+C Combined Gate已Closed並發布；P3-D維持Accepted（待授權發布）。P3-E fake conformance已完成，
+目前只缺當次明確批准的六個synthetic/de-identified live cases與真實Agnes證據；P3-F必須等P3-E
+Accepted後才能開始。不得把P3規劃或後續關門解讀為Paper order readiness。

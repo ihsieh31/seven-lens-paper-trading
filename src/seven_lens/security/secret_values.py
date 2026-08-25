@@ -20,10 +20,11 @@ class SecretValueError(ValueError):
 
 
 class SecretKind(StrEnum):
-    """The complete set of credential kinds represented in the P1-C1 boundary."""
+    """The complete set of credentials represented by the sealed boundary."""
 
     ALPACA_PAPER_KEY_ID = "ALPACA_PAPER_KEY_ID"
     ALPACA_PAPER_SECRET_KEY = "ALPACA_PAPER_SECRET_KEY"
+    AGNES_API_KEY = "AGNES_API_KEY"
     OPENAI_API_KEY = "OPENAI_API_KEY"
     POSTGRES_RUNTIME_PASSWORD = "POSTGRES_RUNTIME_PASSWORD"
     TAVILY_API_KEY = "TAVILY_API_KEY"
@@ -32,6 +33,7 @@ class SecretKind(StrEnum):
 _SERVICES: Final[dict[SecretKind, str]] = {
     SecretKind.ALPACA_PAPER_KEY_ID: "seven-lens.paper-trading.alpaca-paper.key-id",
     SecretKind.ALPACA_PAPER_SECRET_KEY: "seven-lens.paper-trading.alpaca-paper.secret-key",
+    SecretKind.AGNES_API_KEY: "seven-lens.paper-trading.agnes.api-key",
     SecretKind.OPENAI_API_KEY: "seven-lens.paper-trading.openai.api-key",
     SecretKind.POSTGRES_RUNTIME_PASSWORD: "seven-lens.paper-trading.postgres.runtime-password",
     SecretKind.TAVILY_API_KEY: "seven-lens.paper-trading.tavily.api-key",
@@ -68,7 +70,7 @@ class SecretRef:
 
     @classmethod
     def primary(cls, kind: SecretKind) -> SecretRef:
-        """Create an Alpaca Paper or OpenAI reference bound to ``primary``."""
+        """Create a non-Tavily reference bound to the fixed ``primary`` account."""
         if kind is SecretKind.TAVILY_API_KEY:
             raise ValueError("Tavily secret references require an account identifier")
         return cls(kind, _PRIMARY_ACCOUNT)

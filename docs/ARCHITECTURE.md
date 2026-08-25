@@ -230,10 +230,11 @@ serialized byte budgets。大型raw evidence只能進未來另行驗收的conten
 
 ### LLM provider adapters
 
-- Analysts：`agnes-2.5-flash`，一次備援 `agnes-2.0-flash`。
-- Research Manager、Trader、Risk Debate、Portfolio Manager：`muse-spark-1.2-contributor`，一次備援 `agnes-2.5-flash`。
-- `deepseek-v4-flash` 是 disabled-by-default 的 OpenCode 可配置候選；通過同一 eval 後才可人工設定，不加入自動 failover chain。
-- 內部設定一律 `reasoning_requested=max`；adapter 依 provider capability 映射 Chat Completions／Responses 與實際 thinking/effort 參數，記錄 effective value，不傳未支援參數。
+- P3-E目前所有Analyst、Research、Trader、Risk Debate與Portfolio Manager角色固定
+  `agnes-2.5-flash`／Chat Completions exact endpoint，無fallback、無automatic retry；其他provider/model皆disabled。
+- runtime不能覆寫host/path/model，不能用`/models`或環境proxy自動改route。
+- 內部設定一律`reasoning_requested=MAX`；目前沒有官方＋authorized live證據支持Agnes的MAX參數，
+  因此不傳未知參數並記`reasoning_effective=UNKNOWN`。
 - `gpt-5.6` 只在未來通過同一 held-out/safety/latency/schema gate 後加入。任何模型切換都不得改變內部 schema 或 deterministic risk semantics。
 
 ### Secrets
@@ -241,7 +242,8 @@ serialized byte budgets。大型raw evidence只能進未來另行驗收的conten
 - `SecretProvider` application port 只接受 typed、exact `SecretRef`，不提供 list/search/write/update/delete/export；domain/application 不依賴 PyObjC、Keychain、環境變數或資料庫。
 - macOS production adapter 只以 Security.framework `SecItemCopyMatching` 查 generic password，固定 service/account mapping、`match all` 與禁止 authentication UI；零筆、多筆、拒絕、locked、timeout、malformed 或 backend failure 全部 fail closed，沒有 env／argv／DB／第二 provider fallback。
 - `ScopedSecretProvider` 在 backend call 前強制 exact-reference allowlist。execution scope 才可取得 Alpaca Paper refs；research/LLM scope 只可取得 Agnes／OpenCode／未來經核准的 OpenAI／Tavily refs。這是 application capability boundary，不是 OS sandbox。
-- P3 新增 exact refs `seven-lens.paper-trading.agnes.api-key/primary` 與 `seven-lens.paper-trading.opencode.api-key/primary`；在 sealed mapping、scope、fake-only tests 與 composition gate 完成前不得使用或 fallback 到現有 OpenAI ref。
+- P3-E只啟用exact ref `seven-lens.paper-trading.agnes.api-key/primary`；OpenCode與其他provider refs不在
+  research composition scope，未來需新決策及gate才能新增。
 - Alpaca/OpenAI account 固定為 `primary`；Tavily account 使用既有規則驗證的非秘密 `account_id`。Tavily 每個 key 只有 account metadata、compliance、quota、usage、reset/cooldown 狀態可進 DB，只有 `AUTHORIZED_ACCOUNT_POOL` 才能啟用多 key router。
 - `SecretValue` 只降低 `str/repr/log/serialization` 意外洩漏，不是程序記憶體加密或 OS isolation；plaintext 只能在未來 client composition boundary 透過明確 reveal 方法取得。
 - `.env.example` 只列非秘密設定；測試與未來 CI 只使用明顯 fake secret，絕不查詢使用者 Keychain。

@@ -118,6 +118,18 @@ class PostgresAnalysisStateRepository:
         except ValueError as error:
             raise PostgresAnalysisError("analysis run has an unknown stage") from error
 
+    def run_identity(self, run_id: str) -> tuple[str, str, str]:
+        with self._connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT input_id::text, packet_hash, snapshot_hash "
+                "FROM public.analysis_runs WHERE run_id = %s",
+                (run_id,),
+            )
+            row = cursor.fetchone()
+        if row is None or any(type(value) is not str for value in row):
+            raise PostgresAnalysisError("analysis run identity is unavailable")
+        return str(row[0]), str(row[1]), str(row[2])
+
     def load(self, run_id: str, stage: AnalysisStage) -> StoredStageResult | None:
         with self._connection.cursor() as cursor:
             cursor.execute(

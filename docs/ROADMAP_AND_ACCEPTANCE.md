@@ -1,6 +1,6 @@
 # 開發路線圖與驗收標準
 
-最後更新：2026-08-22。時程是專注開發估算，不是日曆承諾；任何phase只有在獨立證據滿足後才
+最後更新：2026-08-24。時程是專注開發估算，不是日曆承諾；任何phase只有在獨立證據滿足後才
 能Closed。完整目前狀態見`PROJECT_HANDOFF.md`與`PROGRESS.md`。
 
 ## 狀態總覽
@@ -12,7 +12,9 @@
 | P2 | Closed | 真實submit仍需P7 |
 | P3-A | Closed | — |
 | P3-B+C | Closed | — |
-| P3-D～F | Not started | 依序通過P3-D/E/F各自Gate |
+| P3-D | Accepted | 2026-08-24授權單session重審：focused 104、non-integration 893、PG16 141；無High/Medium blocker |
+| P3-E | Accepted | authorized live 6/6、PG audit 6 rows、full/PG16通過 |
+| P3-F | In progress | reflection／memory／CAS／curator／eval實作中 |
 | P4～P8 | Not started | 依序通過前一Gate |
 
 ## P0 — 規格與治理（Closed）
@@ -56,9 +58,13 @@ Trader與run/stage authority。
 驗收至少證明：fresh/resume identity一致、graph/round固定、citation closure、deadline前後重驗、
 相鄰transition/terminal sink、bounded retries、packet/snapshot binding與不同hash concurrency。
 
-P3-B與P3-C均已獨立驗收Accepted；Combined Gate Closed。P3-D仍須另行實作與驗收。
+P3-B與P3-C均已獨立驗收Accepted；Combined Gate Closed。P3-D於2026-08-24依使用者明確允許的單session反覆審核／修復重新驗收為Accepted（最新focused 104、non-integration 893、PG16 141；無High/Medium blocker），工作包待授權發布。
 
-### P3-D — Risk Debate／Portfolio Manager（Not started）
+P3-D／E／F各有獨立implementation與acceptance prompt：`P3D_*`、`P3E_*`、`P3F_*`。固定順序為每個Gate
+先實作、再由不同fresh session驗收，前Gate Accepted後才進下一Gate。六份prompt是active scope文件，
+不是Gate證據。
+
+### P3-D — Risk Debate／Portfolio Manager（Accepted；2026-08-24重審）
 
 - 兩輪Aggressive／Conservative／Neutral Risk Debate。
 - LLM Portfolio Manager只輸出strict target-weight `PortfolioProposal`。
@@ -66,14 +72,16 @@ P3-B與P3-C均已獨立驗收Accepted；Combined Gate Closed。P3-D仍須另行�
   remaining limits；缺一即`INVALID/NO_TRADE`。
 - 無risk approval、quantity、`OrderIntent`、broker或ledger authority。
 
-### P3-E — Provider isolation（Not started）
+### P3-E — Provider isolation（Accepted）
 
-- Agnes／OpenCode等真實adapter、fixed Keychain refs、capability negotiation、requested/effective
-  reasoning audit與一次failover。
-- sanitized context；timeout/429/schema/provider failure全部`INVALID/NO_TRADE`。
-- 不得在完成前新增或讀取真實credential。
+- 唯一route固定Agnes `agnes-2.5-flash` Chat Completions exact endpoint；無fallback、retry、model
+  discovery或runtime override。
+- fixed Keychain ref、sanitized typed envelope、strict output、requested/effective reasoning與append-only
+  model-call audit；timeout/429/schema/provider failure全部fail closed。
+- 使用者確認rotation後，final六案例6/6與6筆PG audit rows成功；零retry／fallback，完整證據見
+  `docs/P3E_LIVE_EVIDENCE_2026-08-24.json`。
 
-### P3-F — Reflection／memory／evals（Not started）
+### P3-F — Reflection／memory／evals（In progress）
 
 - 每日持倉reflection與Risk rejection lineage；immutable raw audit。
 - 每週LLM-visible memory≤4,000行且無future leakage。

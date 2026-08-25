@@ -12,6 +12,8 @@ SECRET_MODULES = (
     SRC_ROOT / "application" / "ports" / "secrets.py",
     SRC_ROOT / "application" / "secret_service.py",
     SRC_ROOT / "infrastructure" / "macos_keychain.py",
+    SRC_ROOT / "application" / "p3e_composition.py",
+    SRC_ROOT / "config" / "provider.py",
 )
 
 
@@ -98,3 +100,21 @@ def test_env_example_contains_only_non_secret_configuration_names() -> None:
         "TAVILY_COMPLIANCE_MODE",
         "TAVILY_ACCOUNT_ID",
     }
+
+
+def test_p3e_provider_source_has_no_secret_input_or_runtime_route_discovery() -> None:
+    paths = (
+        SRC_ROOT / "config" / "provider.py",
+        SRC_ROOT / "application" / "p3e_composition.py",
+    )
+    forbidden_fragments = (
+        "AGNES_API_KEY=",
+        "os.environ",
+        "os.getenv",
+        "sys.argv",
+        "/models",
+        "model discovery",
+    )
+    for path in paths:
+        source = path.read_text(encoding="utf-8")
+        assert all(fragment not in source for fragment in forbidden_fragments), path
