@@ -10,12 +10,7 @@
 | P0 | Closed | — |
 | P1 | Closed | — |
 | P2 | Closed | 真實submit仍需P7 |
-| P3-A | Closed | — |
-| P3-B+C | Closed | — |
-| P3-D | Accepted | 2026-08-24授權單session重審：focused 104、non-integration 893、PG16 141；無High/Medium blocker |
-| P3-E | Accepted | authorized live 6/6、PG audit 6 rows、full/PG16通過 |
-| P3-F | Accepted／Closed | 2026-08-26重新驗收：紅→綠重注入、PG16 217/0-skip、V12重算260/260＋0 violations＋130/130；發布`b59e466`＋`d51e9a9`，CI `32962320231` |
-| P3 Combined | Closed | A～F全Closed；exact-SHA CI兩required jobs成功 |
+| P3 | Closed | A～F子閘全部驗收後於2026-08-26合併關門；發布`b59e466`→`d51e9a9`→`660e062`，CI `32962320231`／`32963312426` 兩required jobs成功 |
 | P4～P8 | Not started | 依序通過前一Gate |
 
 ## P0 — 規格與治理（Closed）
@@ -34,71 +29,32 @@ runtime role。final remediation commit `488f170`／CI `32360443947`成功。
 
 P2 Closed只代表程式安全基線；真實submit、WebSocket transport與operator CLI仍受P6/P7 gate約束。
 
-## P3 — TradingAgents研究、提案與記憶
+## P3 — TradingAgents研究、提案與記憶（Closed）
 
-### P3-A — upstream/license/contracts（Closed）
+**P3 已於 2026-08-26 一次性關門。** 六個子閘各自經未參與實作的 fresh session 獨立驗收 Accepted
+（含多輪 rejected→remediation→re-acceptance 輪次，細節見 `WORKLOG.md`）：
 
-- 固定upstream `a33fd4c0f134485a43553a2c23a63cb14adbd88f`與Apache-2.0 inventory。
-- strict immutable `AnalysisInput`、reports、debates、snapshot、proposal與feedback contracts。
-- remediation commit `9037dacc`／CI `32488368972`成功。
+- **P3-A** upstream 固定 `a33fd4c0…`、Apache-2.0 inventory、strict immutable contracts。
+- **P3-B** point-in-time source/evidence contracts、SHA-256 CAS、event verifier、PostgreSQL
+  evidence authority；future/stale/conflict/CAS/runtime-privilege 對抗全數 fail closed。
+- **P3-C** capability-minimal provider port、四分析員、兩輪 Bull/Bear、Research Manager、Trader
+  與 run/stage authority；identity/graph/citation/deadline/transition 全部驗收。
+- **P3-D** 兩輪三觀點 Risk Debate 與 strict target-weight `PortfolioProposal`；完整去識別化
+  snapshot 缺一即 `INVALID/NO_TRADE`；無 risk approval／quantity／`OrderIntent` authority。
+- **P3-E** 唯一 Agnes route 固定 endpoint、sanitized envelope、append-only model-call audit；
+  authorized live 六案例 6/6（證據 `docs/P3E_LIVE_EVIDENCE_2026-08-24.json`）。
+- **P3-F** immutable reflection lineage、bounded curated memory、synthetic eval 治理；
+  Offline Correctness 100%、Live Model Quality 260/260＋violations=0＋130/130 pre-network
+  fail-closed、Provider Transport first-attempt/eventual 皆 100%（V12 批次 snapshot）。
 
-### P3-B — point-in-time evidence/event（Accepted）
+關門證據基線：targeted `423 passed`、non-integration `1299 passed, 232 deselected`、真實 PG16 整合
+`217 passed, 15 deselected, 0 skipped`、offline byte-match 不變。發布鏈：`b59e466`（工作樹）→
+`d51e9a9`（CI tmpfs 512m→1g）→ `660e062`（治理同步）；exact-SHA run `32962320231`／`32963312426`
+兩 required jobs 成功。
 
-交付strict source/evidence contracts、SHA-256 CAS、time eligibility、GET-only source boundary、
-去識別化input assembly、price/news event verifier與PostgreSQL evidence authority。
-
-驗收至少證明：future/stale/conflict/contradiction/missing/citation drift fail closed；CAS bytes與DB
-publication一致；runtime無publish/direct-DML；亂序與來源冒充被拒；真實PG16 privilege/concurrency
-adversarial tests通過。
-
-### P3-C — analyst/research pipeline（Accepted）
-
-交付capability-minimal provider port、scripted fake、四分析員、兩輪Bull/Bear、Research Manager、
-Trader與run/stage authority。
-
-驗收至少證明：fresh/resume identity一致、graph/round固定、citation closure、deadline前後重驗、
-相鄰transition/terminal sink、bounded retries、packet/snapshot binding與不同hash concurrency。
-
-P3-B與P3-C均已獨立驗收Accepted；Combined Gate Closed。P3-D於2026-08-24依使用者明確允許的單session反覆審核／修復重新驗收為Accepted（最新focused 104、non-integration 893、PG16 141；無High/Medium blocker），工作包待授權發布。
-
-P3-D／E／F各有獨立implementation與acceptance prompt：`P3D_*`、`P3E_*`、`P3F_*`。固定順序為每個Gate
-先實作、再由不同fresh session驗收，前Gate Accepted後才進下一Gate。六份prompt是active scope文件，
-不是Gate證據。
-
-### P3-D — Risk Debate／Portfolio Manager（Accepted；2026-08-24重審）
-
-- 兩輪Aggressive／Conservative／Neutral Risk Debate。
-- LLM Portfolio Manager只輸出strict target-weight `PortfolioProposal`。
-- 每次必須讀完整去識別化NAV/cash/buying power/positions/open orders/same-day fills/borrow/
-  remaining limits；缺一即`INVALID/NO_TRADE`。
-- 無risk approval、quantity、`OrderIntent`、broker或ledger authority。
-
-### P3-E — Provider isolation（Accepted）
-
-- 唯一route固定Agnes `agnes-2.5-flash` Chat Completions exact endpoint；無fallback、retry、model
-  discovery或runtime override。
-- fixed Keychain ref、sanitized typed envelope、strict output、requested/effective reasoning與append-only
-  model-call audit；timeout/429/schema/provider failure全部fail closed。
-- 使用者確認rotation後，final六案例6/6與6筆PG audit rows成功；零retry／fallback，完整證據見
-  `docs/P3E_LIVE_EVIDENCE_2026-08-24.json`。
-
-### P3-F — Reflection／memory／evals（Accepted／Closed）
-
-> 2026-08-26獨立重新驗收Accepted（F-A1 remediation後），隨P3 Combined closure發布於`d51e9a9`
-> （CI `32962320231`）。Provider Transport為V12批次GREEN snapshot；rolling canary義務見OPEN-027。
-
-- 每日持倉reflection與Risk rejection lineage；immutable raw audit。
-- 每週LLM-visible memory≤4,000行且無future leakage。
-- record/replay、semantic parity、golden、held-out、ablation與prompt-injection tests。
-- Offline Correctness Gate維持100%；Live Model Quality要求至少250/260 strict completions、completed正確率
-  ≥98%、response-contract violation=0及130/130 pre-network fail-closed。
-- Provider Transport獨立判定first-attempt≥95%與最多三attempt後eventual≥99%；每案只對transient errors最多
-  retry兩次、260 logical cases最多780 attempts、連續三案exhausted即開circuit。Transport未達標不否定功能
-  正確性，但會阻止P6，並須以rolling 7日／至少200個另行授權synthetic canary calls重驗。
-
-P3完成條件：A～F全Closed，完整graph只產生可追溯proposal，任何自由文字fallback、缺來源、
-snapshot缺漏或provider不明都無法進P4。**現況：已滿足——P3-A～F全Closed，P3 Combined Gate
-Closed（2026-08-26）。**
+完成條件「完整 graph 只產生可追溯 proposal，任何自由文字 fallback、缺來源、snapshot 缺漏或
+provider 不明都無法進 P4」已滿足。子閘 prompt 與 requirement map 歸檔於 `docs/archive/`；
+Transport rolling canary 義務見 OPEN-027。
 
 ## P4 — 候選與deterministic Risk（Not started）
 

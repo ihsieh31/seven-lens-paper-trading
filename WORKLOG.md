@@ -498,3 +498,18 @@
   「V10 live quality evidence pending」過時狀態一併更正。
 - Provider Transport的P6前置義務不變：另行授權synthetic canary於rolling 7日且≥200 logical calls達
   first-attempt≥95%／eventual≤3 attempts≥99%，跌破即重開。P4未開始，需另經使用者授權。
+
+## 2026-08-26 — P3收尾：文件歸檔與殘留清理
+
+- 依使用者授權執行P3最終收尾：六份P3-D/E/F implementation／acceptance prompts移至
+  `docs/archive/prompts/`；`docs/P3F_REQUIREMENT_MAP.md`移至`docs/archive/p3/`；關門當下的前一版
+  handoff完整快照存於`docs/archive/handoffs/PROJECT_HANDOFF_2026-08-26_P3-CLOSED.md`。
+- `README.md`全文重寫為當前狀態；`PROJECT_HANDOFF.md`重寫為精簡當前交接（舊版已歸檔）；
+  `PROGRESS.md`移除V1～V12逐批長篇敘事與各子閘逐remediation細節，改為單一「P3 Closed」狀態、
+  證據摘要與歸檔指針（逐輪歷史保留於本檔）；`docs/ROADMAP_AND_ACCEPTANCE.md`合併P3-A～F子段落為
+  單一Close章節，狀態總覽表收斂為單一P3列。
+- 刪除經逐一確認的可再生cache與junk：19個`__pycache__`目錄、`.pytest_cache`、`.mypy_cache`、
+  `.ruff_cache`、根目錄`.DS_Store`（全部gitignored），以及本驗收session在`/tmp/p3f_reaccept`的
+  scratch腳本與log。明確保留不動：`.seven-lens-local/`（V1～V12 immutable live evidence）、
+  `skill/`（本地語料）、`.mimosa/`、`.venv/`。
+- 狀態：P0～P3 Closed；P4～P8 Not started。工作樹僅餘本次收尾變更，push後`main`保持與remote一致。

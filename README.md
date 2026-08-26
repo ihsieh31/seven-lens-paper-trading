@@ -7,65 +7,58 @@ LLM 只能產生有來源、符合 schema 的研究／組合提案；determinist
 execution 只能處理已核准的 Paper `OrderIntent`。本專案沒有 Alpaca live endpoint、live adapter
 或自動升級實盤的 gate。
 
-## 目前進度
+## 狀態總覽
 
 | 階段 | 狀態 | 說明 |
 |---|---|---|
-| P0 規格／治理 | Closed | 核心範圍、Paper-only 與風控邊界已建立 |
-| P1 基礎／權威狀態 | Closed | typed config、Keychain、PostgreSQL、telemetry、CI 已驗收 |
-| P2 Paper 執行安全 | Closed | final remediation 與 exact-SHA CI 已完成；不授權真實下單 |
-| P3-A upstream／contracts | Closed | 固定 upstream、license inventory、strict contracts 已驗收 |
-| P3-B+C evidence／research pipeline | Closed | P3-B與P3-C均經獨立驗收Accepted；已發布至`main` |
-| P3-D risk／proposal | Accepted | 2026-08-24授權單session反覆重審完成；零High/Medium blocker |
-| P3-E | Accepted | authorized live六案例6/6與PG audit/full regression通過 |
-| P3-F | Accepted／Closed | F-A1 remediation重新驗收通過：PG16 217/0-skip、V12重算260/260＋0 violations＋130/130 |
-| P3 Combined | Closed | `b59e466`發布＋`d51e9a9` tmpfs修復；CI `32962320231`兩required jobs成功 |
-| P4～P8 | Not started | 不得提前宣告能力或繞過後續 gate |
+| P0 規格／治理 | Closed | 核心範圍、Paper-only 與風控邊界 |
+| P1 基礎／權威狀態 | Closed | typed config、Keychain、PostgreSQL、telemetry、CI |
+| P2 Paper 執行安全 | Closed | order/fill/reconciliation/control；真實下單仍未授權 |
+| **P3 研究／提案／記憶** | **Closed** | A～F 全部驗收後合併關門；詳見下節與 `WORKLOG.md` |
+| P4～P8 | Not started | deterministic Risk → 驗證 → Shadow → Supervised → Unattended |
 
-P3-B+C已發布於commit `55c9a16ced2fbc2ec3b3d5cfd46abcdabcb56069`；本機與遠端
-`main`一致。exact-SHA GitHub Actions run `32558983841`的`quality-unit`與
-`postgres-integration`均成功。發布前獨立驗收證據：Ruff／format／mypy／lock全綠，
-non-integration `809 passed, 102 deselected`，真實PostgreSQL 16
-`94 passed, 8 deselected, 0 skipped`。
+## P3 Close
 
-P3-D工作包維持**Accepted**。P3-E final authorized live batch六案例6/6成功、6 PG audit rows，
-full `1174 passed, 165 deselected`、PG16 `150 passed, 15 deselected, 0 skipped`，狀態為**Accepted**。
-P3-F於2026-08-26由獨立重新驗收判定**Accepted**（F-A1 remediation紅→綠重注入驗證、targeted 423、
-non-integration 1299、PG16整合217/0-skip、V12 evidence離線重算260/260＋violations=0＋130/130
-fail-closed），隨後完成**P3 Combined closure**：工作樹以`b59e466`發布，CI tmpfs修復`d51e9a9`，
-exact-SHA run `32962320231`兩required jobs成功。P4未開始。
+P3 於 2026-08-26 完成最後一個子閘（reflection/memory/evals）的獨立重新驗收後一次性關閉。
+範圍涵蓋 upstream contracts、point-in-time evidence/event、研究管線、Risk Debate 與提案、
+provider isolation、immutable reflection lineage、bounded curated memory 與 synthetic eval 治理。
+
+關門證據摘要：
+
+- 全套 regression：targeted `423 passed`；`verify_p1.sh` non-integration `1299 passed,
+  232 deselected`；真實 PostgreSQL 16 整合 `217 passed, 15 deselected, 0 skipped`。
+- Offline eval byte-match：V12 frozen report 重算一致（split/report hash 不變）。
+- Authorized live evidence（V12）：260/260 strict 且全正確、violations=0、130/130 pre-network
+  fail-closed；Provider Transport first-attempt/eventual 皆 100%（僅為該批 snapshot）。
+- 發布：工作樹以 `b59e466` 登載、CI tmpfs 修復 `d51e9a9`；exact-SHA run `32962320231`
+  的 `quality-unit` 與 `postgres-integration` 兩 required jobs 成功。
 
 ## 核心邊界
 
 - 只允許 Alpaca Paper；未知、缺失、過期、矛盾或未授權狀態一律 fail closed。
 - analysis workers 沒有 broker credential、order/ledger write、shell 或任意 network capability。
-- P3-B+C 只到 `TraderPlan`；Risk Debate／Portfolio Manager 留 P3-D，真實 provider 留 P3-E，
-  reflection／memory／evals 留 P3-F。
-- P4 deterministic Risk 才能核准 target、計算 quantity 並交給既有 P2 execution。
-- P3-F把Offline Correctness、Live Model Quality與Provider Transport分開判定。只有synthetic eval可對
-  `TIMEOUT`／`TRANSIENT`／`RATE_LIMIT`最多retry兩次；production model transport、proposal與交易路徑沒有因此
-  取得automatic retry或fallback authority。Transport狀態必須在P6前以rolling evidence重驗。
-- runtime PostgreSQL role 不能直接修改 P3 tables，也不能執行 CAS publication；發布需由實際
-  SHA-256 content verifier 與受信任 operator capability 完成。
-- 不從 `.env` 讀取真實秘密；production secret 只經固定 `SecretRef` 與 macOS Keychain boundary。
-- Tavily 多帳號仍固定 fail closed，直到存在可獨立驗證的外部授權證據。
+- 只有 P4 deterministic Risk 能核准 target、計算 quantity 並交給既有 P2 execution。
+- Synthetic eval 可對 `TIMEOUT`／`TRANSIENT`／`RATE_LIMIT` 最多 retry 兩次；production model
+  transport、proposal 與交易路徑沒有 automatic retry 或 fallback authority。
+- Runtime PostgreSQL role 不能直接修改 P3 tables 或執行 CAS publication；secret 只經固定
+  `SecretRef` 與 macOS Keychain boundary，不從 `.env` 讀取真實秘密。
+- Tavily 多帳號固定 fail closed，直到存在可獨立驗證的外部授權證據。
+
+## 存續義務與下一步
+
+- Provider Transport GREEN 僅為 V12 批次 snapshot。P6 Shadow 開始前，需另行授權的 synthetic
+  canary 在 rolling 7 日且 ≥200 logical calls 達 first-attempt≥95%／eventual≤3 attempts≥99%；
+  跌破即重開（OPEN-027）。
+- 下一個階段是 **P4 deterministic Risk**（Not started），需使用者明確授權後由 fresh session
+  規劃執行。任何 walk-forward/profitability 主張屬 P5；任何送單能力屬 P7 之後。
 
 ## 文件入口
 
 先讀：
 
-1. [PROJECT_HANDOFF.md](PROJECT_HANDOFF.md)：目前唯一交接、驗收邊界與下一步。
+1. [PROJECT_HANDOFF.md](PROJECT_HANDOFF.md)：目前唯一交接、邊界與下一步。
 2. [PROGRESS.md](PROGRESS.md)：phase/gate 狀態與最新證據。
 3. [docs/ROADMAP_AND_ACCEPTANCE.md](docs/ROADMAP_AND_ACCEPTANCE.md)：剩餘階段與完成條件。
-
-目前active執行文件已按Gate拆分；每份只授權一個明確任務：
-
-- [P3D_IMPLEMENTATION_PROMPT.md](P3D_IMPLEMENTATION_PROMPT.md)／
-  [P3D_ACCEPTANCE_PROMPT.md](P3D_ACCEPTANCE_PROMPT.md)
-- [P3E_IMPLEMENTATION_PROMPT.md](P3E_IMPLEMENTATION_PROMPT.md)／
-  [P3E_ACCEPTANCE_PROMPT.md](P3E_ACCEPTANCE_PROMPT.md)
-- [P3F_IMPLEMENTATION_PROMPT.md](P3F_IMPLEMENTATION_PROMPT.md)／
-  [P3F_ACCEPTANCE_PROMPT.md](P3F_ACCEPTANCE_PROMPT.md)
 
 設計與治理：
 
@@ -85,8 +78,9 @@ Future／deferred：
 - [docs/MEMORY_CURATION_SKILL_SPEC.md](docs/MEMORY_CURATION_SKILL_SPEC.md)
 - [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 
-已完成階段的implementation／acceptance／remediation prompts已移除；上列P3-D／E／F prompts是目前
-active文件。prompt只定義scope與操作，不是完成或Gate Accepted證據。
+已完成階段的 implementation／acceptance prompt、P3 requirement map 與關門當下的 handoff 快照，
+統一存放於 [`docs/archive/`](docs/archive/)（`prompts/`、`handoffs/`、`p3/`）。歸檔文件只作
+歷史紀錄，不是現行授權或完成證據。
 
 ## 開發與驗證
 
@@ -102,18 +96,7 @@ git diff --check
 第一個命令執行 locked sync、lock、format、lint、mypy 與 non-integration tests。第二個命令使用
 digest-pinned PostgreSQL 16、fake credentials、random localhost port 與 tmpfs，執行 zero-skip
 integration tests並清理 disposable container。手動 `TEST_DATABASE_URL` 只能指向專用 disposable
-database。
+database。本機 Docker VM 記憶體有限時，請勿與其他容器並行跑整合套件（OOM 會殺掉 service
+container）。
 
-需要格式化時：
-
-```bash
-uv run ruff format .
-```
-
-## 下一步
-
-**P3 Combined Gate已Closed並發布至`main`（`d51e9a9`，CI `32962320231`兩jobs成功）。**
-下一個Gate是**P4 deterministic Risk（Not started）**，需使用者明確授權後由fresh session開始。
-存續義務：Provider Transport GREEN僅為V12批次snapshot，P6 Shadow前需另行授權的synthetic canary
-於rolling 7日且≥200 logical calls達first-attempt≥95%／eventual≤3 attempts≥99%，跌破即重開。
-不得把P3規劃或後續關門解讀為Paper order readiness。
+需要格式化時：`uv run ruff format .`。
