@@ -508,14 +508,10 @@ def test_resume_from_persisted_analysts_is_pure_replay() -> None:
     resumed = AnalysisPipeline(provider, repository, now=lambda: timestamp().value).run(
         analysis_input(), evidence_packet(), "MSFT"
     )
-    assert provider.calls == [
-        "BULL::1",
-        "BEAR::1",
-        "BULL::2",
-        "BEAR::2",
-        "RESEARCH_MANAGER::",
-        "TRADER::",
-    ]
+    assert len(provider.calls) == 6
+    assert set(provider.calls[:2]) == {"BULL::1", "BEAR::1"}
+    assert set(provider.calls[2:4]) == {"BULL::2", "BEAR::2"}
+    assert tuple(provider.calls[4:]) == ("RESEARCH_MANAGER::", "TRADER::")
     fresh = AnalysisPipeline(
         ScriptedAnalysisProvider(scripted_outputs()),
         InMemoryAnalysisStateRepository(),

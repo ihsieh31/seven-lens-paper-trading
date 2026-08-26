@@ -513,3 +513,13 @@
   scratch腳本與log。明確保留不動：`.seven-lens-local/`（V1～V12 immutable live evidence）、
   `skill/`（本地語料）、`.mimosa/`、`.venv/`。
 - 狀態：P0～P3 Closed；P4～P8 Not started。工作樹僅餘本次收尾變更，push後`main`保持與remote一致。
+
+### 追記（同日）：CI resume-replay測試flake修復
+
+- 收尾commit `16f7d83`的CI quality-unit連續兩次在
+  `test_resume_from_persisted_analysts_is_pure_replay`失敗：每輪兩個debate經
+  `analysis/concurrency.py`的ThreadPoolExecutor並行送出，輪內呼叫順序取決於執行緒排程；
+  該測試卻斷言嚴格全域順序（兩次CI分別在round-2與round-1翻轉，本地30/30通過）。
+- 修復比照P3D既有慣例改為分組斷言：輪內以set比較、跨階段（debates→RESEARCH_MANAGER→TRADER）
+  維持嚴格順序、總數與purity性質不變。本地stress 30/30＋整檔31 passed＋non-integration
+  `1299 passed, 232 deselected`＋Ruff format/lint全綠。
