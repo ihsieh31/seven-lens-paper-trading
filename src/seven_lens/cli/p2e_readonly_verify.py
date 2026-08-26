@@ -260,6 +260,7 @@ class ReadOnlyVerificationReport:
                 "run_id": str(self.reconciliation.run_id),
                 "trading_date": str(self.reconciliation.trading_date),
                 "status": self.reconciliation.status.value,
+                "scope": self.reconciliation.scope.value,
                 "mismatches": [
                     {"kind": mismatch.kind.value, "detail": mismatch.detail}
                     for mismatch in self.reconciliation.mismatches
@@ -386,6 +387,7 @@ def _human_report(report: ReadOnlyVerificationReport) -> str:
         [
             f"reconciliation: {reconciliation.status.value}",
             f"  run_id: {reconciliation.run_id}",
+            f"  scope: {reconciliation.scope.value}",
             f"  checked_orders: {reconciliation.checked_orders}",
             f"  checked_fills: {reconciliation.checked_fills}",
             f"  mismatch_count: {len(reconciliation.mismatches)}",

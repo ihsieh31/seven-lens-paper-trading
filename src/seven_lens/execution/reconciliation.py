@@ -17,6 +17,13 @@ class ReconciliationStatus(StrEnum):
     MISMATCH = "MISMATCH"
 
 
+class ReconciliationScope(StrEnum):
+    """The authority boundary covered by one reconciliation run."""
+
+    PARTIAL = "PARTIAL"
+    FULL = "FULL"
+
+
 class MismatchKind(StrEnum):
     """Closed classification of every reconciliation mismatch."""
 
@@ -64,6 +71,7 @@ class ReconciliationResult:
     checked_orders: int
     checked_fills: int
     observed_at: UtcTimestamp
+    scope: ReconciliationScope = ReconciliationScope.PARTIAL
 
     def __post_init__(self) -> None:
         if not isinstance(self.run_id, UUID) or self.run_id.int == 0:
@@ -83,8 +91,15 @@ class ReconciliationResult:
             raise ValueError("checked_fills must be a non-negative integer")
         if not isinstance(self.observed_at, UtcTimestamp):
             raise ValueError("observed_at must be a UtcTimestamp")
+        if type(self.scope) is not ReconciliationScope:
+            raise ValueError("scope must be a ReconciliationScope")
         if (self.status is ReconciliationStatus.CLEAN) is bool(self.mismatches):
             raise ValueError("CLEAN requires zero mismatches; MISMATCH requires at least one")
+
+    @property
+    def is_resume_safe(self) -> bool:
+        """Return whether this run covers the complete production safety scope."""
+        return self.status is ReconciliationStatus.CLEAN and self.scope is ReconciliationScope.FULL
 
     @classmethod
     def create(
@@ -96,6 +111,7 @@ class ReconciliationResult:
         checked_fills: int,
         observed_at: UtcTimestamp,
         run_id: UUID | None = None,
+        scope: ReconciliationScope = ReconciliationScope.PARTIAL,
     ) -> ReconciliationResult:
         return cls(
             run_id=run_id or uuid4(),
@@ -107,4 +123,5 @@ class ReconciliationResult:
             checked_orders=checked_orders,
             checked_fills=checked_fills,
             observed_at=observed_at,
+            scope=scope,
         )

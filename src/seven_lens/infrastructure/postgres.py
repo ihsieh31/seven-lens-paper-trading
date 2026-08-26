@@ -54,6 +54,7 @@ from seven_lens.execution.reconciliation import (
     MismatchKind,
     ReconciliationMismatch,
     ReconciliationResult,
+    ReconciliationScope,
     ReconciliationStatus,
 )
 
@@ -661,9 +662,9 @@ class PostgresReconciliationRepository:
                 """
                 INSERT INTO reconciliation_runs (
                     run_id, trading_date, status, mismatch_count, mismatch_kinds,
-                    checked_orders, checked_fills, observed_at
+                    checked_orders, checked_fills, observed_at, scope
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING recorded_at
                 """,
                 (
@@ -675,6 +676,7 @@ class PostgresReconciliationRepository:
                     result.checked_orders,
                     result.checked_fills,
                     result.observed_at.value,
+                    result.scope.value,
                 ),
             )
             row = _row(cursor.fetchone(), "reconciliation run insert")
@@ -695,7 +697,7 @@ class PostgresReconciliationRepository:
             cursor.execute(
                 """
                 SELECT run_id, trading_date, status, mismatch_count, mismatch_kinds,
-                       checked_orders, checked_fills, observed_at
+                       checked_orders, checked_fills, observed_at, scope
                 FROM reconciliation_runs
                 ORDER BY recorded_at DESC, run_id DESC
                 LIMIT 1
@@ -705,6 +707,10 @@ class PostgresReconciliationRepository:
             if row is None:
                 return None
             parent = _row(row, "reconciliation latest")
+            if len(parent) != 9:
+                raise PersistenceInvariantError(
+                    "reconciliation latest query returned an invalid column count"
+                )
             run_id = _uuid(parent[0], "run_id")
             mismatch_count = _integer(parent[3], "mismatch_count")
             kinds_raw = parent[4]
@@ -760,6 +766,7 @@ class PostgresReconciliationRepository:
                 checked_orders=_integer(parent[5], "checked_orders"),
                 checked_fills=_integer(parent[6], "checked_fills"),
                 observed_at=_timestamp(parent[7], "observed_at"),
+                scope=ReconciliationScope(_text(parent[8], "scope")),
             )
 
 
@@ -1213,8 +1220,11 @@ def _boolean(value: object, field_name: str) -> bool:
 
 
 def _reconciliation_result(row: tuple[object, ...]) -> ReconciliationResult:
-    if len(row) != 8:
+    if len(row) not in (8, 9):
         raise PersistenceInvariantError("reconciliation query returned an invalid column count")
+    scope = ReconciliationScope.PARTIAL
+    if len(row) == 9:
+        scope = ReconciliationScope(_text(row[8], "scope"))
     kinds_raw = row[4]
     if type(kinds_raw) is not list:
         raise PersistenceInvariantError("database mismatch_kinds must be an array")
@@ -1229,6 +1239,7 @@ def _reconciliation_result(row: tuple[object, ...]) -> ReconciliationResult:
         checked_orders=_integer(row[5], "checked_orders"),
         checked_fills=_integer(row[6], "checked_fills"),
         observed_at=_timestamp(row[7], "observed_at"),
+        scope=scope,
     )
 
 

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import threading
+from contextlib import contextmanager
 from uuid import uuid4
 
 import psycopg
@@ -10,7 +12,7 @@ import pytest
 
 from seven_lens.application.control_service import ControlPlane, ResumeBlockedError
 from seven_lens.application.ports.broker import BrokerTransportError, PaperAccount
-from seven_lens.application.reconciliation_service import Reconciler
+from seven_lens.application.reconciliation_service import AccountReconciliationPolicy, Reconciler
 from seven_lens.domain.value_objects import RunId, TradingDate, UtcTimestamp
 from seven_lens.execution.control import ControlCommand, ControlCommandRecord
 from seven_lens.execution.fake_broker import FakePaperBroker
@@ -23,7 +25,13 @@ from seven_lens.execution.orders import (
     PriceCollar,
     Symbol,
 )
-from seven_lens.execution.reconciliation import ReconciliationStatus
+from seven_lens.execution.reconciliation import (
+    MismatchKind,
+    ReconciliationMismatch,
+    ReconciliationResult,
+    ReconciliationScope,
+    ReconciliationStatus,
+)
 from seven_lens.infrastructure.postgres import PostgresUnitOfWork
 
 pytestmark = pytest.mark.integration
@@ -41,6 +49,26 @@ class _FixedClock:
 class _UnavailableBroker(FakePaperBroker):
     def account(self) -> PaperAccount:
         raise BrokerTransportError("injected reconciliation outage")
+
+
+class _BlockingSubmissionGuard:
+    """Pause a real control-row lock until the competing writer is staged."""
+
+    def __init__(self, delegate, acquired: threading.Event, release: threading.Event) -> None:
+        self._delegate = delegate
+        self._acquired = acquired
+        self._release = release
+
+    @contextmanager
+    def submission_guard(self):
+        with self._delegate.submission_guard() as snapshot:
+            self._acquired.set()
+            if not self._release.wait(timeout=5):
+                raise AssertionError("timed out waiting to release submission guard")
+            yield snapshot
+
+    def __getattr__(self, name):
+        return getattr(self._delegate, name)
 
 
 def test_partial_control_command_persists_null_applied_at(
@@ -106,6 +134,7 @@ def test_reconciliation_run_persists_and_latest_orders_correctly(migrated_postgr
     with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
         first = reconciler.run(unit_of_work, _TRADING_DATE)
         assert first.status is ReconciliationStatus.CLEAN
+        assert first.scope is ReconciliationScope.PARTIAL
         latest = unit_of_work.reconciliations.latest()
         assert latest is not None and latest.run_id == first.run_id
 
@@ -151,9 +180,19 @@ def test_control_commands_append_only_and_resume_gate(migrated_postgres: str) ->
     ):
         plane.resume_entries(unit_of_work, actor="owner")
 
-    reconciler = Reconciler(broker=FakePaperBroker(clock=_FixedClock()), clock=_FixedClock())
     with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
-        reconciler.run(unit_of_work, _TRADING_DATE)
+        unit_of_work.account_baselines.set_baseline("fake-paper-primary", 100_000_000, _BASE_TIME)
+        unit_of_work.commit()
+
+    reconciler = Reconciler(
+        broker=FakePaperBroker(clock=_FixedClock()),
+        clock=_FixedClock(),
+        account_policy=AccountReconciliationPolicy(expected_account_id="fake-paper-primary"),
+    )
+    with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
+        result = reconciler.run(unit_of_work, _TRADING_DATE)
+        assert result.scope is ReconciliationScope.FULL
+        assert result.status is ReconciliationStatus.CLEAN
     with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
         snapshot = plane.resume_entries(unit_of_work, actor="owner")
         assert snapshot.entries_paused is False
@@ -167,6 +206,88 @@ def test_control_commands_append_only_and_resume_gate(migrated_postgres: str) ->
         with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
             connection.execute("UPDATE public.control_commands SET reason = 'forged'")
         connection.rollback()
+
+
+def test_reconciliation_mismatch_wins_over_concurrent_resume(
+    migrated_postgres: str,
+) -> None:
+    """A mismatch committed during resume cannot be cleared by a stale read."""
+    plane = ControlPlane(clock=_FixedClock())
+    clean = ReconciliationResult.create(
+        trading_date=_TRADING_DATE,
+        mismatches=(),
+        checked_orders=0,
+        checked_fills=0,
+        observed_at=_BASE_TIME,
+        scope=ReconciliationScope.FULL,
+    )
+    with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
+        unit_of_work.reconciliations.add(clean)
+        plane.pause_entries(unit_of_work, reason="operator drill", actor="owner")
+
+    mismatch = ReconciliationResult.create(
+        trading_date=_TRADING_DATE,
+        mismatches=(ReconciliationMismatch(MismatchKind.STATUS_MISMATCH, "race-order"),),
+        checked_orders=1,
+        checked_fills=0,
+        observed_at=_BASE_TIME,
+    )
+    guard_acquired = threading.Event()
+    mismatch_staged = threading.Event()
+    release_guard = threading.Event()
+    resume_errors: list[BaseException] = []
+    mismatch_errors: list[BaseException] = []
+
+    def resume() -> None:
+        try:
+            with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
+                unit_of_work.control = _BlockingSubmissionGuard(
+                    unit_of_work.control, guard_acquired, release_guard
+                )
+                plane.resume_entries(unit_of_work, actor="resume-race")
+        except BaseException as error:
+            resume_errors.append(error)
+
+    def write_mismatch() -> None:
+        try:
+            with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
+                unit_of_work.reconciliations.add(mismatch)
+                mismatch_staged.set()
+                unit_of_work.control.set_entries_paused(True, "reconciliation mismatch")
+                unit_of_work.control.add_command(
+                    ControlCommandRecord(
+                        command_id=uuid4(),
+                        command=ControlCommand.PAUSE_ENTRIES,
+                        reason="automatic pause on reconciliation mismatch",
+                        actor="reconciler",
+                        run_id=mismatch.run_id,
+                        requested_at=_BASE_TIME,
+                        applied_at=_BASE_TIME,
+                    )
+                )
+                unit_of_work.commit()
+        except BaseException as error:
+            mismatch_errors.append(error)
+
+    resume_thread = threading.Thread(target=resume, name="resume-race")
+    mismatch_thread = threading.Thread(target=write_mismatch, name="mismatch-race")
+    resume_thread.start()
+    assert guard_acquired.wait(timeout=5)
+    mismatch_thread.start()
+    assert mismatch_staged.wait(timeout=5)
+    release_guard.set()
+    resume_thread.join(timeout=5)
+    mismatch_thread.join(timeout=5)
+
+    assert not resume_thread.is_alive()
+    assert not mismatch_thread.is_alive()
+    assert resume_errors == []
+    assert mismatch_errors == []
+    with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
+        latest = unit_of_work.reconciliations.latest()
+        assert latest is not None and latest.run_id == mismatch.run_id
+        assert latest.status is ReconciliationStatus.MISMATCH
+        assert unit_of_work.control.state().entries_paused is True
 
 
 def test_control_state_row_is_singleton_and_reason_checked(migrated_postgres: str) -> None:

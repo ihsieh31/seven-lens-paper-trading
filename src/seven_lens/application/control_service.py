@@ -9,6 +9,7 @@ local fill ledger - never from the broker's position view alone.
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from datetime import timedelta
 from typing import Protocol
 from uuid import uuid4
@@ -33,7 +34,6 @@ from seven_lens.execution.orders import (
     PriceCollar,
     Symbol,
 )
-from seven_lens.execution.reconciliation import ReconciliationStatus
 
 _FLATTEN_STRATEGY = "control-flatten"
 _FLATTEN_WINDOW = "emergency"
@@ -90,6 +90,8 @@ class LedgerFlattenPriceProvider:
 
 class ControlRepositoryLike(Protocol):
     def state(self) -> ControlStateSnapshot: ...
+
+    def submission_guard(self) -> AbstractContextManager[ControlStateSnapshot]: ...
 
     def set_entries_paused(self, paused: bool, reason: str | None) -> ControlStateSnapshot: ...
 
@@ -148,22 +150,27 @@ class ControlPlane:
     def resume_entries(
         self, unit_of_work: _ControlUnitOfWork, *, actor: str
     ) -> ControlStateSnapshot:
-        """Fail closed unless latest reconciliation is CLEAN and no unresolved intent remains."""
-        latest = unit_of_work.reconciliations.latest()
-        if latest is None or latest.status is not ReconciliationStatus.CLEAN:
-            raise ResumeBlockedError("resume requires a latest CLEAN reconciliation run")
-        # Defense-in-depth: a CLEAN run must not mask durable UNKNOWN/REVIEW_REQUIRED.
-        for status in (OrderStatus.UNKNOWN, OrderStatus.REVIEW_REQUIRED):
-            if unit_of_work.orders.list_by_status(status):
+        """Fail closed under the same singleton lock used by new submissions."""
+        with unit_of_work.control.submission_guard():
+            latest = unit_of_work.reconciliations.latest()
+            if latest is None or not latest.is_resume_safe:
                 raise ResumeBlockedError(
-                    f"resume blocked while {status.value} intents remain unresolved"
+                    "resume requires a latest full-scope CLEAN reconciliation run"
                 )
-        snapshot = unit_of_work.control.set_entries_paused(False, None)
-        self._record(
-            unit_of_work, ControlCommand.RESUME_ENTRIES, "resume after CLEAN reconciliation", actor
-        )
-        unit_of_work.commit()
-        return snapshot
+            # Defense-in-depth: a CLEAN run must not mask durable UNKNOWN/REVIEW_REQUIRED.
+            for status in (OrderStatus.UNKNOWN, OrderStatus.REVIEW_REQUIRED):
+                if unit_of_work.orders.list_by_status(status):
+                    raise ResumeBlockedError(
+                        f"resume blocked while {status.value} intents remain unresolved"
+                    )
+            snapshot = unit_of_work.control.set_entries_paused(False, None)
+            self._record(
+                unit_of_work,
+                ControlCommand.RESUME_ENTRIES,
+                "resume after full-scope CLEAN reconciliation",
+                actor,
+            )
+            return snapshot
 
     def cancel_open_orders(
         self,

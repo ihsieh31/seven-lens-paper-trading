@@ -42,6 +42,7 @@ from seven_lens.execution.reconciliation import (
     MismatchKind,
     ReconciliationMismatch,
     ReconciliationResult,
+    ReconciliationScope,
 )
 
 _BASE_TIME = UtcTimestamp.from_isoformat("2026-08-17T13:35:00.000000Z")
@@ -91,6 +92,7 @@ def _clean_run() -> ReconciliationResult:
         checked_orders=0,
         checked_fills=0,
         observed_at=_BASE_TIME,
+        scope=ReconciliationScope.FULL,
     )
 
 
@@ -128,6 +130,18 @@ class TestPauseAndResume:
             plane.resume_entries(unit_of_work, actor="owner")
         unit_of_work.reconciliations.add(_mismatch_run())
         with pytest.raises(ResumeBlockedError):
+            plane.resume_entries(unit_of_work, actor="owner")
+
+        unit_of_work.reconciliations.add(
+            ReconciliationResult.create(
+                trading_date=_TRADING_DATE,
+                mismatches=(),
+                checked_orders=0,
+                checked_fills=0,
+                observed_at=_BASE_TIME,
+            )
+        )
+        with pytest.raises(ResumeBlockedError, match="full-scope"):
             plane.resume_entries(unit_of_work, actor="owner")
 
         unit_of_work.reconciliations.add(_clean_run())
