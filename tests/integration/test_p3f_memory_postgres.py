@@ -303,6 +303,17 @@ def test_correction_requires_superseded_record_available_by_exact_cutoff(
         repository.append_reflection(exact)
         connection.commit()
         assert repository.get(exact.record_id) == exact
+        assert repository.load_reflections(record.available_at) == (record,)
+        assert repository.load_reflections(exact.available_at) == (exact,)
+
+        chain = _correction(
+            exact,
+            cutoff=exact.available_at,
+            record_id="reflection.c5",
+        )
+        repository.append_reflection(chain)
+        connection.commit()
+        assert repository.load_reflections(exact.available_at) == (chain,)
 
         hidden = record.content_wire()
         hidden["record_id"] = "reflection.c3"

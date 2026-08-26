@@ -227,6 +227,15 @@ class InMemoryReflectionRepository:
                 raise RuntimeError("persisted reflection type is invalid")
             record.verify_integrity()
         records = [record for record in records if record.available_at.value <= as_of.value]
+        visible_ids = {record.record_id for record in records}
+        superseded_ids = {
+            observation.supersedes_record_id
+            for correction in records
+            for observation in correction.observations
+            if observation.kind is ObservationKind.CORRECTION
+            and observation.supersedes_record_id in visible_ids
+        }
+        records = [record for record in records if record.record_id not in superseded_ids]
         return tuple(sorted(records, key=lambda item: (item.available_at.value, item.record_id)))
 
 

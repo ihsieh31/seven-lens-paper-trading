@@ -198,6 +198,32 @@ def test_correction_is_a_new_linked_record_and_original_hash_stays_unchanged() -
     assert original.content_hash == before
 
 
+def test_in_memory_repository_loads_only_effective_reflections_as_of_cutoff() -> None:
+    original = record(record_id="reflection.original", created=1, cutoff=0)
+    correction = record(
+        record_id="reflection.2",
+        created=2,
+        cutoff=1,
+        observations=(observation(kind=ObservationKind.CORRECTION, supersedes=original.record_id),),
+    )
+    chain = record(
+        record_id="reflection.3",
+        created=3,
+        cutoff=2,
+        observations=(
+            observation(kind=ObservationKind.CORRECTION, supersedes=correction.record_id),
+        ),
+    )
+    repository = InMemoryReflectionRepository()
+    repository.append(original)
+    repository.append(correction)
+    repository.append(chain)
+
+    assert repository.records_as_of(ts(1)) == (original,)
+    assert repository.records_as_of(ts(2)) == (correction,)
+    assert repository.records_as_of(ts(3)) == (chain,)
+
+
 def test_typed_observation_subclasses_reject_mismatched_kind() -> None:
     values = (
         "Observation",

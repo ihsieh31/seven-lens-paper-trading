@@ -131,12 +131,20 @@ class PostgresMemoryRepository:
             raise ValueError("cutoff must be an exact UtcTimestamp")
         rows = self._connection.execute(
             """
-            SELECT content_hash, content_bytes
-            FROM public.approved_reflection_records
-            WHERE available_at <= %s AND cutoff_at <= %s
-            ORDER BY available_at, reflection_id
+            SELECT record.content_hash, record.content_bytes
+            FROM public.approved_reflection_records AS record
+            WHERE record.available_at <= %s AND record.cutoff_at <= %s
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM public.approved_reflection_records AS correction
+                  WHERE correction.superseded_reflection_id = record.reflection_id
+                    AND correction.created_at <= %s
+                    AND correction.available_at <= %s
+                    AND correction.cutoff_at <= %s
+              )
+            ORDER BY record.available_at, record.reflection_id
             """,
-            (cutoff.value, cutoff.value),
+            (cutoff.value, cutoff.value, cutoff.value, cutoff.value, cutoff.value),
         ).fetchall()
         return tuple(_reflection_from_bytes(bytes(row[1]), str(row[0])) for row in rows)
 
