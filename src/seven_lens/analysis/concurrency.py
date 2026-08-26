@@ -14,9 +14,9 @@ def run_bounded_group[T](
     """Run one logical barrier and return results in the supplied canonical order.
 
     Every task is submitted at most once.  On a member failure, work that has not
-    started is cancelled, running work is drained, and every result is discarded.
-    Draining prevents a late completion from escaping the barrier after its caller
-    has already handled the group failure.
+    started is cancelled, already-running work is abandoned without consuming its
+    result, and the failure returns promptly.  The group never persists a partial
+    result after the barrier has failed.
     """
 
     if type(tasks) is not tuple or not tasks:
@@ -25,16 +25,29 @@ def run_bounded_group[T](
         raise ValueError("parallel group worker bound is invalid")
 
     executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="seven-lens-model")
+    executor_shutdown = False
     futures: tuple[Future[T], ...] = tuple(executor.submit(task) for task in tasks)
     try:
-        _, pending = wait(futures, return_when=FIRST_EXCEPTION)
-        failure = next((future.exception() for future in futures if future.done()), None)
+        done, pending = wait(futures, return_when=FIRST_EXCEPTION)
+        failure = None
+        for future in done:
+            if future.cancelled():
+                continue
+            error = future.exception()
+            if error is not None:
+                failure = error
+                break
         if failure is not None:
             for future in pending:
                 future.cancel()
-            wait(futures)
+            # A running provider call cannot be forcefully stopped.  Do not
+            # hold the caller behind it after the group has already failed;
+            # no result is consumed or persisted from this executor again.
+            executor.shutdown(wait=False, cancel_futures=True)
+            executor_shutdown = True
             raise failure
         wait(futures)
         return tuple(future.result() for future in futures)
     finally:
-        executor.shutdown(wait=True, cancel_futures=True)
+        if not executor_shutdown:
+            executor.shutdown(wait=True, cancel_futures=True)

@@ -50,6 +50,30 @@ def test_bounded_group_is_parallel_bounded_and_joins_in_canonical_order() -> Non
     assert maximum == 3
 
 
+def test_bounded_group_selects_a_later_failure_after_a_fast_success() -> None:
+    def fast_success() -> str:
+        time.sleep(0.01)
+        return "success"
+
+    def delayed_failure() -> str:
+        time.sleep(0.05)
+        raise RuntimeError("delayed group failure")
+
+    def slow_success() -> str:
+        time.sleep(0.6)
+        return "slow"
+
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="delayed group failure"):
+        run_bounded_group(
+            (fast_success, delayed_failure, slow_success),
+            max_workers=3,
+        )
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.35
+
+
 def test_analysis_round_barrier_and_late_success_never_persist_partial_stage() -> None:
     delegate = ScriptedAnalysisProvider(scripted_outputs())
     lock = threading.Lock()
