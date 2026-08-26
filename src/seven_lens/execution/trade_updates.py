@@ -15,6 +15,7 @@ replayed test stream feeds it typed updates.  Safety rules:
 from __future__ import annotations
 
 import contextlib
+import logging
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
@@ -91,6 +92,8 @@ class FillUpdate:
 
 type TradeUpdate = OrderStatusUpdate | FillUpdate
 
+_LOGGER = logging.getLogger(__name__)
+
 
 class _ConsumerOrders(Protocol):
     def get(self, client_order_id: ClientOrderId) -> OrderIntent | None: ...
@@ -153,7 +156,11 @@ class TradeUpdateConsumer:
         # has already cleared derived state, so this is a fresh transaction.
         try:
             unit_of_work.control.set_entries_paused(True, f"reconciliation required; {conflict}")
+            # The safety blocker must survive a later non-essential audit failure.
+            unit_of_work.commit()
         except Exception as exc:
+            with contextlib.suppress(Exception):
+                unit_of_work.rollback()
             raise TradeUpdateError(f"failed to persist entries_paused after {conflict}") from exc
         try:
             from uuid import uuid4
@@ -170,14 +177,22 @@ class TradeUpdateConsumer:
                     applied_at=now,
                 )
             )
-        except TradeUpdateError:
-            raise
         except Exception as exc:
-            raise TradeUpdateError(f"failed to persist pause audit after {conflict}") from exc
+            with contextlib.suppress(Exception):
+                unit_of_work.rollback()
+            _LOGGER.error("trade_update_conflict_pause_audit_failed")
+            raise TradeUpdateError(
+                f"failed to persist pause audit after {conflict}; durable pause remains"
+            ) from exc
         try:
             unit_of_work.commit()
         except Exception as exc:
-            raise TradeUpdateError(f"failed to commit pause after {conflict}") from exc
+            with contextlib.suppress(Exception):
+                unit_of_work.rollback()
+            _LOGGER.error("trade_update_conflict_pause_audit_failed")
+            raise TradeUpdateError(
+                f"failed to commit pause audit after {conflict}; durable pause remains"
+            ) from exc
 
     def _apply_fill(self, unit_of_work: _ConsumerUnitOfWork, fill: Fill) -> TradeUpdateOutcome:
         mirror = unit_of_work.orders.get_broker_order_by_id(fill.broker_order_id)

@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from fakes.control import FakeControlRepository
@@ -272,8 +274,8 @@ class TestStatusConflictConvergence:
         )
         assert current is not None and current.status is expected_intent_status
         assert unit_of_work.rollback_count == rollbacks_before + 1
-        # Rollback happens first; the only commit afterwards is the pause itself.
-        assert unit_of_work.commit_count == commits_before + 1
+        # Rollback happens first; the safety pause and its audit are separate commits.
+        assert unit_of_work.commit_count == commits_before + 2
         state = unit_of_work.control.state()
         assert state.entries_paused is True
         assert state.paused_reason == "reconciliation required; conflicting status"
@@ -420,6 +422,30 @@ class TestStatusConflictConvergence:
         assert unit_of_work.control.commands == []
         assert unit_of_work.rollback_count == 0
         assert unit_of_work.commit_count == 0
+
+    def test_audit_failure_leaves_conflict_pause_durable_and_observable(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        unit_of_work, intent, _mirror = _setup()
+
+        def fail_audit(_record: object) -> object:
+            raise RuntimeError("injected audit repository failure")
+
+        monkeypatch.setattr(unit_of_work.control, "add_command", fail_audit)
+        with (
+            caplog.at_level(logging.ERROR, logger="seven_lens.execution.trade_updates"),
+            pytest.raises(TradeUpdateError, match="audit"),
+        ):
+            TradeUpdateConsumer().apply(
+                unit_of_work,
+                _status_update(intent, BrokerOrderStatus.FILLED, 4, _T2),
+            )
+
+        state = unit_of_work.control.state()
+        assert state.entries_paused is True
+        assert state.paused_reason == "reconciliation required; conflicting status"
+        assert unit_of_work.commit_count == 1
+        assert "trade_update_conflict_pause_audit_failed" in caplog.text
 
     def test_stale_unknown_and_monotonic_paths_never_pause(self) -> None:
         unit_of_work, intent = self._partially_filled_state()

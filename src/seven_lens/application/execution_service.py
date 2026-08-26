@@ -17,7 +17,7 @@ Safety contract implemented here:
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, contextmanager, suppress
 from typing import Protocol
 
 from seven_lens.application.ports.broker import (
@@ -415,7 +415,14 @@ class ExecutionEngine:
             return
         try:
             control.set_entries_paused(True, "reconciliation required; ambiguous broker outcome")
+            if uow_for_commit is not None and hasattr(uow_for_commit, "commit"):
+                # UNKNOWN was committed before entering this helper.  Commit
+                # the global safety blocker before attempting non-essential audit.
+                uow_for_commit.commit()
         except Exception as exc:
+            if uow_for_commit is not None and hasattr(uow_for_commit, "rollback"):
+                with suppress(Exception):
+                    uow_for_commit.rollback()
             raise ControlPersistenceError("failed to persist entries_paused") from exc
         try:
             from uuid import uuid4
@@ -435,13 +442,22 @@ class ExecutionEngine:
                 )
             )
         except Exception as exc:
-            raise ControlPersistenceError("failed to persist pause audit command") from exc
-        # Commit the pause on the same transaction as the UNKNOWN if possible.
+            if uow_for_commit is not None and hasattr(uow_for_commit, "rollback"):
+                with suppress(Exception):
+                    uow_for_commit.rollback()
+            raise ControlPersistenceError(
+                "failed to persist pause audit command; durable pause remains"
+            ) from exc
         if uow_for_commit is not None and hasattr(uow_for_commit, "commit"):
             try:
                 uow_for_commit.commit()
             except Exception as exc:
-                raise ControlPersistenceError("failed to commit pause transaction") from exc
+                if hasattr(uow_for_commit, "rollback"):
+                    with suppress(Exception):
+                        uow_for_commit.rollback()
+                raise ControlPersistenceError(
+                    "failed to commit pause audit; durable pause remains"
+                ) from exc
 
     def _submit_while_guarded(
         self, unit_of_work: _OrderUnitOfWork, submitting: OrderIntent

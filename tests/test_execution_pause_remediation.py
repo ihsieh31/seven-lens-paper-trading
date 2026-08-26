@@ -14,9 +14,13 @@ import pytest
 
 from fakes.control import FakeControlRepository
 from fakes.orders import FakeOrderRepository
-from seven_lens.application.execution_service import ExecutionEngine, ExecutionPausedError
+from seven_lens.application.execution_service import (
+    ControlPersistenceError,
+    ExecutionEngine,
+    ExecutionPausedError,
+)
 from seven_lens.domain.value_objects import RunId, TradingDate, UtcTimestamp
-from seven_lens.execution.fake_broker import FakePaperBroker
+from seven_lens.execution.fake_broker import FakePaperBroker, FakeSubmitOutcome, FakeSubmitPlan
 from seven_lens.execution.orders import (
     OrderIntent,
     OrderIntentType,
@@ -42,8 +46,12 @@ class MutableClock:
 
 
 class FakeOrderUnitOfWork:
-    def __init__(self, orders: FakeOrderRepository) -> None:
+    def __init__(
+        self, orders: FakeOrderRepository, control: FakeControlRepository | None = None
+    ) -> None:
         self.orders = orders
+        if control is not None:
+            self.control = control
         self.commit_count = 0
 
     def commit(self) -> None:
@@ -129,7 +137,7 @@ def _engine(
     if paused:
         control.set_entries_paused(True, "reproduction: entries paused")
     engine = ExecutionEngine(broker=guard, clock=MutableClock(), control=control)
-    unit_of_work = FakeOrderUnitOfWork(orders)
+    unit_of_work = FakeOrderUnitOfWork(orders, control)
     return engine, unit_of_work, guard
 
 
@@ -205,6 +213,36 @@ class TestPauseAllowsRiskExit:
         result = engine.submit_from_outbox(unit_of_work, intent.client_order_id)
 
         assert result.status is OrderStatus.ACKNOWLEDGED
+        assert guard.submit_calls == 1
+
+
+class TestAmbiguousPauseDurability:
+    def test_audit_failure_keeps_unknown_and_pause_durable_and_is_observable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        orders = FakeOrderRepository()
+        intent = _intent()
+        broker = FakePaperBroker(
+            clock=MutableClock(),
+            plans={
+                intent.client_order_id.value: FakeSubmitPlan(
+                    outcome=FakeSubmitOutcome.TIMEOUT_AFTER_ACCEPT
+                )
+            },
+        )
+        engine, unit_of_work, guard = _engine(orders, broker, paused=False)
+        _outbox_intent(orders, intent)
+
+        def fail_audit(_record: object) -> object:
+            raise RuntimeError("injected audit repository failure")
+
+        monkeypatch.setattr(unit_of_work.control, "add_command", fail_audit)
+        with pytest.raises(ControlPersistenceError, match="audit"):
+            engine.submit_from_outbox(unit_of_work, intent.client_order_id)
+
+        current = orders.get(intent.client_order_id)
+        assert current is not None and current.status is OrderStatus.UNKNOWN
+        assert unit_of_work.control.state().entries_paused is True
         assert guard.submit_calls == 1
 
 
