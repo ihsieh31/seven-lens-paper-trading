@@ -356,6 +356,101 @@ def test_correction_requires_superseded_record_available_by_exact_cutoff(
         assert hidden_failure.value.sqlstate == "23514"
 
 
+def test_correction_lineage_has_one_head_and_concurrent_race_has_one_winner(
+    migrated_postgres: str,
+) -> None:
+    record = _reflection("reflection.single-head")
+    first = _correction(
+        record,
+        cutoff=record.available_at,
+        record_id="reflection.single-head.first",
+    )
+    branch = _correction(
+        record,
+        cutoff=record.available_at,
+        record_id="reflection.single-head.branch",
+    )
+    with psycopg.connect(migrated_postgres) as connection:
+        repository = PostgresMemoryRepository(connection)
+        repository.append_reflection(record)
+        repository.append_reflection(first)
+        connection.commit()
+        with pytest.raises(PostgresMemoryError) as failure:
+            repository.append_reflection(branch)
+        assert failure.value.sqlstate == "23505"
+        connection.rollback()
+        assert repository.load_reflections(first.available_at) == (first,)
+
+    race_record = _reflection("reflection.single-head.race")
+    race_corrections = tuple(
+        _correction(
+            race_record,
+            cutoff=race_record.available_at,
+            record_id=f"reflection.single-head.race.{suffix}",
+        )
+        for suffix in ("a", "b")
+    )
+    with psycopg.connect(migrated_postgres) as connection:
+        repository = PostgresMemoryRepository(connection)
+        repository.append_reflection(race_record)
+        connection.commit()
+
+    barrier = Barrier(2)
+
+    def append_race(correction) -> str:  # type: ignore[no-untyped-def]
+        try:
+            with psycopg.connect(migrated_postgres) as connection:
+                repository = PostgresMemoryRepository(connection)
+                barrier.wait(timeout=5)
+                repository.append_reflection(correction)
+                connection.commit()
+                return "success"
+        except PostgresMemoryError as failure:
+            return failure.sqlstate or "unknown"
+        except psycopg.Error as failure:
+            return failure.sqlstate or "unknown"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = tuple(executor.map(append_race, race_corrections))
+    assert sorted(outcomes) == ["23505", "success"]
+
+    with psycopg.connect(migrated_postgres) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM reflection_corrections WHERE superseded_reflection_id = %s",
+            (race_record.record_id,),
+        ).fetchone() == (1,)
+
+
+def test_single_head_migration_rejects_legacy_branch_without_repairing_it(
+    migrated_postgres: str,
+) -> None:
+    from seven_lens.infrastructure.migrations import current_version, migrate, rollback
+
+    assert current_version(migrated_postgres) == 16
+    assert rollback(migrated_postgres) == 15
+    record = _reflection("reflection.legacy-branch")
+    first = _correction(
+        record,
+        cutoff=record.available_at,
+        record_id="reflection.legacy-branch.first",
+    )
+    second = _correction(
+        record,
+        cutoff=record.available_at,
+        record_id="reflection.legacy-branch.second",
+    )
+    with psycopg.connect(migrated_postgres) as connection:
+        repository = PostgresMemoryRepository(connection)
+        repository.append_reflection(record)
+        repository.append_reflection(first)
+        repository.append_reflection(second)
+        connection.commit()
+
+    with pytest.raises(psycopg.errors.CheckViolation, match="branched reflection lineage"):
+        migrate(migrated_postgres)
+    assert current_version(migrated_postgres) == 15
+
+
 def test_correction_replay_rejects_different_reason_identity(migrated_postgres: str) -> None:
     record = _reflection()
     correction = _correction(

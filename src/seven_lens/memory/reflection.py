@@ -206,6 +206,22 @@ class InMemoryReflectionRepository:
                         if item.kind is ObservationKind.CORRECTION
                     }
                     cursor = next(iter(prior_targets)) if prior_targets else None
+                # One source reflection can have only one correction head.  Do
+                # this under the repository lock so two in-memory writers have
+                # the same single-head behavior as the database unique index.
+                for existing_record in self._records.values():
+                    if type(existing_record) is not DailyReflectionRecord:
+                        raise RuntimeError("persisted reflection type is invalid")
+                    existing_record.verify_integrity()
+                    existing_targets = {
+                        item.supersedes_record_id
+                        for item in existing_record.observations
+                        if item.kind is ObservationKind.CORRECTION
+                    }
+                    if target in existing_targets:
+                        raise RuntimeError(
+                            "correction supersedes target already has a correction head"
+                        )
             self._records[record.record_id] = record
 
     def get(self, record_id: str) -> DailyReflectionRecord | None:

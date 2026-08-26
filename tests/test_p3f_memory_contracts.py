@@ -224,6 +224,37 @@ def test_in_memory_repository_loads_only_effective_reflections_as_of_cutoff() ->
     assert repository.records_as_of(ts(3)) == (chain,)
 
 
+def test_in_memory_repository_rejects_correction_branch_but_allows_single_head_chain() -> None:
+    original = record(record_id="reflection.original", created=1, cutoff=0)
+    first = record(
+        record_id="reflection.first",
+        created=2,
+        cutoff=1,
+        observations=(observation(kind=ObservationKind.CORRECTION, supersedes=original.record_id),),
+    )
+    branch = record(
+        record_id="reflection.branch",
+        created=3,
+        cutoff=2,
+        observations=(observation(kind=ObservationKind.CORRECTION, supersedes=original.record_id),),
+    )
+    chain = record(
+        record_id="reflection.chain",
+        created=3,
+        cutoff=2,
+        observations=(observation(kind=ObservationKind.CORRECTION, supersedes=first.record_id),),
+    )
+    repository = InMemoryReflectionRepository()
+    repository.append(original)
+    repository.append(first)
+
+    with pytest.raises(RuntimeError, match="already has a correction"):
+        repository.append(branch)
+
+    repository.append(chain)
+    assert repository.records_as_of(ts(3)) == (chain,)
+
+
 def test_typed_observation_subclasses_reject_mismatched_kind() -> None:
     values = (
         "Observation",
