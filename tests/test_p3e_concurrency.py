@@ -6,6 +6,7 @@ from collections.abc import Callable
 
 import pytest
 
+import seven_lens.analysis.concurrency as concurrency_module
 from seven_lens.analysis.concurrency import run_bounded_group
 from seven_lens.analysis.pipeline import AnalysisPipeline, AnalysisPipelineError
 from seven_lens.analysis.ports import ProviderOutput, ProviderRequest, ScriptedAnalysisProvider
@@ -72,6 +73,42 @@ def test_bounded_group_selects_a_later_failure_after_a_fast_success() -> None:
     elapsed = time.monotonic() - started
 
     assert elapsed < 0.35
+
+
+@pytest.mark.parametrize(
+    ("submitted_labels", "expected"),
+    [(("first", "second"), "first"), (("second", "first"), "second")],
+)
+def test_bounded_group_selects_simultaneous_failure_in_submission_order(
+    monkeypatch: pytest.MonkeyPatch,
+    submitted_labels: tuple[str, str],
+    expected: str,
+) -> None:
+    started = threading.Barrier(3)
+
+    def failing(label: str) -> Callable[[], str]:
+        def execute() -> str:
+            started.wait(timeout=1)
+            raise RuntimeError(label)
+
+        return execute
+
+    def controlled_wait(futures, *, return_when):  # type: ignore[no-untyped-def]
+        del return_when
+        # The caller is the third barrier party.  Both failures are released
+        # before the replacement wait reports the complete done set, making
+        # scheduler order irrelevant to this assertion.
+        started.wait(timeout=1)
+        while not all(future.done() for future in futures):
+            time.sleep(0.001)
+        return set(futures), set()
+
+    monkeypatch.setattr(concurrency_module, "wait", controlled_wait)
+    with pytest.raises(RuntimeError, match=expected):
+        run_bounded_group(
+            tuple(failing(label) for label in submitted_labels),
+            max_workers=2,
+        )
 
 
 def test_analysis_round_barrier_and_late_success_never_persist_partial_stage() -> None:

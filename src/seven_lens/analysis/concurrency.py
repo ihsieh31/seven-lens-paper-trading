@@ -30,7 +30,13 @@ def run_bounded_group[T](
     try:
         done, pending = wait(futures, return_when=FIRST_EXCEPTION)
         failure = None
-        for future in done:
+        completed = set(done)
+        # ``done`` is a set whose iteration order follows scheduler timing.
+        # Use it only as membership information; the submitted tuple is the
+        # canonical task order for selecting among simultaneous failures.
+        for future in futures:
+            if future not in completed:
+                continue
             if future.cancelled():
                 continue
             error = future.exception()
