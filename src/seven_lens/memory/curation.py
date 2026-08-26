@@ -127,10 +127,7 @@ class CurationAuditRecord:
             raise ValueError("audit report hash does not match outcome policy")
         if type(self.case_count) is not int or not 0 <= self.case_count <= 100_000:
             raise ValueError("case_count is outside its bound")
-        if (
-            type(self.accepted_count) is not int
-            or not 0 <= self.accepted_count <= self.case_count
-        ):
+        if type(self.accepted_count) is not int or not 0 <= self.accepted_count <= self.case_count:
             raise ValueError("accepted_count is outside its bound")
         if type(self.latency_ms) is not int or not 0 <= self.latency_ms <= 900_000:
             raise ValueError("latency_ms is outside its bound")

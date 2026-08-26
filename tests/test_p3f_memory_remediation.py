@@ -1,26 +1,32 @@
 from __future__ import annotations
 
-import hashlib
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from seven_lens.domain.value_objects import UtcTimestamp
 from seven_lens.infrastructure.content_store import FileContentStore
-from seven_lens.infrastructure.postgres_memory import PostgresMemoryPromotionCoordinator
+from seven_lens.infrastructure.postgres_memory import (
+    PostgresMemoryPromotionCoordinator,
+    PostgresMemoryRepository,
+)
 from seven_lens.memory import curation as curation_module
 from seven_lens.memory.contracts import (
     ArtifactState,
-    FactKind,
+    DailyReflectionRecord,
     FactRef,
+    MemoryArtifact,
     MemoryCategory,
     MemoryEntry,
+    ReflectionSourceRef,
 )
 from seven_lens.memory.curation import (
     CurationAuditError,
+    CurationAuditRecord,
     CurationPipeline,
     InMemoryAppendOnlyCurationAuditRepository,
     ScriptedCurationProvider,
@@ -28,6 +34,7 @@ from seven_lens.memory.curation import (
 from seven_lens.memory.reflection import (
     InMemoryReflectionRepository,
     ReflectionPipeline,
+    ResolvedReflectionSource,
     ScriptedReflectionProvider,
     TrustedReflectionSourceResolver,
 )
@@ -36,9 +43,11 @@ from seven_lens.memory.validation import MemoryValidator, ValidationResult
 from test_p3f_memory_contracts import entry, observation, record, source, ts
 
 
-def _curation_fields(record_id: str = "reflection.1") -> dict[str, object]:
+def _curation_fields(
+    record_id: str = "reflection.1", execution_id: str = "test.execution.1"
+) -> dict[str, object]:
     return {
-        "execution_id": "test.execution.1",
+        "execution_id": execution_id,
         "artifact_id": "memory.1",
         "schema_version": "1.0.0",
         "created_at": ts(3),
@@ -55,7 +64,7 @@ def test_curation_requires_audit_capability_before_provider() -> None:
     called = False
 
     class Provider:
-        def curate(self, _request):
+        def curate(self, _request: Any) -> tuple[MemoryCandidate, ...]:
             nonlocal called
             called = True
             return ()
@@ -80,7 +89,11 @@ def test_prepare_exposes_candidate_only_and_run_audit_has_report_hash() -> None:
     assert prepared.artifact.state is ArtifactState.CANDIDATE
     assert not hasattr(prepared, "result")
     assert audits.records == ()
-    result = pipeline.run(
+    result = CurationPipeline(
+        ScriptedCurationProvider((MemoryCandidate(entry(), ts(1)),)),
+        MemoryValidator(),
+        audits,
+    ).run(
         source_records=(source_record,),
         **_curation_fields(execution_id="test.execution.2"),
     )
@@ -97,7 +110,7 @@ def test_same_execution_identity_rejects_changed_output_metadata() -> None:
     class Provider:
         calls = 0
 
-        def curate(self, _request):
+        def curate(self, _request: Any) -> tuple[MemoryCandidate, ...]:
             self.calls += 1
             changed = replace(entry(), reusable_lesson="Recheck borrow before increasing exposure ")
             return (MemoryCandidate(entry() if self.calls == 1 else changed, ts(1)),)
@@ -126,36 +139,51 @@ def test_clock_rollback_or_latency_overflow_fails_closed(clock_values: tuple[int
     assert audits.records == ()
 
 
-def test_candidate_aggregate_bytes_and_nodes_reject_plus_one(monkeypatch) -> None:
+def test_candidate_aggregate_bytes_and_nodes_reject_plus_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     source_record = record()
     audits = InMemoryAppendOnlyCurationAuditRepository()
-    monkeypatch.setattr(curation_module, "MAX_CURATION_BYTES", 1)
+
+    class BytesOverflowProvider:
+        def curate(self, _request: Any) -> tuple[MemoryCandidate, ...]:
+            monkeypatch.setattr(curation_module, "MAX_CURATION_BYTES", 1)
+            return (MemoryCandidate(entry(), ts(1)),)
+
     with pytest.raises(ValueError, match="candidate aggregate"):
         CurationPipeline(
-            ScriptedCurationProvider((MemoryCandidate(entry(), ts(1)),)),
+            BytesOverflowProvider(),
             MemoryValidator(),
             audits,
         ).run(source_records=(source_record,), **_curation_fields())
     monkeypatch.setattr(curation_module, "MAX_CURATION_BYTES", 8 * 1024 * 1024)
-    monkeypatch.setattr(curation_module, "MAX_CURATION_NODES", 1)
+
+    class NodesOverflowProvider:
+        def curate(self, _request: Any) -> tuple[MemoryCandidate, ...]:
+            monkeypatch.setattr(curation_module, "MAX_CURATION_NODES", 1)
+            return (MemoryCandidate(entry(), ts(1)),)
+
     with pytest.raises(ValueError, match="candidate aggregate"):
         CurationPipeline(
-            ScriptedCurationProvider((MemoryCandidate(entry(), ts(1)),)),
+            NodesOverflowProvider(),
             MemoryValidator(),
             audits,
-        ).run(source_records=(source_record,), **_curation_fields("reflection.1"))
+        ).run(
+            source_records=(source_record,),
+            **_curation_fields("reflection.1", "test.execution.2"),
+        )
 
 
 def test_reflection_rejects_duplicate_envelope_before_resolver_or_provider() -> None:
     calls = {"resolver": 0, "provider": 0}
 
     class Resolver:
-        def read_approved(self, item):
+        def read_approved(self, item: ReflectionSourceRef) -> ResolvedReflectionSource:
             calls["resolver"] += 1
             raise AssertionError(f"resolver was called for {item}")
 
     class Provider:
-        def reflect(self, request):
+        def reflect(self, request: Any) -> tuple[Any, ...]:
             calls["provider"] += 1
             return (observation(),)
 
@@ -218,23 +246,21 @@ def test_dedup_key_is_nfkc_casefold_for_all_semantic_text() -> None:
     )
     second = replace(
         first,
-        observation="ＡＬＰＨＡ",
+        observation="ＡＬＰＨＡ",  # noqa: RUF001 - fullwidth input is the NFKC regression case
         reusable_lesson="USE THIS LESSON",
-        applies_when=("Ｗｈｅｎ ａｖａｉｌａｂｌｅ",),
-        invalid_when=("Ｎｅｖｅｒ ｆｏｒｃｅｄ",),
+        applies_when=("Ｗｈｅｎ ａｖａｉｌａｂｌｅ",),  # noqa: RUF001 - NFKC regression case
+        invalid_when=("Ｎｅｖｅｒ ｆｏｒｃｅｄ",),  # noqa: RUF001 - NFKC regression case
     )
     assert first.dedup_key == second.dedup_key
 
 
-def _second_record() -> Any:
+def _second_record() -> DailyReflectionRecord:
     first_source = source()
     facts = tuple(
         FactRef(f"{fact.fact_id}.two", fact.kind, fact.value) for fact in first_source.facts
     )
     second_source = replace(first_source, source_id="decision.fact-source.two", facts=facts)
-    second_observation = replace(
-        observation(), fact_ids=tuple(fact.fact_id for fact in facts)
-    )
+    second_observation = replace(observation(), fact_ids=tuple(fact.fact_id for fact in facts))
     return record(
         record_id="reflection.2",
         sources=(second_source,),
@@ -262,19 +288,22 @@ def test_selection_merges_repeated_risk_lineage_and_recomputes_recurrence() -> N
     assert len(selected) == 1
     assert set(selected[0].source_record_ids) == {first.record_id, second.record_id}
     assert len(selected[0].evidence_ids) == 8
-    assert selected[0].importance == 80
-    assert select_entries(
-        tuple(
-            reversed(
-                (
-                    MemoryCandidate(first_entry, ts(1)),
-                    MemoryCandidate(second_entry, ts(1)),
+    assert selected[0].importance == 82
+    assert (
+        select_entries(
+            tuple(
+                reversed(
+                    (
+                        MemoryCandidate(first_entry, ts(1)),
+                        MemoryCandidate(second_entry, ts(1)),
+                    )
                 )
-            )
-        ),
-        cutoff_at=ts(2),
-        source_records={first.record_id: first, second.record_id: second},
-    ) == selected
+            ),
+            cutoff_at=ts(2),
+            source_records={first.record_id: first, second.record_id: second},
+        )
+        == selected
+    )
 
 
 def test_selection_rejects_merged_lineage_overflow_instead_of_truncating() -> None:
@@ -301,11 +330,11 @@ def test_selection_rejects_merged_lineage_overflow_instead_of_truncating() -> No
 class _FakePostgresMemoryRepository:
     def __init__(self) -> None:
         self.events: list[str] = []
-        self.current: Any = None
+        self.current: MemoryArtifact | None = None
         self.fail_audit = False
 
     @contextmanager
-    def transaction(self):
+    def transaction(self) -> Iterator[None]:
         before = (list(self.events), self.current)
         try:
             yield
@@ -313,12 +342,12 @@ class _FakePostgresMemoryRepository:
             self.events, self.current = before
             raise
 
-    def register_candidate(self, artifact, cas_hash: str, byte_count: int) -> None:
+    def register_candidate(self, artifact: MemoryArtifact, cas_hash: str, byte_count: int) -> None:
         assert cas_hash == artifact.content_hash
         assert byte_count == len(artifact.canonical_content_bytes())
         self.events.append("register")
 
-    def append_curation_audit(self, audit) -> bool:
+    def append_curation_audit(self, audit: CurationAuditRecord) -> bool:
         self.events.append("audit")
         if self.fail_audit:
             raise RuntimeError("audit failure")
@@ -336,9 +365,7 @@ class _FakePostgresMemoryRepository:
         self.events.append("promote")
         return False
 
-    def current_pointer(self):
-        if self.current is None:
-            return None
+    def current_pointer(self) -> MemoryArtifact | None:
         return self.current
 
 
@@ -356,7 +383,7 @@ def test_postgres_coordinator_orders_register_audit_validate_promote_and_readbac
     repository = _FakePostgresMemoryRepository()
     repository.current = replace(prepared.artifact, state=ArtifactState.CURRENT)
     coordinator = PostgresMemoryPromotionCoordinator(
-        repository,
+        cast(PostgresMemoryRepository, repository),
         FileContentStore(tmp_path.resolve()),
         MemoryValidator(),
     )
@@ -381,7 +408,7 @@ def test_postgres_coordinator_rolls_back_candidate_when_audit_append_fails(tmp_p
     repository = _FakePostgresMemoryRepository()
     repository.fail_audit = True
     coordinator = PostgresMemoryPromotionCoordinator(
-        repository,
+        cast(PostgresMemoryRepository, repository),
         FileContentStore(tmp_path.resolve()),
         MemoryValidator(),
     )

@@ -21,6 +21,29 @@ from seven_lens.evals.models import (
 )
 
 SPLIT_VERSION: Final = "p3f-synthetic-v3"
+P3F_RESPONSE_CONTRACT_REMEDIATION_SPLIT_VERSION: Final = "p3f-synthetic-v4"
+P3F_TRANSPORT_TIMEOUT_REMEDIATION_SPLIT_VERSION: Final = "p3f-synthetic-v5"
+P3F_TRANSPORT_DEADLINE_REMEDIATION_SPLIT_VERSION: Final = "p3f-synthetic-v6"
+P3F_TRANSPORT_RECOVERY_SPLIT_VERSION: Final = "p3f-synthetic-v7"
+P3F_TRANSPORT_RETEST_SPLIT_VERSION: Final = "p3f-synthetic-v8"
+P3F_TRANSPORT_RETEST_V2_SPLIT_VERSION: Final = "p3f-synthetic-v9"
+P3F_RETRY_GATE_REDESIGN_SPLIT_VERSION: Final = "p3f-synthetic-v10"
+P3F_FENCE_WIRE_REMEDIATION_SPLIT_VERSION: Final = "p3f-synthetic-v11"
+P3F_SHAPE_DIAGNOSTICS_SPLIT_VERSION: Final = "p3f-synthetic-v12"
+SUPPORTED_SPLIT_VERSIONS: Final = frozenset(
+    {
+        SPLIT_VERSION,
+        P3F_RESPONSE_CONTRACT_REMEDIATION_SPLIT_VERSION,
+        P3F_TRANSPORT_TIMEOUT_REMEDIATION_SPLIT_VERSION,
+        P3F_TRANSPORT_DEADLINE_REMEDIATION_SPLIT_VERSION,
+        P3F_TRANSPORT_RECOVERY_SPLIT_VERSION,
+        P3F_TRANSPORT_RETEST_SPLIT_VERSION,
+        P3F_TRANSPORT_RETEST_V2_SPLIT_VERSION,
+        P3F_RETRY_GATE_REDESIGN_SPLIT_VERSION,
+        P3F_FENCE_WIRE_REMEDIATION_SPLIT_VERSION,
+        P3F_SHAPE_DIAGNOSTICS_SPLIT_VERSION,
+    }
+)
 MAX_FIXTURE_BYTES: Final = 8 * 1024 * 1024
 _SPLIT_FILENAME: Final = "split_manifest.json"
 
@@ -135,7 +158,10 @@ def load_eval_corpus(root: Path) -> EvalCorpus:
     material = {key: value for key, value in raw.items() if key != "split_hash"}
     if type(split_hash) is not str or content_hash(cast(JsonValue, material)) != split_hash:
         raise CorpusIntegrityError("split manifest hash mismatch")
-    if raw["split_version"] != SPLIT_VERSION or type(raw["manifests"]) is not dict:
+    split_version = raw["split_version"]
+    if type(split_version) is not str or split_version not in SUPPORTED_SPLIT_VERSIONS:
+        raise CorpusIntegrityError("split manifest version is invalid")
+    if type(raw["manifests"]) is not dict:
         raise CorpusIntegrityError("split manifest version is invalid")
     refs: dict[EvalSplit, SplitReference] = {}
     manifests = cast(dict[str, object], raw["manifests"])
@@ -168,7 +194,7 @@ def load_eval_corpus(root: Path) -> EvalCorpus:
     corpus = EvalCorpus(
         root=normalized,
         split_manifest=SplitManifest(
-            split_version=SPLIT_VERSION,
+            split_version=split_version,
             manifests=MappingProxyType(refs),
             case_assignments=MappingProxyType(assignments),
             split_hash=split_hash,

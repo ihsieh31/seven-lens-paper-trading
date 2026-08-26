@@ -209,7 +209,7 @@ def test_exact_post_wire_has_no_reasoning_tools_state_files_stream_proxy_or_retr
     assert raw.host == "apihub.agnes-ai.com"
     assert raw.path == "/v1/chat/completions"
     assert raw.connect_timeout_seconds == 2.0
-    assert raw.read_timeout_seconds == 30.0
+    assert raw.read_timeout_seconds == 45.0
     assert raw.total_timeout_seconds == 45.0
     wire = json.loads(raw.body)
     assert wire == {

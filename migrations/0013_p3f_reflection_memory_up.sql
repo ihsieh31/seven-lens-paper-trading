@@ -727,7 +727,7 @@ BEGIN
                      OR NOT public.p3f_text_is_safe(fact.value->>'value', 256)
                      OR (fact.value->>'kind' = 'NUMBER'
                          AND fact.value->>'value'
-                             !~ '^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$')
+                             !~ '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$')
                      OR (fact.value->>'kind' = 'DATE'
                          AND fact.value->>'value'
                              !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$')

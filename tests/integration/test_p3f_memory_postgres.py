@@ -486,26 +486,34 @@ def test_historical_read_skips_unsafe_latest_and_returns_none_when_all_are_unsaf
         assert repository.promote(first.artifact_id, first_requested)
         assert repository.promote(second.artifact_id, second_requested)
         connection.commit()
-        connection.execute("ALTER TABLE public.memory_artifact_sources DISABLE TRIGGER "
-                           "memory_artifact_sources_guard_write")
+        connection.execute(
+            "ALTER TABLE public.memory_artifact_sources DISABLE TRIGGER "
+            "memory_artifact_sources_guard_write"
+        )
         connection.execute(
             "DELETE FROM public.memory_artifact_sources WHERE artifact_id = %s",
             (second.artifact_id,),
         )
-        connection.execute("ALTER TABLE public.memory_artifact_sources ENABLE TRIGGER "
-                           "memory_artifact_sources_guard_write")
+        connection.execute(
+            "ALTER TABLE public.memory_artifact_sources ENABLE TRIGGER "
+            "memory_artifact_sources_guard_write"
+        )
         connection.commit()
         current = repository.current_at(second_requested)
         assert current is not None and current.artifact_id == first.artifact_id
 
-        connection.execute("ALTER TABLE public.memory_artifact_sources DISABLE TRIGGER "
-                           "memory_artifact_sources_guard_write")
+        connection.execute(
+            "ALTER TABLE public.memory_artifact_sources DISABLE TRIGGER "
+            "memory_artifact_sources_guard_write"
+        )
         connection.execute(
             "DELETE FROM public.memory_artifact_sources WHERE artifact_id = %s",
             (first.artifact_id,),
         )
-        connection.execute("ALTER TABLE public.memory_artifact_sources ENABLE TRIGGER "
-                           "memory_artifact_sources_guard_write")
+        connection.execute(
+            "ALTER TABLE public.memory_artifact_sources ENABLE TRIGGER "
+            "memory_artifact_sources_guard_write"
+        )
         connection.commit()
         assert repository.current_at(second_requested) is None
 
@@ -853,9 +861,7 @@ def test_database_rejects_correction_mixed_with_ordinary_observation(
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
-    malformed_hash = hashlib.sha256(
-        b"seven-lens.p3f.reflection.v1\0" + malformed_bytes
-    ).hexdigest()
+    malformed_hash = hashlib.sha256(b"seven-lens.p3f.reflection.v1\0" + malformed_bytes).hexdigest()
     with psycopg.connect(migrated_postgres) as connection:
         PostgresMemoryRepository(connection).append_reflection(original)
         with pytest.raises(psycopg.Error) as failure:
@@ -1161,15 +1167,11 @@ def test_postgres_coordinator_rejects_wrong_cas_bytes_before_any_db_transition(
             execution_id="execution.cas.wrong",
         )
         target = (
-            store_root
-            / preparation.artifact.content_hash[:2]
-            / preparation.artifact.content_hash
+            store_root / preparation.artifact.content_hash[:2] / preparation.artifact.content_hash
         )
         target.parent.mkdir(mode=0o700, parents=True)
         target.write_bytes(b"wrong bytes")
-        coordinator = PostgresMemoryPromotionCoordinator(
-            repository, store, MemoryValidator()
-        )
+        coordinator = PostgresMemoryPromotionCoordinator(repository, store, MemoryValidator())
         with pytest.raises(ContentStoreError):
             coordinator.validate_and_promote(
                 preparation,
@@ -1212,9 +1214,7 @@ def test_postgres_coordinator_near_now_readback_and_crash_roll_back_current(
             "memory_coord_a",
             execution_id="execution_coord_a",
         )
-        coordinator = PostgresMemoryPromotionCoordinator(
-            repository, store, MemoryValidator()
-        )
+        coordinator = PostgresMemoryPromotionCoordinator(repository, store, MemoryValidator())
         requested = UtcTimestamp.now()
         result = coordinator.validate_and_promote(
             first,
@@ -1281,9 +1281,7 @@ def test_postgres_combined_audit_failure_rolls_back_candidate_and_audit(
             "memory_audit_failure",
             execution_id="execution_audit_failure",
         )
-        coordinator = PostgresMemoryPromotionCoordinator(
-            repository, store, MemoryValidator()
-        )
+        coordinator = PostgresMemoryPromotionCoordinator(repository, store, MemoryValidator())
         with pytest.raises(RuntimeError, match="audit sink failure"):
             coordinator.validate_and_promote(
                 preparation,
@@ -1409,11 +1407,7 @@ def test_curator_registers_exact_append_only_curation_audit_and_runtime_cannot(
         outcome="SUCCESS",
     )
     args = record.db_parameters()
-    statement = (
-        "SELECT public.register_memory_curation_audit("
-        + ",".join(["%s"] * len(args))
-        + ")"
-    )
+    statement = "SELECT public.register_memory_curation_audit(" + ",".join(["%s"] * len(args)) + ")"
     with psycopg.connect(runtime_dsn) as runtime:
         with pytest.raises(psycopg.Error) as failure:
             runtime.execute(statement, args)
@@ -1464,8 +1458,7 @@ def test_curator_registers_exact_append_only_curation_audit_and_runtime_cannot(
         assert row == args[4:]
         with pytest.raises(psycopg.Error) as failure:
             owner.execute(
-                "UPDATE public.memory_curation_audits SET outcome = 'FAILURE' "
-                "WHERE audit_id = %s",
+                "UPDATE public.memory_curation_audits SET outcome = 'FAILURE' WHERE audit_id = %s",
                 (audit_id,),
             )
         assert failure.value.sqlstate == "55000"
@@ -1507,3 +1500,180 @@ def test_curator_verifier_rejects_extra_function_execute(
         owner.commit()
     with pytest.raises(PostgresRoleError, match="function privileges exceed"):
         verify_memory_curator_role(migrated_postgres, curator_evidence.curator_role)
+
+
+_TYPED_FACT_CASES = (
+    ("decimal", FactKind.NUMBER, "12.50"),
+    ("integer", FactKind.NUMBER, "12"),
+    ("date", FactKind.DATE, "2026-08-24"),
+    ("symbol", FactKind.SYMBOL, "MSFT"),
+    ("reason", FactKind.RISK_REASON, "BORROW"),
+    ("text", FactKind.TEXT, "turnover limit"),
+)
+
+
+def _typed_reflection(case_id: str, kind: FactKind, value: str):
+    fact = FactRef(f"fact.typed.{case_id}", kind, value)
+    source = ReflectionSourceRef(
+        source_id="source.risk.typed",
+        source_type="RISK_REJECTION",
+        content_hash="a" * 64,
+        available_at=_ts("2026-08-24T20:00:00.000000Z"),
+        facts=(fact,),
+    )
+    observation = ReflectionObservation(
+        ObservationKind.RISK_REJECTION,
+        "typed fact recorded",
+        "keep the exact typed value",
+        (),
+        (),
+        (fact.fact_id,),
+    )
+    return build_daily_reflection(
+        record_id=f"reflection.typed.{case_id}",
+        schema_version="1.0.0",
+        as_of=_ts("2026-08-24T20:30:00.000000Z"),
+        cutoff_at=_ts("2026-08-24T20:00:00.000000Z"),
+        created_at=_ts("2026-08-24T21:00:00.000000Z"),
+        available_at=_ts("2026-08-24T21:00:00.000000Z"),
+        proposal_id="proposal.1",
+        decision_id="decision.1",
+        research_bundle_hash="b" * 64,
+        portfolio_snapshot_hash="c" * 64,
+        sources=(source,),
+        observations=(observation,),
+        prompt_version="prompt.1",
+        model_version="model.1",
+        provider_version="scripted.1",
+        data_version="data.1",
+        memory_version="memory.1",
+    )
+
+
+def _typed_candidate(record, artifact_id: str):
+    entry = MemoryEntry(
+        MemoryCategory.RISK_REJECTION,
+        78,
+        "typed fact recorded",
+        "keep the exact typed value",
+        (),
+        (),
+        (record.sources[0].facts[0].fact_id,),
+        (record.record_id,),
+        (),
+    )
+    return build_memory_artifact(
+        artifact_id=artifact_id,
+        schema_version="1.0.0",
+        created_at=_ts("2026-08-25T00:00:00.000000Z"),
+        cutoff_at=record.available_at,
+        source_record_ids=(record.record_id,),
+        previous_artifact_id=None,
+        entries=(entry,),
+        prompt_version="prompt.1",
+        model_version="model.1",
+        provider_version="scripted.1",
+    )
+
+
+@pytest.mark.parametrize(("case_id", "kind", "value"), _TYPED_FACT_CASES)
+def test_every_typed_fact_kind_appends_readbacks_and_second_append_is_idempotent(
+    migrated_postgres: str,
+    case_id: str,
+    kind: FactKind,
+    value: str,
+) -> None:
+    record = _typed_reflection(case_id, kind, value)
+    with psycopg.connect(migrated_postgres) as connection:
+        repository = PostgresMemoryRepository(connection)
+        repository.append_reflection(record)
+        stored = connection.execute(
+            "SELECT content_hash FROM public.reflection_records WHERE reflection_id = %s",
+            (record.record_id,),
+        ).fetchone()
+        assert stored == (record.content_hash,)
+        assert repository.get(record.record_id) == record
+        repository.append_reflection(record)
+        replayed = connection.execute(
+            "SELECT content_hash FROM public.reflection_records WHERE reflection_id = %s",
+            (record.record_id,),
+        ).fetchone()
+        assert replayed == (record.content_hash,)
+        connection.commit()
+
+
+def test_decimal_number_fact_supports_full_promotion_chain_and_exact_readback(
+    migrated_postgres: str,
+) -> None:
+    record = _typed_reflection("decimal", FactKind.NUMBER, "12.50")
+    candidate = _typed_candidate(record, "memory.typed.decimal")
+    requested = UtcTimestamp(datetime.now(UTC) + timedelta(minutes=1))
+    with psycopg.connect(migrated_postgres) as connection:
+        repository = PostgresMemoryRepository(connection)
+        repository.append_reflection(record)
+        _register_and_validate(repository, record, candidate)
+        assert repository.promote(candidate.artifact_id, requested) is True
+        connection.commit()
+        for current in (repository.current_at(requested), repository.current_pointer()):
+            assert current is not None
+            assert current.artifact_id == candidate.artifact_id
+            assert current.content_hash == candidate.content_hash
+            assert current.state is ArtifactState.CURRENT
+            assert current.canonical_content_bytes() == candidate.canonical_content_bytes()
+
+
+@pytest.mark.parametrize("bad_value", ("12.5.", "1e3", "012.50"))
+def test_noncanonical_decimal_fact_rejected_by_python_contract(bad_value: str) -> None:
+    with pytest.raises(ValueError):
+        FactRef("fact.bad.number", FactKind.NUMBER, bad_value)
+
+
+@pytest.mark.parametrize("bad_value", ("12.5.", "1e3", "012.50"))
+def test_database_still_rejects_noncanonical_decimal_number_wire(
+    migrated_postgres: str,
+    bad_value: str,
+) -> None:
+    record = _reflection("reflection.bad.number")
+    malformed = record.content_wire()
+    malformed["sources"][0]["facts"][0]["kind"] = "NUMBER"
+    malformed["sources"][0]["facts"][0]["value"] = bad_value
+    malformed_bytes = json.dumps(
+        malformed,
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    malformed_hash = hashlib.sha256(b"seven-lens.p3f.reflection.v1\0" + malformed_bytes).hexdigest()
+    with psycopg.connect(migrated_postgres) as connection:
+        with pytest.raises(psycopg.Error) as failure:
+            connection.execute(
+                "SELECT public.register_reflection_record(" + ",".join(["%s"] * 24) + ")",
+                (
+                    record.record_id,
+                    record.schema_version,
+                    "DAILY",
+                    record.created_at.value,
+                    record.available_at.value,
+                    record.as_of.value,
+                    record.cutoff_at.value,
+                    record.proposal_id,
+                    record.decision_id,
+                    record.research_bundle_hash,
+                    record.portfolio_snapshot_hash,
+                    malformed_hash,
+                    malformed_bytes,
+                    record.prompt_version,
+                    record.model_version,
+                    record.provider_version,
+                    record.data_version,
+                    record.memory_version,
+                    [item.source_id for item in record.sources],
+                    [item.source_type for item in record.sources],
+                    [item.content_hash for item in record.sources],
+                    [item.available_at.value for item in record.sources],
+                    None,
+                    None,
+                ),
+            )
+        assert failure.value.sqlstate == "23514"

@@ -546,6 +546,8 @@ def build_agnes_request_body(config: AgnesProviderConfig, request: JsonModelRequ
         "stream": False,
         "temperature": config.temperature,
     }
+    if request.response_format is not None:
+        wire["response_format"] = dict(request.response_format)
     try:
         body = json.dumps(
             wire,

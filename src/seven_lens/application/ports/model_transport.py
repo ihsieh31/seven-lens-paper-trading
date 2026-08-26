@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
@@ -13,6 +14,9 @@ _HASH = re.compile(r"^[0-9a-f]{64}$")
 _RESPONSE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _MAX_MESSAGE_BYTES = 131_072
 _MAX_RESPONSE_CONTENT_BYTES = 131_072
+_MAX_RESPONSE_FORMAT_NODES = 128
+_MAX_RESPONSE_FORMAT_DEPTH = 8
+_MAX_RESPONSE_FORMAT_STRING_BYTES = 512
 
 
 class JsonMessageRole(StrEnum):
@@ -51,6 +55,7 @@ class JsonModelRequest:
     messages: tuple[JsonModelMessage, ...]
     deadline: UtcTimestamp
     max_output_tokens: int
+    response_format: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if type(self.call_id) is not RunId:
@@ -76,14 +81,41 @@ class JsonModelRequest:
             raise ValueError("model request deadline is invalid")
         if type(self.max_output_tokens) is not int or not 1 <= self.max_output_tokens <= 65_536:
             raise ValueError("model request output token limit is invalid")
+        if self.response_format is not None and not _valid_response_format(
+            self.response_format, depth=0
+        ):
+            raise ValueError("model request response format is invalid")
 
     def __repr__(self) -> str:
         return (
             "JsonModelRequest("
             f"call_id={str(self.call_id)!r}, messages=[REDACTED], "
             f"message_count={len(self.messages)}, deadline={str(self.deadline)!r}, "
-            f"max_output_tokens={self.max_output_tokens})"
+            f"max_output_tokens={self.max_output_tokens}, "
+            f"response_format={'SET' if self.response_format is not None else 'NONE'})"
         )
+
+
+def _valid_response_format(value: object, *, depth: int) -> bool:
+    if depth > _MAX_RESPONSE_FORMAT_DEPTH:
+        return False
+    if value is None or type(value) is bool or type(value) is int:
+        return True
+    if type(value) is float:
+        return value == value and value not in (float("inf"), float("-inf"))
+    if type(value) is str:
+        return 0 < len(value.encode("utf-8")) <= _MAX_RESPONSE_FORMAT_STRING_BYTES
+    if type(value) is list:
+        return len(value) <= _MAX_RESPONSE_FORMAT_NODES and all(
+            _valid_response_format(item, depth=depth + 1) for item in value
+        )
+    if isinstance(value, Mapping):
+        return (
+            len(value) <= _MAX_RESPONSE_FORMAT_NODES
+            and all(type(key) is str and 0 < len(key) <= 128 for key in value)
+            and all(_valid_response_format(item, depth=depth + 1) for item in value.values())
+        )
+    return False
 
 
 @dataclass(frozen=True, slots=True, repr=False)

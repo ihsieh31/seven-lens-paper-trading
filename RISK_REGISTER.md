@@ -47,3 +47,4 @@ remote acceptance。
 | R-31 | 單點壞價、延遲新聞或來源衝突被誤判為突發事件 | 高 | 極高 | 兩family各三個ordered fresh samples、official kind/family精確綁定、timestamp gate、DATA_CONFLICT、緊急graph只減風險 | Data/Risk | Mitigated（P3-B Accepted；P5/Paper持續重驗） |
 | R-32 | Agnes／Muse reasoning 參數或 API 類型不一致造成未察覺降級 | 高 | 高 | capability negotiation、requested/effective audit、Chat/Responses adapters、一次 failover、schema/held-out eval | Research | Open（P3） |
 | R-33 | 反思記憶無限增長、被壓縮器改寫事實或把 future outcome 洩漏給歷史 run | 中 | 高 | immutable raw audit、每日 lineage、週六專用 skill、LLM-visible ≤4,000 行、as-of/time-travel tests | Research/Data | Open（P3/P5） |
+| R-34 | 將provider timeout誤判為程式錯誤而反覆換held-out split，或把單次全綠誤當永久可用性 | 高 | 高 | ADR-033：功能／transport Gate分離、每案最多2 retry、780 attempt cap、backoff+jitter、3-case circuit breaker、rolling 7日≥200 canary | Research/Ops | Open（P3-F quality待live evidence；transport為P6 blocker） |

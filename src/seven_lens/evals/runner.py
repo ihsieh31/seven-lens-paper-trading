@@ -182,8 +182,10 @@ def run_final_offline_evaluation(corpus: EvalCorpus) -> EvalReport:
     }
 
     wire: dict[str, JsonValue] = {
-        "schema_version": "seven-lens.p3f.offline-eval-report.v1",
-        "report_id": "p3f-offline-scripted-v3",
+        "schema_version": "seven-lens.p3f.offline-eval-report.v2",
+        "report_id": (
+            f"p3f-offline-scripted-{corpus.split_manifest.split_version.rsplit('-', 1)[1]}"
+        ),
         "split_version": corpus.split_manifest.split_version,
         "split_hash": corpus.split_manifest.split_hash,
         "execution": {
@@ -220,17 +222,20 @@ def run_final_offline_evaluation(corpus: EvalCorpus) -> EvalReport:
                 invalid_recalled, len(invalid_cases), 1.0
             ),
             "latency": cast(JsonValue, latency),
-            "real_provider_valid_primary": {
+            "live_model_quality": {
                 "status": "NOT_RUN",
-                "threshold": 0.98,
+                "minimum_completed_cases": 250,
+                "minimum_correct_rate": 0.98,
+                "response_contract_violations_max": 0,
                 "numerator": 0,
                 "denominator": 0,
             },
-            "real_provider_valid_after_one_fallback": {
+            "provider_transport_reliability": {
                 "status": "NOT_RUN",
-                "threshold": 0.99,
-                "numerator": 0,
-                "denominator": 0,
+                "first_attempt_success_minimum": 0.95,
+                "eventual_success_minimum": 0.99,
+                "maximum_retries_per_case": 2,
+                "fallback_attempts": 0,
             },
         },
         "thresholds": {
@@ -241,6 +246,11 @@ def run_final_offline_evaluation(corpus: EvalCorpus) -> EvalReport:
             "route_invalid_ambiguous_held_out_minimum": ROUTE_INVALID_MINIMUM,
             "normal_deadline_ms": NORMAL_DEADLINE_MS,
             "emergency_deadline_ms": EMERGENCY_DEADLINE_MS,
+            "live_quality_minimum_completed_cases": 250,
+            "live_quality_minimum_correct_rate": 0.98,
+            "transport_first_attempt_success_minimum": 0.95,
+            "transport_eventual_success_minimum": 0.99,
+            "maximum_retries_per_case": 2,
         },
         "anti_contamination": {
             "held_out_answers_loaded_only_by": "final_evaluation",

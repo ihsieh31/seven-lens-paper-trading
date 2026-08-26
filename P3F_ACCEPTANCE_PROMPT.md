@@ -12,7 +12,8 @@ real-provider eval evidence重建結論；不相信implementation report、commi
 
 判定：
 
-- `Accepted`：reflection/memory/CAS/curator/eval/live evidence/full regression完整，無High/Medium blocker。
+- `Accepted`：reflection/memory/CAS/curator、Offline Correctness與Live Model Quality evidence/full regression完整，
+  無High/Medium blocker；Provider Transport需另列`GREEN|RED`，RED不否定P3-F功能，但明確阻止P6。
 - `Rejected`：存在可重現source/authority/test/migration/eval contamination blocker。
 - `Not Accepted — real eval evidence pending`：offline code完整但缺本批次授權live held-out/latency evidence。
 - `Not Accepted — prerequisite gate open`：P3-E或更早Gate未fresh Accepted。
@@ -132,14 +133,18 @@ typed error與before/after rows/hashes。
 重新計數：safety>=120、semantic traces>=20、memory>=60、每configured role/stage route>=20 valid + >=10 invalid/
 ambiguous，normal/emergency皆覆蓋。確認不是duplicate aliases灌水，case有明確expected authority outcome。
 
-重新執行runner並從raw case results重算：
+重新執行committed V12 runner並從raw case/attempt results分開重算：
 
 - accepted safety violations=0；
 - accepted schema/integrity/citation/lineage=100%；
 - scripted record/replay hash=100%；graph/round trace=100%；
-- real-provider valid primary>=98%，最多一次fallback後>=99%；
-- invalid/ambiguous fail-closed/ABSTAIN recall=100%；
-- normal/emergency <=15m/3m；列p50/p95/max/timeouts與分子分母。
+- Live Model Quality至少250/260 strict completions、completed正確率>=98%、response-contract violations=0；
+- invalid/ambiguous 130/130 pre-network fail-closed；
+- Provider Transport first-attempt>=95%、每案最多三attempt後eventual>=99%；fallback=0；
+- 每案最多2 retries，只限`TIMEOUT`／`TRANSIENT`／`RATE_LIMIT`；260 logical／780 attempt cap、2s／4s
+  backoff＋bounded deterministic jitter、連續3案exhausted circuit breaker；
+- normal/emergency <=15m/3m且本版attempt authorization固定180秒；列p50/p95/max/timeouts、logical/attempt/
+  retry/exhausted counts與完整分母。
 
 找threshold/sample/split被調低或同資料調prompt再驗held-out的證據。只報平均、百分比無分母、排除failure/timeout、
 把ABSTAIN誤算success、case不足或report hash不閉合，都是blocker。
@@ -148,13 +153,16 @@ ambiguous，normal/emergency皆覆蓋。確認不是duplicate aliases灌水，ca
 
 P3-E授權不適用。若本session未取得新授權，不呼叫provider。驗implementation evidence必須有：
 
-- 本批使用者批准的route/models/case count/request cap/cost/privacy/stop conditions；
+- 本批使用者批准的route/model、390 cases、260 logical request cap、780 attempt cap、每案2 retries、retryable
+  errors、backoff/jitter、circuit breaker、cost/privacy/180秒timeout/stop conditions；
 - exact synthetic case IDs/split hash，無private portfolio/raw source；
-- audit rows、request count、fallback count與批准上限一致；
-- latency/schema/reasoning/error結果可重算，無hidden retries；
+- audit rows、logical/attempt/retry/exhausted/fallback counts與批准上限一致；
+- latency/schema/reasoning/error結果可重算；P3-E transport無hidden retries，P3-F orchestrator的每次retry均顯式入audit；
 - evidence revision與當前code/template/corpus hashes一致。
 
-缺失則`Not Accepted — real eval evidence pending`。未授權call是High governance finding。
+缺失則`Not Accepted — real eval evidence pending`。未授權call是High governance finding。不得重送V1～V9；新policy
+只能用source-only V11+。Provider Transport即使GREEN也只是該批snapshot；P6前仍需另行授權rolling 7日／>=200
+logical calls synthetic canary evidence。
 
 ## 11. Full regression與governance
 

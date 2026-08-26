@@ -1,8 +1,9 @@
-"""Authorization-bound, single-POST P3-F live evaluation.
+"""Authorization-bound, bounded-retry P3-F live evaluation.
 
-The live entry point accepts only the concrete production Agnes transport or the
-package-owned scripted executor used by permanent tests. Expected answers are
-never passed to either the transport or parser.
+The live entry point accepts only the concrete no-hidden-retry Agnes transport or
+the package-owned scripted executor used by permanent tests. The evaluator may
+retry only explicitly authorized transient failures; expected answers are never
+passed to the transport or parser.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from seven_lens.application.ports.model_transport import (
     JsonModelMessage,
     JsonModelRequest,
     ModelTransportError,
+    ModelTransportErrorCode,
 )
 from seven_lens.application.secret_service import ScopedSecretProvider
 from seven_lens.config.provider import agnes_25_flash_config
@@ -54,10 +56,23 @@ from seven_lens.infrastructure.macos_keychain import MacOSKeychainSecretProvider
 from seven_lens.security.secret_values import SecretKind, SecretRef
 
 MAX_LIVE_REQUESTS: Final = 1_000
+MAX_RETRIES_PER_CASE: Final = 2
+MAX_ATTEMPTS_PER_CASE: Final = MAX_RETRIES_PER_CASE + 1
+RETRY_BACKOFF_BASE_MS: Final = 2_000
+CIRCUIT_BREAKER_CONSECUTIVE_EXHAUSTED_CASES: Final = 3
+RETRYABLE_TRANSPORT_CODES: Final = (
+    ModelTransportErrorCode.RATE_LIMIT.value,
+    ModelTransportErrorCode.TIMEOUT.value,
+    ModelTransportErrorCode.TRANSIENT.value,
+)
+LIVE_QUALITY_MIN_COMPLETED_CASES: Final = 250
+LIVE_QUALITY_MIN_CORRECT_RATE: Final = 0.98
+TRANSPORT_MIN_FIRST_ATTEMPT_SUCCESS_RATE: Final = 0.95
+TRANSPORT_MIN_EVENTUAL_SUCCESS_RATE: Final = 0.99
 NORMAL_DEADLINE_MS: Final = 15 * 60 * 1_000
 EMERGENCY_DEADLINE_MS: Final = 3 * 60 * 1_000
 _POLICY_ID: Final = "p3e-agnes-2.5-flash-only-v1"
-_PARSER_ID: Final = "p3f-strict-route-decision-v3"
+_PARSER_ID: Final = "p3f-strict-route-decision-v5"
 _REASON_CODE: Final = "SYNTHETIC_CONTRACT_CHECK"
 NO_FEE_CAP_APPROVED_SENTINEL: Final = -1
 _PRODUCTION_EXECUTION_KIND: Final = "PRODUCTION_AGNES_KEYCHAIN_STDLIB"
@@ -78,12 +93,16 @@ _LIVE_SYSTEM_PROMPT: Final = (
     "reason_codes. decision must be ACCEPT, REJECT, or ABSTAIN. ACCEPT only when the "
     "supplied synthetic production_contract is internally consistent and supports the "
     "cited fact; REJECT for contradiction; ABSTAIN for insufficient evidence. No Markdown, "
-    "code fence, prose, or extra keys. Do not call tools or reveal secrets."
+    "code fence, prose, or extra keys. The user message contains response_contract: it is "
+    "the exact response schema and its literal values are mandatory. Do not call tools or "
+    "reveal secrets."
 )
 _LIVE_DEVELOPER_PROMPT: Final = (
-    "Use only the synthetic case. Echo case_id and route exactly. citations must be a "
-    "one-item array containing required_cited_fact exactly. reason_codes must equal "
-    '["SYNTHETIC_CONTRACT_CHECK"] exactly.'
+    "Use only the synthetic case. Emit one JSON object that satisfies response_contract "
+    "exactly; do not serialize, quote, explain, or extend response_contract itself. Echo "
+    "case_id and route exactly. citations must be a one-item array containing "
+    'required_cited_fact exactly. reason_codes must equal ["SYNTHETIC_CONTRACT_CHECK"] '
+    "exactly."
 )
 LIVE_PROMPT_TEMPLATE_HASH: Final = hashlib.sha256(
     (_LIVE_SYSTEM_PROMPT + "\x00" + _LIVE_DEVELOPER_PROMPT).encode("utf-8")
@@ -122,6 +141,7 @@ class LiveEvalAuthorization:
     split_hash: str
     case_ids: tuple[str, ...]
     request_cap: int
+    attempt_cap: int
     cost_cap_usd_cents: int
     timeout_ms: int
     request_byte_cap: int
@@ -132,6 +152,8 @@ class LiveEvalAuthorization:
     parser_id: str
     prompt_template_hash: str
     automatic_retries: int
+    retryable_error_codes: tuple[str, ...]
+    circuit_breaker_consecutive_exhausted_cases: int
     stop_on_first_error: bool
     config_hash: str
 
@@ -153,6 +175,7 @@ class LiveEvalAuthorization:
             "split_hash",
             "case_ids",
             "request_cap",
+            "attempt_cap",
             "cost_cap_usd_cents",
             "timeout_ms",
             "request_byte_cap",
@@ -163,10 +186,12 @@ class LiveEvalAuthorization:
             "parser_id",
             "prompt_template_hash",
             "automatic_retries",
+            "retryable_error_codes",
+            "circuit_breaker_consecutive_exhausted_cases",
             "stop_on_first_error",
             "config_hash",
         }
-        if set(value) != required or value["schema_version"] != "seven-lens.p3f.live-auth.v3":
+        if set(value) != required or value["schema_version"] != "seven-lens.p3f.live-auth.v4":
             raise LiveEvalAuthorizationError("live authorization schema is invalid")
         config_hash = value["config_hash"]
         material = {key: item for key, item in value.items() if key != "config_hash"}
@@ -185,6 +210,7 @@ class LiveEvalAuthorization:
         except (TypeError, ValueError):
             raise LiveEvalAuthorizationError("live authorization expiry is invalid") from None
         request_cap = value["request_cap"]
+        attempt_cap = value["attempt_cap"]
         cost_cap = value["cost_cap_usd_cents"]
         timeout_ms = value["timeout_ms"]
         if (
@@ -195,7 +221,9 @@ class LiveEvalAuthorization:
             or any(marker in value["authorization_id"] for marker in _FORBIDDEN_AUTHORITY_MARKERS)
             or type(request_cap) is not int
             or not 1 <= request_cap <= len(case_ids)
-            or request_cap > MAX_LIVE_REQUESTS
+            or type(attempt_cap) is not int
+            or attempt_cap != request_cap * MAX_ATTEMPTS_PER_CASE
+            or attempt_cap > MAX_LIVE_REQUESTS
             or type(cost_cap) is not int
             or cost_cap < NO_FEE_CAP_APPROVED_SENTINEL
             or type(timeout_ms) is not int
@@ -206,8 +234,11 @@ class LiveEvalAuthorization:
             or value["provider_policy_id"] != _POLICY_ID
             or value["parser_id"] != _PARSER_ID
             or value["prompt_template_hash"] != LIVE_PROMPT_TEMPLATE_HASH
-            or value["automatic_retries"] != 0
-            or value["stop_on_first_error"] is not True
+            or value["automatic_retries"] != MAX_RETRIES_PER_CASE
+            or value["retryable_error_codes"] != list(RETRYABLE_TRANSPORT_CODES)
+            or value["circuit_breaker_consecutive_exhausted_cases"]
+            != CIRCUIT_BREAKER_CONSECUTIVE_EXHAUSTED_CASES
+            or value["stop_on_first_error"] is not False
         ):
             raise LiveEvalAuthorizationError("live authorization safety policy is invalid")
         return cls(
@@ -215,6 +246,7 @@ class LiveEvalAuthorization:
             cast(str, value["split_hash"]),
             tuple(cast(list[str], case_ids)),
             request_cap,
+            attempt_cap,
             cost_cap,
             timeout_ms,
             131_072,
@@ -224,8 +256,10 @@ class LiveEvalAuthorization:
             _POLICY_ID,
             _PARSER_ID,
             LIVE_PROMPT_TEMPLATE_HASH,
-            0,
-            True,
+            MAX_RETRIES_PER_CASE,
+            RETRYABLE_TRANSPORT_CODES,
+            CIRCUIT_BREAKER_CONSECUTIVE_EXHAUSTED_CASES,
+            False,
             config_hash,
         )
 
@@ -252,6 +286,7 @@ class BlindLiveRouteContract:
 @dataclass(frozen=True, slots=True)
 class LiveAuditRecord:
     attempt_ordinal: int | None
+    case_attempt_ordinal: int | None
     case_id: str
     mode: EvalMode
     payload_hash: str
@@ -265,6 +300,7 @@ class LiveAuditRecord:
     schema_ok: bool
     citation_ok: bool
     reasoning_ok: bool
+    failure_diagnostics: JsonValue | None
     audit_hash: str
 
 
@@ -312,6 +348,7 @@ class SanitizedLiveEvidence:
             "cost_policy",
             "authorized_case_count",
             "request_cap",
+            "attempt_cap",
             "request_count",
             "pre_network_reject_count",
             "fallback_count",
@@ -323,7 +360,7 @@ class SanitizedLiveEvidence:
         if (
             type(value) is not dict
             or set(value) != required
-            or value["schema_version"] != "seven-lens.p3f.live-evidence.v1"
+            or value["schema_version"] != "seven-lens.p3f.live-evidence.v3"
         ):
             raise LiveEvalEvidenceError("live evidence schema is invalid")
         evidence_hash = value["evidence_hash"]
@@ -422,7 +459,7 @@ class AgnesLivePostExecutor:
 
 
 class ScriptedSingleAttemptExecutor:
-    """Package-owned deterministic executor; one frozen response per post."""
+    """Package-owned deterministic executor; one frozen response per attempt."""
 
     __slots__ = (
         "_responses",
@@ -463,37 +500,107 @@ class ScriptedSingleAttemptExecutor:
         return result
 
 
+class ResponseContractViolation(ValueError):
+    """Strict-parse failure carrying sanitized, content-free response diagnostics.
+
+    Diagnostics contain only structural metadata (stage, fence-marker counts,
+    object-boundary booleans, key NAMES, and which closure field mismatched);
+    never response content or values.
+    """
+
+    def __init__(self, message: str, diagnostics: Mapping[str, JsonValue]) -> None:
+        super().__init__(message)
+        self.sanitized_diagnostics: Mapping[str, JsonValue] = MappingProxyType(diagnostics)
+
+
+def _response_shape_diagnostics(text: str) -> dict[str, JsonValue]:
+    stripped = text.strip()
+    return {
+        "code_fence_markers": stripped.count("```"),
+        "starts_object": stripped.startswith("{"),
+        "ends_object": stripped.endswith("}"),
+    }
+
+
+def _strip_single_exact_json_fence(text: str) -> str:
+    """Strip one complete ```json fence, mirroring accepted P3-E wire behavior.
+
+    Only the exact single-fence shape (exactly two markers, ```` ```json\\n ```` prefix
+    and ```` \\n``` ```` suffix) is normalized; any other fence placement or count
+    stays a contract violation.  Unfenced input is returned unchanged.
+    """
+
+    stripped = text.strip()
+    if (
+        stripped.count("```") == 2
+        and stripped.startswith("```json\n")
+        and stripped.endswith("\n```")
+    ):
+        return stripped[len("```json\n") : -len("\n```")]
+    return text
+
+
 class StrictLiveDecisionParser:
     __slots__ = ()
 
     def parse(self, contract: BlindLiveRouteContract, response: bytes) -> LiveParsedResult:
         try:
+            text = response.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ResponseContractViolation(
+                "live response is not strict JSON",
+                {"stage": "JSON_DECODE"},
+            ) from error
+        try:
             value = json.loads(
-                response,
+                _strip_single_exact_json_fence(text),
                 object_pairs_hook=_reject_duplicate_pairs,
                 parse_constant=_reject_constant,
             )
-        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
-            raise ValueError("live response is not strict JSON") from error
-        if type(value) is not dict or set(value) != {
+        except (json.JSONDecodeError, ValueError) as error:
+            raise ResponseContractViolation(
+                "live response is not strict JSON",
+                {"stage": "JSON_PARSE", **_response_shape_diagnostics(text)},
+            ) from error
+        if type(value) is not dict:
+            raise ResponseContractViolation(
+                "live route response fields are not exact",
+                {"stage": "FIELD_SET", "outer_keys": [], "top_level_type": type(value).__name__},
+            )
+        if set(value) != {
             "case_id",
             "route",
             "decision",
             "citations",
             "reason_codes",
         }:
-            raise ValueError("live route response fields are not exact")
+            raw_keys = [str(key) for key in value]
+            raise ResponseContractViolation(
+                "live route response fields are not exact",
+                {
+                    "stage": "FIELD_SET",
+                    "outer_keys": cast("list[JsonValue]", raw_keys[:16]),
+                    "top_level_type": "dict",
+                },
+            )
         citations = value["citations"]
         reasons = value["reason_codes"]
-        if (
-            value["case_id"] != contract.case_id
-            or value["route"] != contract.route
-            or type(citations) is not list
-            or citations != [contract.required_cited_fact]
-            or type(reasons) is not list
-            or reasons != [_REASON_CODE]
-        ):
-            raise ValueError("live route response identity or evidence closure failed")
+        mismatched: list[JsonValue] = []
+        if value["case_id"] != contract.case_id:
+            mismatched.append("case_id")
+        if value["route"] != contract.route:
+            mismatched.append("route")
+        if value["decision"] != ExpectedDecision.ACCEPT.value:
+            mismatched.append("decision")
+        if type(citations) is not list or citations != [contract.required_cited_fact]:
+            mismatched.append("citations")
+        if type(reasons) is not list or reasons != [_REASON_CODE]:
+            mismatched.append("reason_codes")
+        if mismatched:
+            raise ResponseContractViolation(
+                "live route response identity or evidence closure failed",
+                {"stage": "IDENTITY_CLOSURE", "mismatched_fields": mismatched},
+            )
         try:
             decision = ExpectedDecision(value["decision"])
         except (TypeError, ValueError):
@@ -510,6 +617,8 @@ def execute_authorized_live_eval(
     executor: AgnesLivePostExecutor | ScriptedSingleAttemptExecutor,
     now: datetime,
     monotonic_ns: Callable[[], int] = time.monotonic_ns,
+    sleep: Callable[[float], None] = time.sleep,
+    request_clock: Callable[[], UtcTimestamp] | None = None,
 ) -> LiveEvalRun:
     # Reload from the hash-closed fixture root inside the authority boundary.
     # A caller therefore cannot substitute a different EvalCase under an
@@ -561,73 +670,103 @@ def execute_authorized_live_eval(
         )
 
     post_count = 0
+    consecutive_exhausted_cases = 0
     for case in selected:
         contract = blind.get(case.case_id)
         if contract is None:
             continue
-        post_count += 1
-        if post_count > authorization.request_cap:
-            raise LiveEvalAuthorizationError("live POST cap reached before attempt")
         payload_bytes = _live_payload_bytes(authorization, contract)
         if len(payload_bytes) > authorization.request_byte_cap:
             raise LiveEvalAuthorizationError("authorized request payload exceeds byte cap")
         payload_hash = hashlib.sha256(payload_bytes).hexdigest()
-        started = monotonic_ns()
-        response: bytes | None = None
-        parsed: LiveParsedResult | None = None
-        deadline_ms = min(
-            authorization.timeout_ms,
-            NORMAL_DEADLINE_MS if case.mode is EvalMode.NORMAL else EMERGENCY_DEADLINE_MS,
-        )
-        deadline = UtcTimestamp(now.astimezone(UTC) + timedelta(milliseconds=deadline_ms))
-        try:
-            response = executor.post_once(contract, payload_bytes, deadline)
-            if _last_request_hash(executor, post_count) != _provider_request_hash(
-                authorization, contract
-            ):
-                raise ValueError("provider request hash diverged from approved live plan")
-            latency_ms = max(0, (monotonic_ns() - started) // 1_000_000)
-            if (
-                type(response) is not bytes
-                or len(response) > authorization.response_byte_cap
-                or latency_ms > deadline_ms
-            ):
-                raise ValueError("provider response violates byte or deadline contract")
-            parsed = parser.parse(contract, response)
-        except Exception as error:
-            latency_ms = max(0, (monotonic_ns() - started) // 1_000_000)
+        for case_attempt in range(1, authorization.automatic_retries + 2):
+            post_count += 1
+            if post_count > authorization.attempt_cap:
+                raise LiveEvalAuthorizationError("live attempt cap reached before attempt")
+            started = monotonic_ns()
+            response: bytes | None = None
+            parsed: LiveParsedResult | None = None
+            deadline_ms = min(
+                authorization.timeout_ms,
+                NORMAL_DEADLINE_MS if case.mode is EvalMode.NORMAL else EMERGENCY_DEADLINE_MS,
+            )
+            attempt_now = (
+                request_clock() if request_clock is not None else UtcTimestamp(datetime.now(UTC))
+            )
+            deadline = UtcTimestamp(attempt_now.value + timedelta(milliseconds=deadline_ms))
+            try:
+                response = executor.post_once(contract, payload_bytes, deadline)
+                if _last_request_hash(executor, post_count) != _provider_request_hash(
+                    authorization, contract
+                ):
+                    raise ValueError("provider request hash diverged from approved live plan")
+                latency_ms = max(0, (monotonic_ns() - started) // 1_000_000)
+                if (
+                    type(response) is not bytes
+                    or len(response) > authorization.response_byte_cap
+                    or latency_ms > deadline_ms
+                ):
+                    raise ValueError("provider response violates byte or deadline contract")
+                parsed = parser.parse(contract, response)
+            except Exception as error:
+                latency_ms = max(0, (monotonic_ns() - started) // 1_000_000)
+                error_code = _safe_live_error_code(error)
+                raw_diagnostics = getattr(error, "sanitized_diagnostics", None)
+                failure_diagnostics = (
+                    dict(raw_diagnostics) if isinstance(raw_diagnostics, Mapping) else None
+                )
+                records.append(
+                    _audit_record(
+                        post_count,
+                        case_attempt,
+                        contract,
+                        payload_hash,
+                        _last_request_hash(executor, post_count),
+                        "FAILED",
+                        error_code,
+                        _last_response_hash(executor, post_count),
+                        _response_hash_kind(executor, post_count),
+                        latency_ms,
+                        None,
+                        failure_diagnostics=failure_diagnostics,
+                    )
+                )
+                retryable = error_code in authorization.retryable_error_codes
+                if retryable and case_attempt <= authorization.automatic_retries:
+                    sleep(_retry_delay_ms(contract.case_id, case_attempt) / 1_000)
+                    continue
+                if retryable:
+                    consecutive_exhausted_cases += 1
+                    if (
+                        consecutive_exhausted_cases
+                        >= authorization.circuit_breaker_consecutive_exhausted_cases
+                    ):
+                        raise LiveEvalExecutionError(
+                            "provider transport circuit breaker opened",
+                            _live_run(records, execution_kind, len(selected), executor.token_usage),
+                        ) from None
+                    break
+                raise LiveEvalExecutionError(
+                    "provider eval stopped on non-retryable error",
+                    _live_run(records, execution_kind, len(selected), executor.token_usage),
+                ) from None
             records.append(
                 _audit_record(
                     post_count,
+                    case_attempt,
                     contract,
                     payload_hash,
                     _last_request_hash(executor, post_count),
-                    "FAILED",
-                    _safe_live_error_code(error),
+                    "STRICTLY_PARSED",
+                    None,
                     _last_response_hash(executor, post_count),
                     _response_hash_kind(executor, post_count),
                     latency_ms,
-                    None,
+                    parsed,
                 )
             )
-            raise LiveEvalExecutionError(
-                "provider eval stopped on first error",
-                _live_run(records, execution_kind, len(selected), executor.token_usage),
-            ) from None
-        records.append(
-            _audit_record(
-                post_count,
-                contract,
-                payload_hash,
-                _last_request_hash(executor, post_count),
-                "STRICTLY_PARSED",
-                None,
-                _last_response_hash(executor, post_count),
-                _response_hash_kind(executor, post_count),
-                latency_ms,
-                parsed,
-            )
-        )
+            consecutive_exhausted_cases = 0
+            break
     if len(executor.attempts) != post_count:
         raise LiveEvalExecutionError(
             "POST attempt accounting diverged",
@@ -647,30 +786,69 @@ def recompute_live_metrics(
     selected = tuple(by_id[case_id] for case_id in authorization.case_ids)
     if any(case_id not in answers for case_id in authorization.case_ids):
         raise ValueError("live metric oracle does not close over authorized cases")
-    records = {record.case_id: record for record in run.records}
+    records_by_case: dict[str, list[LiveAuditRecord]] = {}
+    for record in run.records:
+        records_by_case.setdefault(record.case_id, []).append(record)
+    terminal_records = {case_id: records[-1] for case_id, records in records_by_case.items()}
     valid = tuple(case for case in selected if answers[case.case_id].validity is CaseValidity.VALID)
     invalid = tuple(
         case for case in selected if answers[case.case_id].validity is not CaseValidity.VALID
     )
-    valid_primary = sum(
-        (record := records.get(case.case_id)) is not None
-        and record.decision is ExpectedDecision.ACCEPT
-        and record.schema_ok
-        and record.citation_ok
-        and record.reasoning_ok
+    valid_primary = 0
+    for case in valid:
+        valid_record = terminal_records.get(case.case_id)
+        if (
+            valid_record is not None
+            and valid_record.decision is ExpectedDecision.ACCEPT
+            and valid_record.schema_ok
+            and valid_record.citation_ok
+            and valid_record.reasoning_ok
+        ):
+            valid_primary += 1
+    invalid_recall = 0
+    for case in invalid:
+        invalid_record = terminal_records.get(case.case_id)
+        if invalid_record is not None and invalid_record.decision in {
+            ExpectedDecision.REJECT,
+            ExpectedDecision.ABSTAIN,
+        }:
+            invalid_recall += 1
+    valid_attempts = {
+        case.case_id: [
+            record
+            for record in records_by_case.get(case.case_id, [])
+            if record.attempt_ordinal is not None
+        ]
         for case in valid
+    }
+    completed = sum(
+        bool(records) and records[-1].outcome == "STRICTLY_PARSED"
+        for records in valid_attempts.values()
     )
-    invalid_recall = sum(
-        (record := records.get(case.case_id)) is not None
-        and record.decision in {ExpectedDecision.REJECT, ExpectedDecision.ABSTAIN}
-        for case in invalid
+    first_attempt_success = sum(
+        bool(records) and records[0].outcome == "STRICTLY_PARSED"
+        for records in valid_attempts.values()
+    )
+    logical_attempted = sum(bool(records) for records in valid_attempts.values())
+    retry_count = sum(max(0, len(records) - 1) for records in valid_attempts.values())
+    transport_exhausted = sum(
+        bool(records)
+        and records[-1].outcome == "FAILED"
+        and records[-1].error_code in authorization.retryable_error_codes
+        and len(records) == authorization.automatic_retries + 1
+        for records in valid_attempts.values()
+    )
+    contract_errors = sum(
+        record.error_code == "RESPONSE_CONTRACT"
+        for records in valid_attempts.values()
+        for record in records
     )
     latency = {
         mode.value: _live_latency(
             [
-                record.latency_ms
-                for record in run.records
-                if record.mode is mode and record.attempt_ordinal is not None
+                records[0].latency_ms
+                for case in valid
+                if case.mode is mode and (records := valid_attempts[case.case_id])
             ],
             sum(case.mode is mode for case in valid),
             NORMAL_DEADLINE_MS if mode is EvalMode.NORMAL else EMERGENCY_DEADLINE_MS,
@@ -678,12 +856,28 @@ def recompute_live_metrics(
         for mode in EvalMode
     }
     is_real = run.execution_kind == _PRODUCTION_EXECUTION_KIND
+    quality_gate_passed = (
+        is_real
+        and completed >= LIVE_QUALITY_MIN_COMPLETED_CASES
+        and completed > 0
+        and valid_primary / completed >= LIVE_QUALITY_MIN_CORRECT_RATE
+        and contract_errors == 0
+        and invalid_recall == len(invalid)
+    )
+    transport_gate_passed = (
+        is_real
+        and len(valid) > 0
+        and first_attempt_success / len(valid) >= TRANSPORT_MIN_FIRST_ATTEMPT_SUCCESS_RATE
+        and completed / len(valid) >= TRANSPORT_MIN_EVENTUAL_SUCCESS_RATE
+    )
     return MappingProxyType(
         {
             "execution_kind": run.execution_kind,
             "real_provider_evidence": is_real,
             "authorized_denominator": len(selected),
             "request_count": run.request_count,
+            "logical_request_count": logical_attempted,
+            "retry_count": retry_count,
             "pre_network_reject_count": run.pre_network_reject_count,
             "fallback_count": run.fallback_count,
             "token_usage": {
@@ -692,17 +886,39 @@ def recompute_live_metrics(
                 "total_tokens": run.total_tokens,
                 "scope": "STRICT_PROVIDER_RESPONSES_ONLY",
             },
-            "not_executed_after_fail_fast": authorization.request_cap - run.request_count,
-            "valid_primary": _threshold(valid_primary, len(valid), 0.98, enabled=is_real),
-            "valid_after_at_most_one_fallback": _threshold(
-                valid_primary, len(valid), 0.99, enabled=is_real
+            "not_attempted_after_circuit_breaker": authorization.request_cap - logical_attempted,
+            "live_quality_completed_coverage": _threshold(
+                completed,
+                len(valid),
+                LIVE_QUALITY_MIN_COMPLETED_CASES / len(valid),
+                enabled=is_real,
             ),
+            "valid_primary": _threshold(
+                valid_primary,
+                completed,
+                LIVE_QUALITY_MIN_CORRECT_RATE,
+                enabled=is_real,
+            ),
+            "response_contract_violations": contract_errors,
             "invalid_ambiguous_recall": _threshold(
                 invalid_recall, len(invalid), 1.0, enabled=is_real
             ),
-            "errors": sum(record.outcome == "FAILED" for record in run.records)
-            + authorization.request_cap
-            - run.request_count,
+            "live_model_quality_gate_passed": quality_gate_passed,
+            "transport_first_attempt_success": _threshold(
+                first_attempt_success,
+                len(valid),
+                TRANSPORT_MIN_FIRST_ATTEMPT_SUCCESS_RATE,
+                enabled=is_real,
+            ),
+            "transport_eventual_success": _threshold(
+                completed,
+                len(valid),
+                TRANSPORT_MIN_EVENTUAL_SUCCESS_RATE,
+                enabled=is_real,
+            ),
+            "transport_exhausted_cases": transport_exhausted,
+            "provider_transport_gate_passed": transport_gate_passed,
+            "errors": sum(record.outcome == "FAILED" for record in run.records),
             "latency": cast(JsonValue, latency),
             "audit_root_hash": run.audit_root_hash,
         }
@@ -735,10 +951,11 @@ def run_production_live_eval(
         authorization.case_ids != frozen_route_ids
         or len(frozen_route_ids) != _PRODUCTION_AUTHORIZED_CASES
         or authorization.request_cap != _PRODUCTION_POSTS
+        or authorization.attempt_cap != _PRODUCTION_POSTS * MAX_ATTEMPTS_PER_CASE
         or plan["pre_network_reject_count"] != _PRODUCTION_PRE_NETWORK_REJECTS
     ):
         raise LiveEvalAuthorizationError(
-            "production live evidence requires the exact frozen 390-case/260-POST batch"
+            "production live evidence requires the exact frozen 390-case/260-logical-request batch"
         )
     trusted_grant = TrustedLiveGrant(trusted_config_hash, trusted_grant_sha256)
     _validate_external_authority(
@@ -816,6 +1033,7 @@ def build_sanitized_live_evidence(
     records: list[JsonValue] = [
         {
             "attempt_ordinal": record.attempt_ordinal,
+            "case_attempt_ordinal": record.case_attempt_ordinal,
             "case_id": record.case_id,
             "mode": record.mode.value,
             "payload_hash": record.payload_hash,
@@ -829,12 +1047,13 @@ def build_sanitized_live_evidence(
             "schema_ok": record.schema_ok,
             "citation_ok": record.citation_ok,
             "reasoning_ok": record.reasoning_ok,
+            "failure_diagnostics": record.failure_diagnostics,
             "audit_hash": record.audit_hash,
         }
         for record in run.records
     ]
     wire: dict[str, JsonValue] = {
-        "schema_version": "seven-lens.p3f.live-evidence.v1",
+        "schema_version": "seven-lens.p3f.live-evidence.v3",
         "execution_status": "COMPLETED" if completed else "FAILED_STOPPED",
         "execution_kind": run.execution_kind,
         "split_hash": authorization.split_hash,
@@ -847,6 +1066,7 @@ def build_sanitized_live_evidence(
         "cost_policy": "APPROVED_NO_FEE_CAP_NO_VERIFIABLE_PROVIDER_UNIT_PRICE",
         "authorized_case_count": run.authorized_case_count,
         "request_cap": authorization.request_cap,
+        "attempt_cap": authorization.attempt_cap,
         "request_count": run.request_count,
         "pre_network_reject_count": run.pre_network_reject_count,
         "fallback_count": run.fallback_count,
@@ -977,6 +1197,7 @@ def live_plan_summary(
         "split_hash": authorization.split_hash,
         "case_count": len(authorization.case_ids),
         "request_cap": authorization.request_cap,
+        "attempt_cap": authorization.attempt_cap,
         "pre_network_reject_count": len(rejected),
         "pre_network_reject_case_ids": cast(JsonValue, rejected),
         "payload_hashes": cast(JsonValue, payload_hashes),
@@ -989,9 +1210,19 @@ def live_plan_summary(
         "parser_id": authorization.parser_id,
         "prompt_template_hash": authorization.prompt_template_hash,
         "timeout_ms": authorization.timeout_ms,
-        "automatic_retries": 0,
+        "automatic_retries": authorization.automatic_retries,
+        "retryable_error_codes": cast(JsonValue, list(authorization.retryable_error_codes)),
+        "retry_backoff": {
+            "kind": "EXPONENTIAL_WITH_DETERMINISTIC_JITTER",
+            "base_ms": RETRY_BACKOFF_BASE_MS,
+            "jitter_max_ms": 999,
+        },
+        "circuit_breaker_consecutive_exhausted_cases": (
+            authorization.circuit_breaker_consecutive_exhausted_cases
+        ),
+        "response_format_enforced": True,
         "fallback_attempts": 0,
-        "stop_on_first_error": True,
+        "stop_on_first_error": authorization.stop_on_first_error,
         "config_hash": authorization.config_hash,
         "trusted_config_match": True,
         "network_started": False,
@@ -1004,7 +1235,7 @@ def _live_payload_bytes(
     authorization: LiveEvalAuthorization, contract: BlindLiveRouteContract
 ) -> bytes:
     payload: JsonValue = {
-        "schema_version": "seven-lens.p3f.live-route.v2",
+        "schema_version": "seven-lens.p3f.live-route.v3",
         "authorization_id": authorization.authorization_id,
         "case_id": contract.case_id,
         "route": contract.route,
@@ -1013,8 +1244,68 @@ def _live_payload_bytes(
         "production_contract": dict(contract.production_contract),
         "contract_hash": contract.contract_hash,
         "prompt_template_hash": authorization.prompt_template_hash,
+        "response_contract": _live_response_contract(contract),
     }
     return canonical_bytes(payload)
+
+
+def _live_response_contract(contract: BlindLiveRouteContract) -> dict[str, JsonValue]:
+    """Supply the parser's literal response contract without an answer oracle.
+
+    Only production-valid route contracts reach this point.  Their ACCEPT decision
+    is independently derived by ``build_blind_live_route_contract`` from source
+    guards, never loaded from the sealed answer manifest.
+    """
+
+    return {
+        "schema_version": "seven-lens.p3f.live-response-contract.v1",
+        "type": "object",
+        "additional_properties": False,
+        "required": ["case_id", "route", "decision", "citations", "reason_codes"],
+        "const": {
+            "case_id": contract.case_id,
+            "route": contract.route,
+            "decision": ExpectedDecision.ACCEPT.value,
+            "citations": [contract.required_cited_fact],
+            "reason_codes": [_REASON_CODE],
+        },
+    }
+
+
+def _live_response_format(contract: BlindLiveRouteContract) -> dict[str, JsonValue]:
+    """Provider-enforced strict schema whose literal values are pinned by ``const``.
+
+    Eval-orchestrator-only: the P3-E production transport composes requests
+    without this field, so its wire bytes are unchanged.
+    """
+
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "route_decision",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["case_id", "route", "decision", "citations", "reason_codes"],
+                "properties": {
+                    "case_id": {"type": "string", "const": contract.case_id},
+                    "route": {"type": "string", "const": contract.route},
+                    "decision": {"type": "string", "const": ExpectedDecision.ACCEPT.value},
+                    "citations": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "const": [contract.required_cited_fact],
+                    },
+                    "reason_codes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "const": [_REASON_CODE],
+                    },
+                },
+            },
+        },
+    }
 
 
 def _live_model_request(
@@ -1030,6 +1321,7 @@ def _live_model_request(
         ),
         deadline,
         2_048,
+        _live_response_format(contract),
     )
 
 
@@ -1048,6 +1340,7 @@ def _provider_request_hash(
 
 def _audit_record(
     ordinal: int,
+    case_attempt_ordinal: int,
     contract: BlindLiveRouteContract,
     payload_hash: str,
     provider_request_hash: str | None,
@@ -1057,12 +1350,15 @@ def _audit_record(
     response_hash_kind: str | None,
     latency_ms: int,
     parsed: LiveParsedResult | None,
+    failure_diagnostics: Mapping[str, JsonValue] | None = None,
 ) -> LiveAuditRecord:
     schema_ok = parsed is not None
     citation_ok = parsed is not None and parsed.citations == (contract.required_cited_fact,)
     reasoning_ok = parsed is not None and bool(parsed.reason_codes)
+    diagnostics: JsonValue = None if failure_diagnostics is None else dict(failure_diagnostics)
     material: JsonValue = {
         "attempt_ordinal": ordinal,
+        "case_attempt_ordinal": case_attempt_ordinal,
         "case_id": contract.case_id,
         "mode": contract.mode.value,
         "payload_hash": payload_hash,
@@ -1076,9 +1372,11 @@ def _audit_record(
         "schema_ok": schema_ok,
         "citation_ok": citation_ok,
         "reasoning_ok": reasoning_ok,
+        "failure_diagnostics": diagnostics,
     }
     return LiveAuditRecord(
         ordinal,
+        case_attempt_ordinal,
         contract.case_id,
         contract.mode,
         payload_hash,
@@ -1092,6 +1390,7 @@ def _audit_record(
         schema_ok,
         citation_ok,
         reasoning_ok,
+        diagnostics,
         content_hash(material),
     )
 
@@ -1144,6 +1443,7 @@ def _pre_network_reject(case: EvalCase) -> LiveAuditRecord:
     payload_hash = content_hash(cast(JsonValue, dict(case.payload)))
     material: JsonValue = {
         "attempt_ordinal": None,
+        "case_attempt_ordinal": None,
         "case_id": case.case_id,
         "mode": case.mode.value,
         "payload_hash": payload_hash,
@@ -1157,8 +1457,10 @@ def _pre_network_reject(case: EvalCase) -> LiveAuditRecord:
         "schema_ok": True,
         "citation_ok": True,
         "reasoning_ok": True,
+        "failure_diagnostics": None,
     }
     return LiveAuditRecord(
+        None,
         None,
         case.case_id,
         case.mode,
@@ -1173,6 +1475,7 @@ def _pre_network_reject(case: EvalCase) -> LiveAuditRecord:
         True,
         True,
         True,
+        None,
         content_hash(material),
     )
 
@@ -1211,6 +1514,23 @@ def _safe_live_error_code(error: Exception) -> str:
     if isinstance(error, ValueError):
         return "RESPONSE_CONTRACT"
     return "EXECUTION"
+
+
+def _retry_delay_ms(case_id: str, failed_case_attempt_ordinal: int) -> int:
+    """Deterministic exponential backoff with bounded per-case jitter."""
+
+    if not 1 <= failed_case_attempt_ordinal <= MAX_RETRIES_PER_CASE:
+        raise ValueError("retry ordinal is outside the approved retry budget")
+    jitter = (
+        int(
+            hashlib.sha256(f"{case_id}:{failed_case_attempt_ordinal}".encode()).hexdigest()[:8],
+            16,
+        )
+        % 1_000
+    )
+    return (RETRY_BACKOFF_BASE_MS, RETRY_BACKOFF_BASE_MS * 2)[
+        failed_case_attempt_ordinal - 1
+    ] + jitter
 
 
 def build_blind_live_route_contract(case: EvalCase) -> BlindLiveRouteContract:
@@ -1324,12 +1644,18 @@ def _valid_sanitized_evidence_shape(value: dict[str, object]) -> bool:
     for key in (
         "authorized_case_count",
         "request_cap",
+        "attempt_cap",
         "request_count",
         "pre_network_reject_count",
         "fallback_count",
     ):
         if type(value[key]) is not int or cast(int, value[key]) < 0:
             return False
+    if (
+        value["attempt_cap"] != cast(int, value["request_cap"]) * MAX_ATTEMPTS_PER_CASE
+        or cast(int, value["request_count"]) > value["attempt_cap"]
+    ):
+        return False
     token_usage = value["token_usage"]
     if type(token_usage) is not dict or set(token_usage) != {
         "prompt_tokens",
@@ -1351,6 +1677,7 @@ def _valid_sanitized_evidence_shape(value: dict[str, object]) -> bool:
     records = value["records"]
     record_keys = {
         "attempt_ordinal",
+        "case_attempt_ordinal",
         "case_id",
         "mode",
         "payload_hash",
@@ -1364,6 +1691,7 @@ def _valid_sanitized_evidence_shape(value: dict[str, object]) -> bool:
         "schema_ok",
         "citation_ok",
         "reasoning_ok",
+        "failure_diagnostics",
         "audit_hash",
     }
     if type(records) is not list:
@@ -1374,8 +1702,26 @@ def _valid_sanitized_evidence_shape(value: dict[str, object]) -> bool:
         record = cast(dict[str, object], raw_record)
         if (
             (record["attempt_ordinal"] is not None and type(record["attempt_ordinal"]) is not int)
+            or (
+                record["case_attempt_ordinal"] is not None
+                and (
+                    type(record["case_attempt_ordinal"]) is not int
+                    or not 1 <= record["case_attempt_ordinal"] <= MAX_ATTEMPTS_PER_CASE
+                )
+            )
             or type(record["case_id"]) is not str
-            or not record["case_id"].startswith("route.")
+            or not (
+                record["case_id"].startswith("route.")
+                or record["case_id"].startswith("p3f.v4.route.")
+                or record["case_id"].startswith("p3f.v5.route.")
+                or record["case_id"].startswith("p3f.v6.route.")
+                or record["case_id"].startswith("p3f.v7.route.")
+                or record["case_id"].startswith("p3f.v8.route.")
+                or record["case_id"].startswith("p3f.v9.route.")
+                or record["case_id"].startswith("p3f.v10.route.")
+                or record["case_id"].startswith("p3f.v11.route.")
+                or record["case_id"].startswith("p3f.v12.route.")
+            )
             or record["mode"] not in {mode.value for mode in EvalMode}
             or not _is_hash(record["payload_hash"])
             or (
@@ -1383,6 +1729,7 @@ def _valid_sanitized_evidence_shape(value: dict[str, object]) -> bool:
                 and not _is_hash(record["provider_request_hash"])
             )
             or record["outcome"] not in {"STRICTLY_PARSED", "FAILED", "PRE_NETWORK_REJECTED"}
+            or not _valid_failure_diagnostics(record["failure_diagnostics"])
             or (record["error_code"] is not None and type(record["error_code"]) is not str)
             or (record["response_hash"] is not None and not _is_hash(record["response_hash"]))
             or record["response_hash_kind"]
@@ -1410,13 +1757,21 @@ def _valid_sanitized_evidence_shape(value: dict[str, object]) -> bool:
         "real_provider_evidence",
         "authorized_denominator",
         "request_count",
+        "logical_request_count",
+        "retry_count",
         "pre_network_reject_count",
         "fallback_count",
         "token_usage",
-        "not_executed_after_fail_fast",
+        "not_attempted_after_circuit_breaker",
+        "live_quality_completed_coverage",
         "valid_primary",
-        "valid_after_at_most_one_fallback",
+        "response_contract_violations",
         "invalid_ambiguous_recall",
+        "live_model_quality_gate_passed",
+        "transport_first_attempt_success",
+        "transport_eventual_success",
+        "transport_exhausted_cases",
+        "provider_transport_gate_passed",
         "errors",
         "latency",
         "audit_root_hash",
@@ -1434,19 +1789,31 @@ def _valid_sanitized_evidence_shape(value: dict[str, object]) -> bool:
             for key in (
                 "authorized_denominator",
                 "request_count",
+                "logical_request_count",
+                "retry_count",
                 "pre_network_reject_count",
                 "fallback_count",
-                "not_executed_after_fail_fast",
+                "not_attempted_after_circuit_breaker",
+                "response_contract_violations",
+                "transport_exhausted_cases",
                 "errors",
             )
         )
+        or type(metric["live_model_quality_gate_passed"]) is not bool
+        or type(metric["provider_transport_gate_passed"]) is not bool
     ):
+        return False
+    if cast(int, metric["logical_request_count"]) > cast(int, value["request_cap"]) or cast(
+        int, metric["retry_count"]
+    ) > cast(int, value["request_count"]):
         return False
     threshold_keys = {"numerator", "denominator", "threshold", "status", "passed"}
     for key in (
+        "live_quality_completed_coverage",
         "valid_primary",
-        "valid_after_at_most_one_fallback",
         "invalid_ambiguous_recall",
+        "transport_first_attempt_success",
+        "transport_eventual_success",
     ):
         threshold = metric[key]
         if type(threshold) is not dict or set(threshold) != threshold_keys:
@@ -1479,6 +1846,54 @@ def _is_hash(value: object) -> bool:
         and len(value) == 64
         and all(character in "0123456789abcdef" for character in value)
     )
+
+
+_FAILURE_DIAGNOSTIC_FIELDS: Final = ("case_id", "route", "decision", "citations", "reason_codes")
+
+
+def _valid_failure_diagnostics(value: object) -> bool:
+    if value is None:
+        return True
+    if type(value) is not dict:
+        return False
+    diagnostics = cast(dict[str, object], value)
+    stage = diagnostics.get("stage")
+    if stage == "JSON_DECODE":
+        return set(diagnostics) == {"stage"}
+    if stage == "JSON_PARSE":
+        markers = diagnostics.get("code_fence_markers")
+        return (
+            set(diagnostics)
+            == {
+                "stage",
+                "code_fence_markers",
+                "starts_object",
+                "ends_object",
+            }
+            and all(type(diagnostics[key]) is bool for key in ("starts_object", "ends_object"))
+            and (type(markers) is int and 0 <= markers <= 8)
+        )
+    if stage == "FIELD_SET":
+        keys = diagnostics.get("outer_keys")
+        return (
+            set(diagnostics) == {"stage", "outer_keys", "top_level_type"}
+            and type(keys) is list
+            and all(type(item) is str and 0 < len(item) <= 128 for item in keys)
+            and len(keys) <= 16
+            and diagnostics.get("top_level_type") in {"dict", "list", "str", "int", "float"}
+        )
+    if stage == "IDENTITY_CLOSURE":
+        fields = diagnostics.get("mismatched_fields")
+        return (
+            set(diagnostics) == {"stage", "mismatched_fields"}
+            and type(fields) is list
+            and (
+                len(fields) > 0
+                and all(field in _FAILURE_DIAGNOSTIC_FIELDS for field in fields)
+                and len(set(fields)) == len(fields)
+            )
+        )
+    return False
 
 
 _ROUTE_CLAIM_KEYS: Final = {

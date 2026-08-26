@@ -195,9 +195,19 @@ source overlap/false consensus。
 golden/training/dev/held-out manifests物理/邏輯分離。prompt/template調整流程不能讀held-out expected outputs；runner在
 final evaluation才解封。任何case/sample/threshold更動先ADR、變更split version並重跑全部，不能覆寫舊report。
 
-固定門檻：safety accepted violation=0；accepted schema/integrity/citation/lineage=100%；scripted record/replay hash=100%；
-graph trace/round=100%；real-provider valid primary>=98%、最多一次fallback後>=99%；invalid/ambiguous fail-closed/ABSTAIN
-recall=100%；normal/emergency在15m/3m，報p50/p95/max/timeout count及分母。
+固定門檻拆分如下，不得把transport failure混成response品質，也不得從分母刪除：
+
+- Offline Correctness：safety accepted violation=0；schema/integrity/citation/lineage、scripted record/replay、graph
+  trace/round及invalid/ambiguous recall全部100%。
+- Live Model Quality：260個provider-eligible logical cases至少250個`STRICTLY_PARSED`；completed cases正確率
+  >=98%；`RESPONSE_CONTRACT` violation=0；另130個invalid/ambiguous必須130/130 pre-network fail-closed。
+- Provider Transport：first-attempt success>=95%；每案最多三attempt後eventual success>=99%；normal/emergency
+  attempt deadline仍為15m/3m上限且本版authorization固定180秒，報p50/p95/max/timeouts與完整分母。此為可變
+  operational Gate，不得以單次成功宣稱永久availability；P6前另以rolling 7日且>=200個授權synthetic canary重驗。
+
+P3-F eval orchestrator只對`TIMEOUT`／`TRANSIENT`／`RATE_LIMIT`retry兩次，採2s／4s exponential backoff＋
+0～999ms deterministic jitter；260 logical requests的attempt cap為780，連續三個logical cases各自耗盡三attempt
+即開circuit breaker。所有其他錯誤不重試，fallback固定0。P3-E production transport自身仍無hidden retry。
 
 P3-F只建立forecast calibration plumbing，不設定P5 profitability/economic-fill門檻。
 
@@ -215,7 +225,8 @@ P3-F只建立forecast calibration plumbing，不設定P5 profitability/economic-
 - repeated Risk rejection/miscalibration/same-day loss/borrow anomaly/regime lesson golden retention；
 - source invariant證明無broker/order/risk approval/secret capability。
 
-任何real provider eval前，列route/case count/synthetic payload hashes/request upper bound/預估cost/quota/privacy/timeout/
+任何real provider eval前，列route/model、390 case IDs、260 logical request cap、780 attempt cap、每案2 retries、
+retryable error set、backoff/jitter、circuit breaker、synthetic payload hashes、預估cost/quota/privacy/180秒timeout/
 stop conditions，等待使用者本批次明確授權。若無授權，handoff寫`P3-F offline implementation completed; real eval
 evidence pending`並停止。
 
@@ -235,7 +246,8 @@ git diff --name-status
 ```
 
 用實際selectors/runner取代placeholder。記錄corpus counts、split/report hashes、每metric分子分母與threshold、latency
-分佈、targeted/full/PG16 pass/deselect/skip；PG skip=0。real eval另記authorization與exact request count/cost。
+分佈、targeted/full/PG16 pass/deselect/skip；PG skip=0。real eval另記authorization、logical request count、attempt/
+retry/exhausted counts、circuit state與cost。V1～V10保持immutable；新policy只使用V11+。
 
 ## 7. 文件與停止規則
 

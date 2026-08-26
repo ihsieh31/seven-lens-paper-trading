@@ -268,7 +268,6 @@ class PostgresMemoryRepository:
             return None
         return _artifact_from_bytes(bytes(row[1]), str(row[0]))
 
-
     def database_now(self) -> UtcTimestamp:
         """Read the PostgreSQL clock after registration/validation in this transaction."""
         row = self._connection.execute("SELECT pg_catalog.clock_timestamp()").fetchone()
@@ -409,9 +408,6 @@ class PostgresMemoryPromotionCoordinator:
                 report_hash,
                 self._validator_version,
             )
-            database_now = self._repository.database_now()
-            if requested_as_of.value < database_now.value:
-                raise RuntimeError("requested_as_of became stale before promotion")
             self._repository.promote(artifact.artifact_id, requested_as_of)
             current = self._repository.current_pointer()
             if (

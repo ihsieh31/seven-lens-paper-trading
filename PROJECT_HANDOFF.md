@@ -1,11 +1,11 @@
 # P3-D／E／F Current Handoff
 
-最後更新：2026-08-24
+最後更新：2026-08-26
 專案：`/Users/zongen/Downloads/codex/trading`
 
 ## 1. 目前唯一狀態
 
-**P3-B Accepted; P3-C Accepted; P3-D Accepted; P3-E Accepted. P3-F implementation in progress.**
+**P3-B Accepted; P3-C Accepted; P3-D Accepted; P3-E Accepted. P3-F V10 live quality evidence pending.**
 
 - P3-B 經最新獨立重新驗收判定 Accepted。
 - P3-C 首輪 Rejected 後完成 R1～R6；R6 已由新的獨立session重新驗收為 Accepted，P3-B+C
@@ -46,8 +46,171 @@
   `scripts/run_p3e_live_acceptance.sh`現以三個exact opt-in flags、六次executor硬上限、失敗即停及PG16
   audit實作此checkpoint。case builder `1 passed, 1 live deselected`；affected P3-D/E `338 passed,
   1 live deselected`；真實PG16 `149 passed, 15 deselected, 0 skipped`。目前POST仍為0/6；Keychain
-  項目存在，但其非敏感metadata不能證明值已rotation，因此不得使用或寫Accepted。P3-F依固定Gate順序
-  尚未開始。
+  項目存在，但其非敏感metadata不能證明值已rotation，因此不得使用或寫Accepted。該P3-E checkpoint
+  當時P3-F依固定Gate順序尚未開始；後續P3-F狀態以本節下一點為準。
+- 2026-08-25 P3-F offline checkpoint已完成：修復near-now promotion把有效的`requested_as_of`
+  誤判為stale，以及P3-F regression／strict-mypy缺口；Ruff／format／mypy全綠，non-integration
+  `1286 passed, 219 deselected`，真實PostgreSQL 16 `204 passed, 15 deselected, 0 skipped`，frozen
+  offline eval `616/616`通過（report `a202e28c06dbc930d39171d8610e6795fca3ea371dc0be15793307a964a88c9`）。
+  `P3-F offline implementation completed; real eval evidence pending`。未讀取Keychain、未呼叫provider、
+  未產生POST；下一個且唯一的實作邊界是使用者針對exact frozen 390-case／260-POST、synthetic-only、
+  no-retry、stop-on-first-error、Agnes無可驗證單價之no-fee-cap scope的本批次明確授權。
+- 2026-08-25已依使用者本批明確授權執行該exact live batch（plan
+  `708da0b7f3830a309414f78c79308d2664a95a4dc15895943c1e0be078da6a95`；payload root
+  `748147b617e757d66d68d48d0a0ac1871c01d84f36da4ee2b4cd1c5f4c5c8fc1`）。真實Agnes／Keychain
+  路徑在4/260 POST後因第4次`RESPONSE_CONTRACT`失敗而按規則停止；前3次`STRICTLY_PARSED`，130個
+  invalid/ambiguous cases均為pre-network fail-closed。sanitized local-only evidence hash為
+  `287661a504594358eb109a5138927034daddfbf49a588728cc1994f6e90ecc84`，audit root為
+  `9acf17cba6b584cc391fcfbadeacf9c14b742914f9fdc91abd18d08d6e21f9f3`；不保存／不讀取raw response。
+  **P3-F未完成，不能Accepted。** 已觀察的held-out split不得依此失敗調prompt或重送；若授權修復，必須
+  先建立新split version、重跑offline、取得新的exact live authorization。
+- 2026-08-25已完成**僅限 `RESPONSE_CONTRACT`** 的 remediation：診斷只使用sanitized
+  `RESPONSE_CONTRACT` 結果、source與offline synthetic/dev/golden tests，未讀取或保存raw provider
+  response。根因是現有 Agnes request 僅以文字提示要求strict JSON，沒有把parser所需的literal
+  response contract 放進每個synthetic request；修復將immutable `response_contract`（exact keys、禁止
+  extra properties與case/route/citation/reason literal constants）加入payload與固定prompt，parser升為
+  `p3f-strict-route-decision-v4`。未修改、刪除、重跑或用於調校舊v3 held-out／plan／failed evidence；
+  新generator只從source建構且拒絕既存destination，建立獨立的`p3f-synthetic-v4` split，hash為
+  `99a429c897e912b580da797d279ca1f1d77fca8dabb86920ed6e0c04196c1cd2`，frozen offline report為
+  `2140568d3ae9c91a7cb8531badaf287469aee4f1102ecd298ad56ff5a4ded200`（616/616）。驗證：Ruff／format／
+  mypy全綠；non-integration `1288 passed, 219 deselected`（1273全套加15個P3-F provider seam）；真實
+  PostgreSQL 16 `204 passed, 15 deselected, 0 skipped`。本次未讀Keychain、未呼叫provider、未送POST、未做
+  P4、未commit/push。**P3-F仍未Accepted：下一步只能是對v4的全新live authorization**，其中必須逐項明確
+  授權 Agnes 2.5 Flash、390個新的held-out synthetic route cases、260 POST hard cap／130 pre-network
+  rejects、timeout／request-response byte cap／privacy與cost policy、零自動retry／零fallback、first-error
+  stop，以及新的trusted plan/grant hashes。
+- 2026-08-26依新的v4 explicit live authorization完成zero-network plan後執行：config hash
+  `63574b65e00fc0867382c3c71f853f62f35e5aa63107694b9bce3d2847d21221`、plan hash
+  `131b765a8673a9a882ed86412b9e8d48000da89ae90715756ddae34bbab9a10b`。一次初始grant-SHA不符在
+  Keychain／POST之前被拒；正確grant後，production Agnes／Keychain path在130個pre-network rejects後，
+  第1/260 POST以`TRANSIENT` transport failure停止，沒有response hash，retry/fallback均為0。sanitized
+  local-only evidence hash為`ff0983925ff6f497c6241025632c27f9140749e9bc035e9cc34e83f9d1eb557e`，audit root為
+  `43ead74174a15a0a535e76190d546cd9d9aa04636a04e40aac5ec3e7a55bf871`；未讀取或保存raw provider response。
+  此非`RESPONSE_CONTRACT`，不在已授權remediation範圍內；**P3-F仍未Accepted，未做自動重試，任何再送POST
+  必須取得新的明確live authorization。**
+- 2026-08-26使用者授權持續修復及重試後，v5將transport policy由read 30秒／total 45秒提升為已授權的
+  180秒，並以新的v6 source-only split取代已觀察v5；v6 split hash為
+  `f3556ba5e31263dc4e4d163bfb59e7de8a059e33708b13ccc9d01625092f7099`，offline report為
+  `d6a0816d386f7db93cfd58ebe70e890f7826ff6351bcea7fe94a7c0bd20f8f73`。v6 Ruff／format／mypy、
+  non-integration `1289 passed, 219 deselected`及真實PostgreSQL 16 `204 passed, 15 deselected, 0 skipped`
+  均通過。v5 live在73 strict parses後第74/260 POST `TIMEOUT`停止（evidence
+  `83206f46c40aaca532085ce919308b4a6023c8c9e5bc8b9156b4f73126b0e742`）；v6 180秒 policy下仍在第1/260
+  POST `TRANSIENT`停止（evidence `1142cf7508badae6904a7f6b4b24d2e0a901b39f965fe3da5d657c2cbe5e2d1c`）。
+  三份evidence都只含sanitized hash／code，未讀raw response。這是重複的外部provider transport可用性阻塞，
+  並非可由source安全修復的`RESPONSE_CONTRACT` defect；維持zero automatic retry／fallback，P3-F不能Accepted。
+- 2026-08-26先以**不發HTTP request、不讀response body**的DNS／TCP／TLS診斷確認
+  `apihub.agnes-ai.com:443`可完成TLS 1.3握手；這只證明網路傳輸可達，不能當作model服務可用性證明。
+  其後建立不覆寫舊split／plan／evidence的source-only `p3f-synthetic-v7`：split hash為
+  `87c312b6c9171282850a7721988c77263cb7494cc698ca48eab6d0def6b4eb4c`，offline report為
+  `a5f1c8a5200143814f003403733fca36cb6f73cd8ae2632710623c9000c3bc30`（616/616）。V7的zero-network
+  plan已驗證390個synthetic held-out route cases、130個pre-network rejects、260 POST cap、180秒
+  deadline、zero retry／fallback。完整live batch的sanitized evidence為
+  `9524ca74b7b364c21fe809e1f483a8f4ddf2d7d28eec98f06e923f4116afd50b`，audit root為
+  `c85e357811198fbbc54e439639660b9be41daab6f51b3e3955158d6b585ecb78`：130個pre-network rejects與
+  34個`STRICTLY_PARSED`後，第35個POST為`TIMEOUT`（180秒）；0 retry／0 fallback，剩餘225個依
+  fail-fast未執行。僅讀取sanitized hash／計數／code，未保存或人工讀取raw provider response。
+  V7已消耗，**P3-F仍不能Accepted**；若要再試，須保留V7並以新split（V8或之後）取得新的explicit
+  live authorization，限定synthetic-only、390／260、timeout、no-fee-cap、0 retry／0 fallback與
+  stop-on-first-error；不得重送V7。
+- 2026-08-26使用者明確授權後，V8再以source-only factory建立，未覆寫V3～V7：split hash為
+  `49b90420a75bd3b2736633e5e4863c0c2c45e5d2d17fe3c5d4269f36faae9180`，offline report為
+  `f920ff57e0999b3132c399c00d812102fa50869505afd09e2301e654f45e7590`（616/616）。Ruff／format／mypy、
+  non-integration `1289 passed, 219 deselected`與真實PostgreSQL 16 `204 passed, 15 deselected, 0 skipped`
+  全綠；zero-network plan再次驗證390／130／260、180秒及zero retry／fallback。V8 live evidence為
+  `56f15353ac160f815af123d4f42745c5357be8265ea4b06ca534af0311542abf`，audit root為
+  `89132c1ebc06f17387c420054f85049abc1de0ca7cef0b77c352893daba6b60a`：28個`STRICTLY_PARSED`後，
+  第29/260 POST為`TIMEOUT`，0 retry／0 fallback，231個未執行。只讀sanitized hash／計數／code，未保存
+  或人工讀取raw provider response。**V8已消耗，P3-F仍不能Accepted**；下一次若授權，必須使用新的V9+
+  split與新的exact live authorization，絕不可重送V8。
+- 2026-08-26再以source-only生成V9：split hash為
+  `58541fa7262c6bfb2e9706e3efe8496206e566ad3e46d00e1567e64dd25043a9`，offline report為
+  `7ff2d49e24958f456a217b0becae8c61d81c13d0452d83dea192b65ec029c72e`（616/616）。Ruff／format／mypy、
+  non-integration `1289 passed, 219 deselected`與真實PostgreSQL 16 `204 passed, 15 deselected, 0 skipped`
+  全綠；zero-network plan再次驗證390／130／260、180秒及0 retry／0 fallback。
+  V9未發POST、未讀Keychain、未寫trusted grant；其zero-retry／first-error policy已由ADR-033取代，因此封存為
+  historical offline evidence，不再作live batch，也不覆寫或重送V1～V9。
+- 2026-08-26依使用者決策完成ADR-033 Gate redesign：P3-F功能拆為Offline Correctness與Live Model Quality，
+  Provider Transport另為會隨時間變動的P6 readiness Gate。V10 source-only split hash為
+  `237620d1faefaa797f16a4c5e784ef113491cbaa8859a88977dae9c19c56ae63`，offline report v2為
+  `aea1b77c94e2482b62b0fc40209f216f7629fa77a719679ce1008c3489622c38`（616/616）。Live policy只對
+  `TIMEOUT`／`TRANSIENT`／`RATE_LIMIT`每案最多retry兩次，2s／4s backoff＋deterministic jitter；260 logical
+  requests的attempt cap為780，連續三案耗盡retry即開circuit，fallback=0。Live Model Quality門檻為至少
+  250/260 strict completions、completed正確率>=98%、response-contract violations=0及130/130 pre-network
+  fail-closed；Transport另報first-attempt>=95%、eventual<=3 attempts>=99%。focused provider/corpus tests
+  `33 passed`；`verify_p1.sh`全綠（Ruff／format／mypy 177 source files，non-integration `1295 passed,
+  219 deselected`）。本次未讀Keychain、未發POST，且未因無DB變更而冒充重跑PG16；**P3-F仍未Accepted，
+  下一步需V10新的exact live authorization。**
+
+- 2026-08-26依使用者明確授權執行V10 live batch。事前全部重跑：P3-F targeted `120 passed`；
+  `verify_p1.sh`全綠（non-integration `1295 passed, 219 deselected`）；真實PostgreSQL 16
+  `204 passed, 15 deselected, 0 skipped`；`git diff --check`通過。zero-network plan（config hash
+  `26cecbbe2c30cdcd5e2cf048e96a441990490df439ddb4df05b9b0a827bb79ec`、plan hash
+  `4edb1994bcbcc31289271c8e828ee149b7dd77f364836fc13746ee521a835da0`）再次驗證390 cases／130
+  pre-network rejects／260 POST cap／780 attempt cap、180秒、只對`TIMEOUT`／`TRANSIENT`／`RATE_LIMIT`
+  每案2 retries、backoff＋jitter、三案exhausted circuit breaker、0 fallback。授權一次通過後，
+  production Agnes／Keychain path在130個pre-network rejects後連續11次`STRICTLY_PARSED`且11/11
+  正確（p50約2.6秒、max 8.1秒、零timeout、零retry）；第12/260 POST
+  （case `p3f.v10.route.analyst.technical_analyst.11`）為`RESPONSE_CONTRACT`，屬非可重試錯誤，
+  依政策停止並寫出sanitized evidence。token使用量13,376 prompt＋3,167 completion；sanitized
+  local-only evidence hash為`fb005d83ec08d1cbcc0e8c4d483b2fd3f46278822b445bd85fccac277666d72a`，
+  audit root為`42d6f031da37b369e5948ff06d115a6a70975dcc4fca9f2054bac66cb0bf45ba`；未讀取或保存raw
+  response。**V10已消耗，P3-F仍不能Accepted**（violations=0門檻下本批已不可能過quality gate）。
+  診斷僅使用sanitized evidence、source與committed fixtures：失敗case與siblings結構完全相同；
+  P3-E live路徑已驗收「單一exact JSON code fence normalization」（Agnes實際會偶發輸出fence），
+  但P3-F `StrictLiveDecisionParser`直接`json.loads`無此處理，疑似根因。若授權修復，必須先建立
+  新split version（V11或之後）、重跑offline，並取得該批新的exact live authorization。
+
+- 2026-08-26依使用者授權完成RESPONSE_CONTRACT remediation並建立V11。`StrictLiveDecisionParser`
+  升為`p3f-strict-route-decision-v5`：僅新增「恰好一組完整```json fence才剝除」的單一exact
+  normalization（與P3-E live路徑已驗收語意一致）；大小寫變體、缺換行、prose外圍、雙fence與fenced
+  內容的duplicate key／語意closure檢查全部維持fail closed，並新增永久regression（含executor端到端
+  fenced回應案例）。source-only `p3f-synthetic-v11` split hash為
+  `ee8141b042921ee457aec98ca542a5d055e9e9bf201044cb38dc3e9324c0a24d`，frozen offline report為
+  `3a92f8dcc67fec00fe87496e0ab40709990a792aa1c2f8c89ea9a77bf884bc4a`（616/616）。evals腳本、活躍
+  prompt與requirement map已切至V11；corpus allowlist新增v11。V1～V10保持immutable不重送。
+  本次未讀Keychain、未發POST。
+
+- 2026-08-26依使用者授權執行V11 live batch（plan hash
+  `946cefae2d040f2da848062b292299980630a13e23e24992433f599e178e0362`）：第1/260 POST
+  `STRICTLY_PARSED`且正確（16.4秒），第2/260 POST（case `p3f.v11.route.analyst.technical_analyst.01`）
+  為非可重試`RESPONSE_CONTRACT`，依政策停止。0 retry／0 fallback。sanitized local-only evidence
+  未含raw response；此結果證明單一exact fence normalization不是該failure mode的充分解釋——在
+  不保存raw response的現行policy下無法進一步區分違規形態（JSON形狀／欄位集合／語意closure）。
+  **V11已消耗，P3-F仍不能Accepted**。跨v3/v10/v11約163次完成attempt累計3次contract violation
+  （約1.8%）；260案violations=0門檻下，現行provider品質使單批通過機率極低。下一步需使用者決策：
+  於live seam加入P3-E式sanitized response-shape診斷（只記boolean／counts／key名，不入內容）後以
+  新split診斷、評估Agnes原生structured output／response_format支援、或以ADR重新審視
+  RESPONSE_CONTRACT不可重試與零violation門檻。
+
+- 2026-08-26依使用者授權完成診斷基建與response_format探測：(1)live seam新增sanitized
+  response-shape診斷——`ResponseContractViolation`攜帶無內容的`failure_diagnostics`
+  （stage＝JSON_DECODE／JSON_PARSE／FIELD_SET／IDENTITY_CLOSURE、fence marker數、object邊界、
+  key名、mismatched欄位名），經audit record與evidence v3 schema永久記錄並有形狀驗證與測試；
+  (2)以全合成diagnostic payload（零fixture觀察、兩次POST）探測Agnes：`response_format:
+  json_schema` strict被接受（HTTP 200），輸出為裸JSON、恰好五鍵、字面值全部正確；baseline同批
+  亦乾淨。**結論：provider端schema強制可行，可作為RESPONSE_CONTRACT的根治方向，且只需改eval
+  orchestrator的request建構層，P3-E生產transport不動。**(3)source-only `p3f-synthetic-v12`
+  split hash `054f09c773c903e2090a84cee2103688e2cd85949eed513a66006be6e0e23efb`、offline report
+  `b6792a8865d7f22f28b98119d96677dd8d1abe381d5e5ca88275192e710f011c`（616/616）已建立且未被
+  觀察。驗證：`verify_p1.sh`全綠（non-integration `1298 passed, 219 deselected`）、真實PG16
+  `204 passed, 15 deselected, 0 skipped`、`git diff --check`通過。未stage／commit／push。
+
+- 2026-08-26依使用者授權完成response_format注入並執行V12 live batch：eval orchestrator的
+  request建構層為每個case附上const-pinned strict json_schema（`JsonModelRequest`新增預設關閉的
+  `response_format`欄位；P3-E生產路徑wire位元組不變並有既有斷言與新永久測試保護）。全套重驗：
+  seam+transport `91 passed`、`verify_p1.sh`全綠（non-integration `1299 passed, 219 deselected`）、
+  真實PG16 `204 passed, 15 deselected, 0 skipped`、offline frozen byte-match通過。
+  V12 live batch（plan hash `019b4de722f78a02911eebe1a6096df1ea3d01ee0109f979f6ce205d05cd3954`、
+  config hash `f35fd5f33010978ae02c6b5a6ddf391503b25ff00c7d39e1e056fee07d171e80`）**完整執行完畢
+  （execution_status=COMPLETED）**：260/260 logical requests全部`STRICTLY_PARSED`且260/260正確、
+  response-contract violations=0、130/130 pre-network fail-closed、0 retry／0 fallback／零timeout；
+  transport first-attempt與eventual均100%。Live Model Quality Gate與Provider Transport Gate同批
+  雙綠。latency normal p50 2,973ms／p95 9,199ms／max 31.5s；token 289,758＋70,139＝359,897。
+  sanitized local-only evidence hash為`de5d0ae1152aed554fcb9f10b8fd23039f2fe9b918f26fa329508a7d9ba1737b`，
+  audit root為`f100720a0e160addeaaf6a1f47afe2f01df98f72bd6751fe412b2304ea22d887`；未讀取或保存raw
+  response。**P3-F implementation completed; pending independent acceptance。**下一步是把
+  `P3F_ACCEPTANCE_PROMPT.md`交給fresh session獨立驗收；Provider Transport即使GREEN也只是本批
+  snapshot，P6前仍需rolling 7日／至少200 logical calls的另行授權canary重驗。
 
 已完成階段的 prompts 已移除。本文件是目前交接與獨立驗收入口；歷史細節只作稽核，不得覆蓋
 本節狀態。
@@ -65,7 +228,7 @@
 | P3-B+C | Closed | 兩個子Gate均Accepted；commit `55c9a16`／CI `32558983841`成功 |
 | P3-D | Accepted | P3-E改動後重驗：focused 368、non-integration 1158、PG16 148；零skip、零High/Medium blocker |
 | P3-E | Accepted | final live 6/6、PG audit 6 rows；full 1174、PG16 150；無High/Medium blocker |
-| P3-F | In progress | immutable reflection、bounded memory、CAS promotion、curator PG與offline eval實作中 |
+| P3-F | Implementation completed; pending independent acceptance | V12 live batch完整執行：260/260 strict且全正確、violations=0、130/130 fail-closed、transport雙門檻100%；待fresh session獨立驗收 |
 
 ## 3. P3-B Accepted 範圍
 
@@ -308,8 +471,8 @@ P3-D 獨立驗收 Accepted（2026-08-22，fresh session未參與實作／修復�
 
 ## 8. 下一個單一步驟
 
-P3-D在P3-E改動後完成全量重驗並維持**Accepted**（focused 368、non-integration 1158、真實
-PG16 148，零skip、零High/Medium blocker）。下一個單一步驟是取得P3-E六個synthetic case、最多
-六次Agnes request、privacy／quota／stop conditions的明確Yes；在此之前不得呼叫provider。
-P3-E live通過並完成本session acceptance後，才可開始P3-F。工作包未stage／commit／push，
-`HEAD`仍為`55c9a16`。
+**P3-F implementation completed; pending independent acceptance。**下一個單一步驟是把
+`P3F_ACCEPTANCE_PROMPT.md`交給未參與實作的fresh session執行獨立驗收（重跑offline／PG16／
+全套regression並重新計算V12 live metrics）。Provider Transport GREEN僅代表本批snapshot；
+P6前需rolling 7日／至少200 logical calls的另行授權canary重驗。工作包未stage／commit／push，
+`HEAD`為`e7b7223`且工作樹有dirty/untracked變更；未經授權不得發布。

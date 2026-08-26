@@ -16,7 +16,7 @@ if [[ -z "$authorization_file" || -z "$trusted_config_hash" ]]; then
     exit 1
 fi
 
-fixtures="tests/fixtures/p3f_evals"
+fixtures="tests/fixtures/p3f_evals_v12"
 if [[ "${SEVEN_LENS_P3F_LIVE:-0}" != "1" ]]; then
     exec uv run --locked python -m seven_lens.evals live-plan \
         --authorization-file "$authorization_file" \

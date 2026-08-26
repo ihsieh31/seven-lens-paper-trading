@@ -227,6 +227,9 @@ optimizer 的目標是最大化經 haircut 的預期報酬，減去 variance、c
   Portfolio Manager全部固定`agnes-2.5-flash`，使用exact Chat Completions endpoint。
 - 此版本沒有fallback、automatic retry、可配置候選或Responses route；未來新增provider/model要先取得新決策並
   通過相同eval gate，不得由runtime任意切換。
+- 例外只存在於P3-F synthetic eval harness：production transport本身仍無hidden retry；eval orchestrator可在
+  exact使用者授權的260 logical／780 attempt cap內，僅對`TIMEOUT`／`TRANSIENT`／`RATE_LIMIT`重試兩次並以
+  circuit breaker止損。這不延伸到production analysis或交易路徑。
 - 所有角色記錄`reasoning_requested=MAX`，但在官方＋authorized live evidence證實前不傳未知參數，
   `reasoning_effective=UNKNOWN`，不得假裝已啟用MAX。
 - 傳給模型的portfolio snapshot必須去除姓名、account id、broker order id等識別欄位，只保留分析必需數值；
@@ -290,6 +293,11 @@ Codex 不負責：
 9. **P8 Unattended Paper Gate**：再至少 40 個交易日無人值守，通過 uptime、reconciliation、風控和研究品質門檻。
 
 無論 Paper 表現如何，本企劃沒有自動升級實盤的 gate。
+
+P3-F內部驗收拆成：Offline Correctness（安全與deterministic結果100%）、Live Model Quality（至少250/260 strict
+responses、completed正確率≥98%、response-contract violations=0、130/130 local fail-closed）與Provider
+Transport（first-attempt≥95%、最多三attempt後eventual≥99%）。Transport是會隨時間變動的P6 readiness Gate，
+需在P6前以rolling 7日且至少200個另行授權synthetic canary calls重驗；它不由單次P3-F batch永久關閉。
 
 ## 13. 最終交付物
 

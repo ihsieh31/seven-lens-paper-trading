@@ -232,6 +232,12 @@ serialized byte budgets。大型raw evidence只能進未來另行驗收的conten
 
 - P3-E目前所有Analyst、Research、Trader、Risk Debate與Portfolio Manager角色固定
   `agnes-2.5-flash`／Chat Completions exact endpoint，無fallback、無automatic retry；其他provider/model皆disabled。
+- 上述production transport邊界不變。P3-F synthetic eval由較高層、exact authorization-bound orchestrator處理
+  transient transport：同一hash-closed logical case只對`TIMEOUT`／`TRANSIENT`／`RATE_LIMIT`最多retry兩次，
+  2s／4s exponential backoff加bounded deterministic jitter，三個連續cases耗盡retry即開circuit，260 logical
+  requests最多780 attempts；沒有model fallback。每次attempt以當下wall clock產生新的180秒deadline。
+- P3-F Offline Correctness與Live Model Quality是功能Gate；Provider Transport另為rolling營運Gate。單次batch成功
+  不能宣稱未來availability，transport未達first-attempt 95%／eventual 99%時不得開始P6 Shadow。
 - runtime不能覆寫host/path/model，不能用`/models`或環境proxy自動改route。
 - 內部設定一律`reasoning_requested=MAX`；目前沒有官方＋authorized live證據支持Agnes的MAX參數，
   因此不傳未知參數並記`reasoning_effective=UNKNOWN`。

@@ -460,9 +460,7 @@ def verify_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvidenc
     return RuntimeRoleEvidence(owner_role, runtime_role, database_name)
 
 
-def provision_memory_curator_role(
-    owner_dsn: str, curator_role: str
-) -> MemoryCuratorRoleEvidence:
+def provision_memory_curator_role(owner_dsn: str, curator_role: str) -> MemoryCuratorRoleEvidence:
     """Provision the independent login that may curate but never publish source/trades."""
 
     _validate_dsn(owner_dsn)
@@ -494,9 +492,7 @@ def provision_memory_curator_role(
         )
         for signature in _CURATOR_EXECUTE_SIGNATURES:
             cursor.execute(
-                sql.SQL("GRANT EXECUTE ON FUNCTION {} TO {}").format(
-                    sql.SQL(signature), role
-                )
+                sql.SQL("GRANT EXECUTE ON FUNCTION {} TO {}").format(sql.SQL(signature), role)
             )
         _assert_curator_privileges(cursor, curator_role, database_name)
         _assert_no_public_privileges(cursor)
@@ -505,9 +501,7 @@ def provision_memory_curator_role(
     return MemoryCuratorRoleEvidence(owner_role, curator_role, database_name)
 
 
-def verify_memory_curator_role(
-    owner_dsn: str, curator_role: str
-) -> MemoryCuratorRoleEvidence:
+def verify_memory_curator_role(owner_dsn: str, curator_role: str) -> MemoryCuratorRoleEvidence:
     """Fail closed on any curator flag, ownership, object, or privilege drift."""
 
     _validate_dsn(owner_dsn)
@@ -921,8 +915,7 @@ def _assert_curator_privileges(
         (curator_role,),
     )
     observed = {
-        str(row[0]): bool(row[1])
-        for row in cast("list[tuple[object, ...]]", cursor.fetchall())
+        str(row[0]): bool(row[1]) for row in cast("list[tuple[object, ...]]", cursor.fetchall())
     }
     expected_functions = {
         signature: signature in _CURATOR_EXECUTE_SIGNATURES for signature in observed

@@ -50,7 +50,8 @@
 |---|---|---|
 | Tavily 單帳號額度用盡／429 | 已授權 pool 才切到另一健康帳號；否則停止 discovery | cooldown/reset 或 Tavily 授權確認 |
 | Tavily pool 授權不明／被撤回 | 立即降為單帳號模式，其他 keys disabled | 書面或後台授權重新驗證 |
-| LLM timeout/429/schema error | 該角色只切換備援一次；仍失敗則整體 `INVALID/NO_TRADE`，不自由文字 fallback | 新 run |
+| Production LLM timeout/429/schema error | 依ADR-031無automatic retry／fallback；整體`INVALID/NO_TRADE`，不自由文字補救 | 新run重新通過完整authority與deadline checks |
+| P3-F synthetic eval `TIMEOUT`／`TRANSIENT`／`RATE_LIMIT` | 同一logical case最多兩次有界retry（2s、4s backoff＋deterministic jitter）；三個連續cases各自耗盡三attempt即開circuit；不換split掩蓋transport失敗 | 本批authorization仍有效且未達780 attempt cap；其他錯誤不重試 |
 | Risk 第一次拒絕 proposal | 回傳 reason codes + remaining limits；只重申一次 | 第二份 proposal通過，否則 `NO_TRADE` |
 | 行情／新聞事件來源衝突或延遲 | 三次重抓、核對 timestamp／第二來源；仍衝突記 `DATA_CONFLICT`，不啟動 LLM | 新事件重新通過驗證；hard-risk 仍可獨立減倉 |
 | LLM-visible memory 超過 4,000 行 | 不送入交易 graph；保留 immutable raw records，排入週六 compaction | bounded memory artifact 通過 lineage/future-leakage validation |
@@ -67,6 +68,10 @@
 | Keychain denied／locked／interaction required | 停止啟動；不得彈出 UI、重試猜測或使用 fallback | 使用者登入並解鎖 Keychain、修正權限後明確重新啟動 |
 | Keychain lookup timeout／worker crash／backend unavailable | 終止 spawned lookup worker、關閉 IPC，停止啟動 | backend 恢復，確認沒有殘留 child process，再由全新啟動重新檢查 |
 | Metrics／trace recorder failure | 保留原 business 成功或 typed failure；增加 process-local drop count並產生固定、無 detail diagnostic，不重試 business transaction | recorder 恢復後 best-effort輸出 bounded drop metric；PostgreSQL audit仍是權威 |
+
+P3-F eval retry只適用synthetic、hash-closed、無交易副作用的驗收case，不授權production analysis、proposal、Risk、
+broker或order path自動重試。Provider Transport Gate在P6前以另行授權的rolling 7日、至少200 logical calls
+synthetic canary驗證first-attempt≥95%與三attempt內eventual≥99%；跌破門檻時P6不得開始，P6～P8則暫停新run並告警。
 
 ## 5. 委託前檢查順序
 

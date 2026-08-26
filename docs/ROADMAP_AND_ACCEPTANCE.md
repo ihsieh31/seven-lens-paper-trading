@@ -14,7 +14,7 @@
 | P3-B+C | Closed | — |
 | P3-D | Accepted | 2026-08-24授權單session重審：focused 104、non-integration 893、PG16 141；無High/Medium blocker |
 | P3-E | Accepted | authorized live 6/6、PG audit 6 rows、full/PG16通過 |
-| P3-F | In progress | reflection／memory／CAS／curator／eval實作中 |
+| P3-F | Live quality evidence pending | V10 offline 616/616；新retry／Gate policy已實作，尚未授權real-provider evidence |
 | P4～P8 | Not started | 依序通過前一Gate |
 
 ## P0 — 規格與治理（Closed）
@@ -81,11 +81,16 @@ P3-D／E／F各有獨立implementation與acceptance prompt：`P3D_*`、`P3E_*`�
 - 使用者確認rotation後，final六案例6/6與6筆PG audit rows成功；零retry／fallback，完整證據見
   `docs/P3E_LIVE_EVIDENCE_2026-08-24.json`。
 
-### P3-F — Reflection／memory／evals（In progress）
+### P3-F — Reflection／memory／evals（Live quality evidence pending）
 
 - 每日持倉reflection與Risk rejection lineage；immutable raw audit。
 - 每週LLM-visible memory≤4,000行且無future leakage。
 - record/replay、semantic parity、golden、held-out、ablation與prompt-injection tests。
+- Offline Correctness Gate維持100%；Live Model Quality要求至少250/260 strict completions、completed正確率
+  ≥98%、response-contract violation=0及130/130 pre-network fail-closed。
+- Provider Transport獨立判定first-attempt≥95%與最多三attempt後eventual≥99%；每案只對transient errors最多
+  retry兩次、260 logical cases最多780 attempts、連續三案exhausted即開circuit。Transport未達標不否定功能
+  正確性，但會阻止P6，並須以rolling 7日／至少200個另行授權synthetic canary calls重驗。
 
 P3完成條件：A～F全Closed，完整graph只產生可追溯proposal，任何自由文字fallback、缺來源、
 snapshot缺漏或provider不明都無法進P4。

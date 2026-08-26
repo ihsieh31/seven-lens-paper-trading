@@ -155,7 +155,7 @@
 ### ADR-032 — P3-F immutable reflection、bounded memory與eval治理
 
 - 日期：2026-08-24
-- 狀態：Accepted（架構）；P3-F Gate實作中
+- 狀態：Accepted（架構）；P3-F live quality evidence pending（現行split V12）
 - daily reflection與correction只追加；correction以typed supersedes lineage表示，raw row／bytes／hash不可更新。
 - `available_at`與requested cutoff雙重限制point-in-time可見性；memory是可丟棄derived context，永遠不是
   proposal、Risk、order或broker authority。
@@ -167,6 +167,37 @@
   order、control、owner DDL或trigger authority。
 - eval split／case／fixture／report hash immutable；held-out在final evaluation前封閉，threshold或case變更需新
   split version與全量重跑。P3-F real-provider eval不繼承P3-E授權。
+
+### ADR-033 — P3-F功能品質與Provider transport分離驗收
+
+- 日期：2026-08-26
+- 狀態：Accepted（使用者Gate重構決策）；V10 live已於12 attempts因`RESPONSE_CONTRACT`停止並消耗；
+  尚無通過的live quality evidence，現行split為V12（V12已建立並於2026-08-26完成260/260 live batch；V1～V11 immutable）
+- P3-E production transport仍維持單次呼叫、無SDK hidden retry與零fallback；P3-F eval orchestrator才可在
+  本批exact authorization內重送同一個synthetic、無外部副作用的logical case。每案最多三次attempt
+  （初次＋兩次retry），只限`TIMEOUT`／`TRANSIENT`／`RATE_LIMIT`；`AUTH`、`CONFIG`、`PERMANENT`、
+  `PROTOCOL`、`SCHEMA`、`OVERSIZE`、`DEADLINE`、`AUDIT`、`RESPONSE_CONTRACT`與未知錯誤不重試。
+- retry採2秒、4秒指數backoff加0～999ms deterministic jitter；連續三個logical cases各自耗盡三次attempt
+  即開circuit breaker。260個logical requests的總attempt cap固定780，fallback仍為0。每次attempt以當下
+  wall clock建立獨立180秒deadline，不得沿用batch起點造成後續request過期。
+- P3-F拆為三個判定面：Offline Correctness Gate維持全部deterministic／安全／PG16門檻100%；Live Model
+  Quality Gate要求至少250/260 strict completions、completed cases正確率至少98%、response-contract違規0、
+  130/130 invalid／ambiguous pre-network fail-closed；Provider Transport Gate要求first-attempt成功率至少95%、
+  三次內eventual成功率至少99%，並完整列出attempt、retry、timeout、latency與circuit-breaker分母。
+- Provider Transport是可變營運狀態，不是永久程式正確性。它不再單獨阻止P3-F功能Gate，但未達標時禁止開始
+  P6 Shadow；P6前須以另行授權的synthetic canary，在rolling 7日且至少200個logical calls窗口重新通過，
+  P6～P8持續監控。單次260/260成功不得宣稱provider未來不會失敗。
+- threshold與authorization/evidence schema變更使用新的source-only split（V10已消耗，現行為
+  `p3f-synthetic-v11`）；V1～V10保持immutable historical evidence，不覆寫、不重送。任何新split的live
+  attempt仍需使用者對exact model、payload、260／780 caps、timeout、privacy、cost、retry與stop scope
+  重新明確授權。2026-08-26授權remediation：P3-F live parser升為`p3f-strict-route-decision-v5`，僅新增
+  P3-E live路徑已驗收的單一exact JSON code fence normalization（恰好兩個marker、```json前綴＋換行後綴），
+  其餘fence形狀與所有語意檢查維持fail closed。
+- 依據：[AWS Well-Architected retry guidance](https://docs.aws.amazon.com/wellarchitected/2023-04-10/framework/rel_mitigate_interaction_failure_limit_retries.html)
+  建議對idempotent transient failure採有上限的exponential backoff＋jitter，且只重試可恢復錯誤；
+  [Azure Retry](https://learn.microsoft.com/en-us/azure/architecture/patterns/retry)與
+  [Circuit Breaker](https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker) guidance要求有限
+  重試並在持續失敗時停止呼叫。這些是設計依據，不是Agnes可用性證明。
 
 ## Superseded／historical index
 

@@ -17,7 +17,7 @@ from seven_lens.evals import (
     EvalSplit,
     load_eval_corpus,
 )
-from seven_lens.evals.fixture_factory import rebuild
+from seven_lens.evals.fixture_factory import create_response_contract_remediation_split, rebuild
 from seven_lens.evals.runner import (
     _semantic_fingerprint,
     run_and_verify_frozen,
@@ -25,9 +25,9 @@ from seven_lens.evals.runner import (
     validate_offline_corpus,
 )
 
-FIXTURES = Path(__file__).parent / "fixtures" / "p3f_evals"
-SPLIT_HASH = "189562d9f8792fee3f20ddb73bd640b83635e3bc1cdb520dbffb7882da3e1cd9"
-REPORT_HASH = "a202e28c06dbc930d39171d8610e6795fca3ea371dc0be15793307a964a88c9f"
+FIXTURES = Path(__file__).parent / "fixtures" / "p3f_evals_v12"
+SPLIT_HASH = "054f09c773c903e2090a84cee2103688e2cd85949eed513a66006be6e0e23efb"
+REPORT_HASH = "b6792a8865d7f22f28b98119d96677dd8d1abe381d5e5ca88275192e710f011c"
 
 
 def test_frozen_corpus_counts_hashes_and_route_denominators() -> None:
@@ -71,6 +71,39 @@ def test_frozen_corpus_counts_hashes_and_route_denominators() -> None:
         assert len({_semantic_fingerprint(case) for case in invalid_cases}) == 10
 
 
+def test_response_contract_remediation_split_is_hash_closed() -> None:
+    corpus = load_eval_corpus(FIXTURES)
+    cases, answers = corpus.load_final_evaluation()
+
+    assert corpus.split_manifest.split_version == "p3f-synthetic-v12"
+    assert corpus.split_manifest.split_hash == SPLIT_HASH
+    assert len(cases) == len(answers) == 616
+    assert all(case.case_id.startswith("p3f.v12.") for case in cases)
+    assert (
+        run_and_verify_frozen(
+            FIXTURES,
+            FIXTURES / "reports" / "offline-scripted-v12.json",
+        ).report_hash
+        == REPORT_HASH
+    )
+
+
+def test_response_contract_remediation_generator_requires_a_new_destination(tmp_path: Path) -> None:
+    destination = tmp_path / "p3f_evals_v12"
+    split_hash, report_hash = create_response_contract_remediation_split(
+        destination,
+        split_version="p3f-synthetic-v12",
+    )
+
+    assert split_hash == SPLIT_HASH
+    assert report_hash == REPORT_HASH
+    with pytest.raises(ValueError, match="must not already exist"):
+        create_response_contract_remediation_split(
+            destination,
+            split_version="p3f-synthetic-v12",
+        )
+
+
 def test_tuning_api_cannot_load_held_out_expected_outputs(monkeypatch: pytest.MonkeyPatch) -> None:
     corpus = load_eval_corpus(FIXTURES)
     opened: list[Path] = []
@@ -88,7 +121,7 @@ def test_tuning_api_cannot_load_held_out_expected_outputs(monkeypatch: pytest.Mo
         path.name == "answers.json" and path.parent.name == "held_out" for path in opened
     )
     public = corpus.load_public_cases(EvalSplit.HELD_OUT)
-    assert len(public.cases) == 518
+    assert len(public.cases) == 390
     assert all(not hasattr(case, "validity") for case in public.cases)
     assert b'"decision"' not in (FIXTURES / "held_out" / "cases.json").read_bytes()
     assert b'"validity"' not in (FIXTURES / "held_out" / "cases.json").read_bytes()
@@ -147,7 +180,7 @@ def test_duplicate_json_key_and_nested_symlink_fail_closed(tmp_path: Path) -> No
     shutil.copytree(FIXTURES, duplicated)
     held_out_cases = duplicated / "held_out" / "cases.json"
     raw = held_out_cases.read_text(encoding="utf-8")
-    marker = '"manifest_id":"p3f-held_out-cases-v1"'
+    marker = '"manifest_id":"p3f-v12-held_out-cases-v1"'
     held_out_cases.write_text(raw.replace(marker, f"{marker},{marker}", 1), encoding="utf-8")
     with pytest.raises(CorpusIntegrityError, match="strict UTF-8 JSON"):
         load_eval_corpus(duplicated)
@@ -192,11 +225,11 @@ def test_offline_report_recomputes_all_metrics_and_matches_frozen_bytes() -> Non
         "automatic_retries": 0,
     }
     assert _object(metrics_obj, "accepted_safety_violations")["numerator"] == 0
-    assert _object(metrics_obj, "accepted_schema_integrity_citation_lineage")["numerator"] == 297
+    assert _object(metrics_obj, "accepted_schema_integrity_citation_lineage")["numerator"] == 308
     assert _object(metrics_obj, "scripted_record_replay_hash")["numerator"] == 24
     assert _object(metrics_obj, "graph_trace_round_parity")["numerator"] == 24
-    assert _object(metrics_obj, "invalid_ambiguous_fail_closed_recall")["numerator"] == 319
-    assert _object(metrics_obj, "real_provider_valid_primary")["status"] == "NOT_RUN"
+    assert _object(metrics_obj, "invalid_ambiguous_fail_closed_recall")["numerator"] == 308
+    assert _object(metrics_obj, "live_model_quality")["status"] == "NOT_RUN"
     latency = _object(metrics_obj, "latency")
     assert _object(latency, "normal")["status"] == "NOT_APPLICABLE_OFFLINE"
     assert _object(latency, "emergency")["status"] == "NOT_APPLICABLE_OFFLINE"
@@ -209,13 +242,13 @@ def test_offline_report_recomputes_all_metrics_and_matches_frozen_bytes() -> Non
         "route": 390,
     }
 
-    frozen = FIXTURES / "reports" / "offline-scripted-v3.json"
+    frozen = FIXTURES / "reports" / "offline-scripted-v12.json"
     assert run_and_verify_frozen(FIXTURES, frozen).report_hash == REPORT_HASH
 
 
 def test_frozen_report_byte_mutation_is_rejected(tmp_path: Path) -> None:
     changed = tmp_path / "report.json"
-    changed.write_bytes((FIXTURES / "reports" / "offline-scripted-v3.json").read_bytes() + b" ")
+    changed.write_bytes((FIXTURES / "reports" / "offline-scripted-v12.json").read_bytes() + b" ")
 
     with pytest.raises(ValueError, match="does not match frozen report bytes"):
         run_and_verify_frozen(FIXTURES, changed)

@@ -29,8 +29,9 @@ adversarial tests、真實 PostgreSQL 16、frozen offline eval，以及本批次
 | F7-01 | synthetic/redistributable corpus；case/fixture/split/report hashes frozen，四 split 分離 | `evals/models.py`, `evals/corpus.py`, `tests/fixtures/p3f_evals/` | tamper、symlink/path escape、ID overlap、hash closure tests |
 | F7-02 | tuning 不可讀 held-out expected outputs；final evaluation 才解封 | `evals/corpus.py` | observed-file-read anti-contamination test |
 | F7-03 | safety ≥120、semantic trace ≥20、memory ≥60；每 route held-out valid ≥20 + invalid/ambiguous ≥10；normal/emergency | frozen manifests + `evals/runner.py` | runner 重新計數、canonical duplicate-material rejection、route denominator report |
-| F7-04 | safety violation 0；schema/integrity/citation/lineage、record/replay、trace、invalid recall 皆 100%；latency 含完整分母 | production probes + offline runner | raw result recomputation與 frozen report byte/hash match |
-| F7-05 | real-provider primary ≥98%、最多一次 fallback 後 ≥99%；無 hidden retry，invalid/timeout 留在分母 | inert authorized provider-eval seam；P3-E strict provider boundary | 本批次新授權後的 exact case/audit/request/latency/error evidence；目前不可用 offline 取代 |
+| F7-04 | Offline Correctness：safety violation 0；schema/integrity/citation/lineage、record/replay、trace、invalid recall皆100%；latency含完整分母 | production probes + offline runner v2 | raw result recomputation與committed V12 frozen report byte/hash match |
+| F7-05 | Live Model Quality：至少250/260 strict completions；completed正確率≥98%；response-contract violations=0；130/130 invalid/ambiguous pre-network fail-closed | authorization v4、live evidence v2、strict parser與provider-eval seam | 本批新授權後exact case/attempt/audit/latency/error evidence；transport-only failure不混作response品質，但coverage不得低於250 |
+| F7-06 | Provider Transport：first-attempt≥95%、最多2 retries後eventual≥99%；只重試TIMEOUT/TRANSIENT/RATE_LIMIT；260 logical／780 attempts、backoff+jitter、連續3案exhausted circuit breaker、0 fallback | `evals/provider_eval.py` orchestrator；P3-E transport仍無hidden retry | permanent transient/non-retryable/circuit/accounting tests；P6前rolling 7日且≥200個另行授權synthetic canary calls |
 | F8-01 | 每週 curation 不在交易 critical path；memory 永非 proposal/Risk/order/broker authority | capability-minimal ports/imports；無 execution composition | source import/invariant tests與 scope review |
 | F8-02 | compaction 保存 requested/effective reasoning、route/input/output/report hashes 與 audit metadata | `memory_curation_audits`, provider-eval report contracts | PG audit row closure；authorized provider-eval report recomputation |
 | F8-03 | forecast calibration 只建 plumbing，不宣稱 P5 profitability/economic-fill | memory categories/eval report schema | docs/source scope review；不得出現 P5 threshold claim |
@@ -40,5 +41,6 @@ adversarial tests、真實 PostgreSQL 16、frozen offline eval，以及本批次
 1. 全部 P3-F targeted 加受影響 P3-B/C/D/E tests。
 2. `scripts/verify_p1.sh` 全綠。
 3. `scripts/run_postgres_integration.sh` 使用真實 PostgreSQL 16，P3-F zero skip。
-4. committed frozen offline eval 由 raw cases 重算 counts、metrics、split/report hashes。
-5. 使用者針對 P3-F 本批次另行批准 exact route/case/request/cost/privacy/stop scope 後，才可執行 real-provider eval；P3-E 授權不延伸。
+4. committed V12 frozen offline eval由raw cases重算counts、metrics、split/report hashes。
+5. 使用者針對P3-F本批次另行批准exact route/model、390 cases、260 logical requests、780 attempt cap、每案2 retries、180秒、cost/privacy/backoff/circuit/stop scope後，才可執行real-provider eval；P3-E與V1～V9授權不延伸。
+6. P3-F功能驗收分別報Offline Correctness與Live Model Quality；Provider Transport另列Green/Red及完整分母。P6前再用另行授權rolling canary重驗，不得把單次成功寫成永久availability。
