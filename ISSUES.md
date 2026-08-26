@@ -54,21 +54,14 @@ Issue關閉不會自動關閉較大的phase gate。
 - 關閉：P3-E完成capability audit、sanitized contract smoke、schema/timeout/failover/privacy與
   held-out eval。
 
-### OPEN-026 — 緊急事件與bounded memory後續Gate
-
-- 嚴重度：High
-- 現況：event/evidence authority已通過P3-B獨立驗收；P3-F reflection／memory／curation source、PG與offline
-  evidence已完成，V10 live quality與獨立驗收仍待完成。
-- 關閉：event對抗驗收通過；P3-F immutable lineage、≤4,000行curation、future-leakage與V10 Live Model
-  Quality由獨立驗收Accepted。
-
 ### OPEN-027 — Agnes transport可靠性不可由單次P3-F batch永久證明
 
 - 嚴重度：High／P6 blocker；不是P3-F功能正確性blocker。
 - 問題：V4～V8多次因`TIMEOUT`／`TRANSIENT`在首錯停止；反覆換split沒有修復provider可用性，單次全綠也不能
   推論未來可用性。
 - 控制：ADR-033有界兩次retry、attempt cap 780、指數backoff＋jitter、三個連續exhausted cases circuit breaker，
-  並把Live Model Quality與Provider Transport分開報告。
+  並把Live Model Quality與Provider Transport分開報告。V12批次（2026-08-26）first-attempt/eventual皆100%，
+  為該批GREEN snapshot。
 - 關閉：P6前另行授權的synthetic canary在rolling 7日、至少200 logical calls窗口達first-attempt≥95%、
   eventual≤3 attempts≥99%，且P6～P8持續監控；provider/model改版或rolling window跌破門檻即重開。
 
@@ -105,6 +98,7 @@ native smoke需要專用namespace與另行授權，不得查詢現有真實item�
 | P2-ACC-001～009 | P2 final remediation全數Closed；證據見`PROGRESS.md` |
 | CLOSED-024 | migration 0010 down漏刪version row已修復並通過up/down/up |
 | CLOSED-P3C-024（原OPEN-024） | R6獨立驗收Accepted；P3-B+C Combined Gate Closed，證據見`PROJECT_HANDOFF.md` |
+| CLOSED-026（原OPEN-026的P3部分） | P3-F於2026-08-26由獨立重新驗收Accepted（F-A1 remediation紅→綠重注入、PG16 217/0-skip、V12重算260/260＋violations=0＋130/130 fail-closed）；event對抗驗收先前已通過，immutable lineage、≤4,000行curation、future-leakage與Live Model Quality條件全數滿足。Transport rolling canary另列OPEN-027 |
 | SUPERSEDED-021 | 舊cash/NAV關閉理由被P2-CUR證據取代 |
 
 目前沒有已知Open issue可由文件改寫自行關閉；所有Gate blocker都必須由source/tests與適當的真實

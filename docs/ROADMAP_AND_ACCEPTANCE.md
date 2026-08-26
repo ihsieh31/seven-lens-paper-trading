@@ -14,7 +14,8 @@
 | P3-B+C | Closed | — |
 | P3-D | Accepted | 2026-08-24授權單session重審：focused 104、non-integration 893、PG16 141；無High/Medium blocker |
 | P3-E | Accepted | authorized live 6/6、PG audit 6 rows、full/PG16通過 |
-| P3-F | Live quality evidence pending | V10 offline 616/616；新retry／Gate policy已實作，尚未授權real-provider evidence |
+| P3-F | Accepted／Closed | 2026-08-26重新驗收：紅→綠重注入、PG16 217/0-skip、V12重算260/260＋0 violations＋130/130；發布`b59e466`＋`d51e9a9`，CI `32962320231` |
+| P3 Combined | Closed | A～F全Closed；exact-SHA CI兩required jobs成功 |
 | P4～P8 | Not started | 依序通過前一Gate |
 
 ## P0 — 規格與治理（Closed）
@@ -81,7 +82,10 @@ P3-D／E／F各有獨立implementation與acceptance prompt：`P3D_*`、`P3E_*`�
 - 使用者確認rotation後，final六案例6/6與6筆PG audit rows成功；零retry／fallback，完整證據見
   `docs/P3E_LIVE_EVIDENCE_2026-08-24.json`。
 
-### P3-F — Reflection／memory／evals（Live quality evidence pending）
+### P3-F — Reflection／memory／evals（Accepted／Closed）
+
+> 2026-08-26獨立重新驗收Accepted（F-A1 remediation後），隨P3 Combined closure發布於`d51e9a9`
+> （CI `32962320231`）。Provider Transport為V12批次GREEN snapshot；rolling canary義務見OPEN-027。
 
 - 每日持倉reflection與Risk rejection lineage；immutable raw audit。
 - 每週LLM-visible memory≤4,000行且無future leakage。
@@ -93,7 +97,8 @@ P3-D／E／F各有獨立implementation與acceptance prompt：`P3D_*`、`P3E_*`�
   正確性，但會阻止P6，並須以rolling 7日／至少200個另行授權synthetic canary calls重驗。
 
 P3完成條件：A～F全Closed，完整graph只產生可追溯proposal，任何自由文字fallback、缺來源、
-snapshot缺漏或provider不明都無法進P4。
+snapshot缺漏或provider不明都無法進P4。**現況：已滿足——P3-A～F全Closed，P3 Combined Gate
+Closed（2026-08-26）。**
 
 ## P4 — 候選與deterministic Risk（Not started）
 

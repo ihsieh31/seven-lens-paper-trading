@@ -155,7 +155,7 @@
 ### ADR-032 — P3-F immutable reflection、bounded memory與eval治理
 
 - 日期：2026-08-24
-- 狀態：Accepted（架構）；P3-F live quality evidence pending（現行split V12）
+- 狀態：Accepted（架構）；P3-F Gate已Closed（2026-08-26重新驗收Accepted，發布`d51e9a9`／CI `32962320231`；現行split V12）
 - daily reflection與correction只追加；correction以typed supersedes lineage表示，raw row／bytes／hash不可更新。
 - `available_at`與requested cutoff雙重限制point-in-time可見性；memory是可丟棄derived context，永遠不是
   proposal、Risk、order或broker authority。
@@ -173,6 +173,8 @@
 - 日期：2026-08-26
 - 狀態：Accepted（使用者Gate重構決策）；V10 live已於12 attempts因`RESPONSE_CONTRACT`停止並消耗；
   尚無通過的live quality evidence，現行split為V12（V12已建立並於2026-08-26完成260/260 live batch；V1～V11 immutable）
+  。其後V12批次通過Offline Correctness與Live Model Quality並經獨立重新驗收Accepted，P3 Combined closure
+  發布於`d51e9a9`；Provider Transport為該批GREEN snapshot，rolling canary義務不變。
 - P3-E production transport仍維持單次呼叫、無SDK hidden retry與零fallback；P3-F eval orchestrator才可在
   本批exact authorization內重送同一個synthetic、無外部副作用的logical case。每案最多三次attempt
   （初次＋兩次retry），只限`TIMEOUT`／`TRANSIENT`／`RATE_LIMIT`；`AUTH`、`CONFIG`、`PERMANENT`、
@@ -187,8 +189,8 @@
 - Provider Transport是可變營運狀態，不是永久程式正確性。它不再單獨阻止P3-F功能Gate，但未達標時禁止開始
   P6 Shadow；P6前須以另行授權的synthetic canary，在rolling 7日且至少200個logical calls窗口重新通過，
   P6～P8持續監控。單次260/260成功不得宣稱provider未來不會失敗。
-- threshold與authorization/evidence schema變更使用新的source-only split（V10已消耗，現行為
-  `p3f-synthetic-v11`）；V1～V10保持immutable historical evidence，不覆寫、不重送。任何新split的live
+- threshold與authorization/evidence schema變更使用新的source-only split（V10～V11已消耗，現行為
+  `p3f-synthetic-v12`）；V1～V11保持immutable historical evidence，不覆寫、不重送。任何新split的live
   attempt仍需使用者對exact model、payload、260／780 caps、timeout、privacy、cost、retry與stop scope
   重新明確授權。2026-08-26授權remediation：P3-F live parser升為`p3f-strict-route-decision-v5`，僅新增
   P3-E live路徑已驗收的單一exact JSON code fence normalization（恰好兩個marker、```json前綴＋換行後綴），

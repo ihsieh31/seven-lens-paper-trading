@@ -5,7 +5,15 @@
 
 ## 1. 目前唯一狀態
 
-**P3-B Accepted; P3-C Accepted; P3-D Accepted; P3-E Accepted. P3-F V10 live quality evidence pending.**
+**P3-A/B/C/D/E/F 全部Accepted；P3 Combined Gate Closed。發布commit `d51e9a9`，exact-SHA CI run
+`32962320231`的`quality-unit`與`postgres-integration`兩required jobs均成功。下一個Gate：P4（Not started，
+需使用者另行授權）。**
+
+- P3-F於2026-08-26由獨立重新驗收判定Accepted（F-A1 remediation六步深度驗證含紅→綠重注入全過；
+  targeted 423、non-integration 1299、PG16整合217/0-skip、V12 evidence離線重算260/260＋0 violations＋
+  130/130 fail-closed與全部hash閉合；自建對抗PoC A 53/53、B 11/11），隨後依使用者授權完成P3 Combined
+  closure：工作樹以`b59e466`登載，postgres-integration因service tmpfs 512m不足失敗後由`d51e9a9`
+  提升至本地驗證的1g並全綠（run `32962320231`）。詳見`WORKLOG.md`同日紀錄。
 
 - P3-B 經最新獨立重新驗收判定 Accepted。
 - P3-C 首輪 Rejected 後完成 R1～R6；R6 已由新的獨立session重新驗收為 Accepted，P3-B+C
@@ -228,7 +236,8 @@
 | P3-B+C | Closed | 兩個子Gate均Accepted；commit `55c9a16`／CI `32558983841`成功 |
 | P3-D | Accepted | P3-E改動後重驗：focused 368、non-integration 1158、PG16 148；零skip、零High/Medium blocker |
 | P3-E | Accepted | final live 6/6、PG audit 6 rows；full 1174、PG16 150；無High/Medium blocker |
-| P3-F | Implementation completed; pending independent acceptance | V12 live batch完整執行：260/260 strict且全正確、violations=0、130/130 fail-closed、transport雙門檻100%；待fresh session獨立驗收 |
+| P3-F | Accepted／Closed | F-A1 remediation後重新驗收：紅→綠重注入證明永久測試有效、targeted 423、non-integration 1299、PG16 217/0-skip、V12重算260/260＋0 violations＋130/130 |
+| P3 Combined | Closed | A～F全Closed；工作樹以`b59e466`發布、tmpfs修復`d51e9a9`、exact-SHA CI `32962320231`兩jobs成功 |
 
 ## 3. P3-B Accepted 範圍
 
@@ -471,8 +480,9 @@ P3-D 獨立驗收 Accepted（2026-08-22，fresh session未參與實作／修復�
 
 ## 8. 下一個單一步驟
 
-**P3-F implementation completed; pending independent acceptance。**下一個單一步驟是把
-`P3F_ACCEPTANCE_PROMPT.md`交給未參與實作的fresh session執行獨立驗收（重跑offline／PG16／
-全套regression並重新計算V12 live metrics）。Provider Transport GREEN僅代表本批snapshot；
-P6前需rolling 7日／至少200 logical calls的另行授權canary重驗。工作包未stage／commit／push，
-`HEAD`為`e7b7223`且工作樹有dirty/untracked變更；未經授權不得發布。
+**P3 Combined Gate已Closed。**`main`＝`d51e9a9`，工作樹乾淨；exact-SHA CI run `32962320231`的
+`quality-unit`與`postgres-integration`均成功。下一個單一步驟是依使用者另行授權，由fresh session
+規劃並執行**P4 deterministic Risk**（production universe、hard limits、target-to-quantity、
+`OrderIntent` boundary）。存續義務不變：Provider Transport GREEN僅為V12批次snapshot；P6 Shadow
+開始前需另行授權的synthetic canary於rolling 7日且≥200 logical calls達first-attempt≥95%／
+eventual≤3 attempts≥99%，跌破即重開；任何walk-forward主張屬P5、送單能力屬P7之後。

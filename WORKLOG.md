@@ -461,3 +461,40 @@
   `P3F_ACCEPTANCE_PROMPT.md` §9改committed V12 runner。eval threshold/split/held-out/fixtures
   與V1～V12批次皆未動；無provider/broker呼叫、無POST。
 - 狀態：`P3-F remediation completed; pending independent re-acceptance`
+
+## 2026-08-26 — P3-F重新驗收Accepted；P3 Combined closure發布
+
+- 使用者授權原重新驗收session續行closure。重新驗收（全程read-only）判定`P3-F: Accepted`，無High/Medium
+  blocker。F-A1修復六步深度驗證全過：0013 diff僅line 730一行、真實PG16 prosrc儲存單反斜線`\.`、
+  全系統反斜線字面值掃描無同類缺陷、紅→綠重注入（以`git show HEAD`舊函數體CREATE OR REPLACE重灌後，
+  decimal NUMBER永久測試與promotion chain以23514失敗、integer與其他四kind照常通過，回灌fixed復綠）、
+  自建七facts（含12.50/-0.25小數）端到端append/readback/idempotency與完整promotion chain PoC全PASS。
+- 全套重跑：targeted `423 passed`；`verify_p1.sh`全綠（non-integration `1299 passed, 232 deselected`）；
+  真實PG16整合`217 passed, 15 deselected, 0 skipped`（無併發負載之隔離跑）；offline byte-match exit 0，
+  split_hash `054f09c7…`／report_hash `b6792a88…`與首次驗收參考值一致。
+- V12 sanitized evidence離線重算23/23 PASS：evidence_hash `de5d0ae1…`／audit_root `f100720a…`／plan
+  `019b4de7…`／config `f35fd5f3…`全部閉合重算吻合；390筆record audit_hash逐一重算相同；POST ordinals
+  1..260連續且每案皆首attempt；260/260 STRICTLY_PARSED＋ACCEPT、violations=0、130/130 pre-network
+  fail-closed；retry/fallback/timeout=0、first-attempt/eventual=100%；latency p50 3175／p95 9044／max
+  31530ms；tokens 289,758／70,139／359,897；execution_kind=`PRODUCTION_AGNES_KEYCHAIN_STDLIB`。
+- 自建對抗PoC：套件A 53/53 PASS（future source與±1µs cutoff邊界、foreign fact、invented number/date/
+  symbol/scientific、post-construction tamper、correction cycle、replay換source→23505、513 entries、
+  >512KiB、4000行renderer上限、importance/category spoof、duplicate flood、URI/path/email/instruction
+  注入、ghost evidence、forged CAS先於任何DB transition拒絕、invalid candidate containment、crash三點
+  全單位rollback與同execution原地重試冪等至CURRENT、NO_SAFE_MEMORY alert、curator/runtime capability
+  matrix、owner append-only 55000、雙連線競態恰一winner一40001、多as-of point-in-time重播）；套件B
+  11/11 PASS（held-out封印、tuning/held-out tamper拒絕、byte-identical symlink拒絕、duplicate JSON key、
+  symlink root）。
+- 環境觀察（非程式缺陷）：本機Docker VM僅1.4GB，診斷用第二容器並存時OOM killer擊殺bgwriter令整合套件
+  尾段崩潰（postgres log `signal 9`），隔離單跑即綠。CI側e7b7223/b59e466兩次postgres-integration失敗
+  同型：service tmpfs 512m遭WAL churn耗盡致容器崩潰重啟（168 passed後49 connection errors），已由
+  commit `d51e9a9`將tmpfs提升為本地已驗證的1g（本地峰值~832MB）。
+- 發布：驗收時工作樹（33修改＋90 fixture檔）以`b59e466`登載；其CI run `32961887546` quality-unit成功、
+  postgres-integration因上述tmpfs失敗；`d51e9a9`修復後run `32962320231`兩required jobs均success
+  （quality-unit 3m35s；postgres-integration `217 passed, 15 deselected`，4m35s）。
+- 治理同步（本次docs commit）：HANDOFF/PROGRESS/README/ROADMAP翻轉為P3-F Accepted/Closed、P3 Combined
+  Closed；DECISIONS ADR-032/033收尾並修正殘留「現行p3f-synthetic-v11」過時引用；ISSUES OPEN-026關閉、
+  OPEN-027補記V12 GREEN snapshot（義務不變）；RISK_REGISTER R-33/R-34更新；HANDOFF/PROGRESS頂部殘留
+  「V10 live quality evidence pending」過時狀態一併更正。
+- Provider Transport的P6前置義務不變：另行授權synthetic canary於rolling 7日且≥200 logical calls達
+  first-attempt≥95%／eventual≤3 attempts≥99%，跌破即重開。P4未開始，需另經使用者授權。

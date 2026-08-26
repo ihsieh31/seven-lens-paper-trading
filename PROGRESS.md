@@ -4,7 +4,14 @@
 
 ## 目前 Gate
 
-**P3-B Accepted; P3-C Accepted; P3-D Accepted; P3-E Accepted; P3-F V10 live quality evidence pending.**
+**P3-A/B/C/D/E/F 全部Accepted；P3 Combined Gate Closed（commit `d51e9a9`／CI `32962320231`）。**
+
+- P3-F於2026-08-26由獨立重新驗收判定Accepted：F-A1修復六步深度驗證含紅→綠重注入全過；targeted
+  `423 passed`、non-integration `1299 passed, 232 deselected`、真實PG16整合`217 passed, 15 deselected,
+  0 skipped`；V12 evidence離線重算260/260＋violations=0＋130/130 fail-closed，evidence/audit_root/
+  plan/config hash與split/report hash全部閉合。自建對抗PoC A 53/53、B 11/11。
+- P3 Combined closure：工作樹以`b59e466`發布（123 files）；其postgres-integration因service tmpfs
+  512m不足失敗，由`d51e9a9`提升為1g後run `32962320231`兩required jobs全綠。詳見`WORKLOG.md`。
 
 P3-B與P3-C均已通過最新獨立驗收，並以commit `55c9a16`發布至`main`；exact-SHA CI
 `32558983841`兩個required jobs成功。P3-D實作完成後，首輪獨立驗收（2026-08-22）判定Rejected
@@ -130,7 +137,8 @@ canary重驗。
 | P3-C analyst/research | Accepted | R6獨立驗收無blocker；InMemory/PostgreSQL duplicate-input authority一致 |
 | P3-D risk/proposal | Accepted | P3-E改動後重驗：focused 368、non-integration 1158、PG16 148，零skip、零High/Medium blocker |
 | P3-E provider isolation | Accepted | final live 6/6、PG audit 6 rows；full/PG16零失敗 |
-| P3-F memory/evals | Implementation completed; pending independent acceptance | V12 live完整跑完：260/260 strict且全正確、violations=0、transport 100%；待fresh session獨立驗收 |
+| P3-F memory/evals | Accepted／Closed | F-A1 remediation重新驗收：423 targeted、PG16 217/0-skip、V12重算260/260＋0 violations＋130/130 |
+| P3 Combined | Closed | A～F全Closed；`b59e466`發布＋`d51e9a9` tmpfs修復，CI `32962320231`兩jobs成功 |
 | P4 deterministic Risk | Not started | hard limits、target-to-quantity、`OrderIntent` boundary |
 | P5 validation | Not started | point-in-time walk-forward、attribution、economic fills |
 | P6 Shadow | Not started | 至少20交易日，零送單 |
@@ -334,9 +342,9 @@ Rejected）。
 
 ## 尚未完成／不得提前宣告
 
-- P3-D／P3-E均已Accepted；相關未發布工作樹不等於remote release。
-- P3-F V10 real-provider Live Model Quality evidence與後續獨立驗收。
-- Provider Transport rolling reliability evidence；在P6前需另行授權synthetic canary重驗。
+- Provider Transport rolling reliability evidence：V12批次snapshot為GREEN，但P6前仍需另行授權的
+  synthetic canary在rolling 7日且≥200 logical calls重驗，跌破即重開。
+- P4 production universe、deterministic Risk approval、quantity與`OrderIntent`。
 - P4 production universe、deterministic Risk approval、quantity與`OrderIntent`。
 - P5～P8回測、Shadow、Supervised Paper與Unattended Paper。
 - Tavily七帳號pool；沒有外部授權證據時固定`SINGLE_ACCOUNT_UNVERIFIED`。

@@ -18,7 +18,8 @@ execution 只能處理已核准的 Paper `OrderIntent`。本專案沒有 Alpaca 
 | P3-B+C evidence／research pipeline | Closed | P3-B與P3-C均經獨立驗收Accepted；已發布至`main` |
 | P3-D risk／proposal | Accepted | 2026-08-24授權單session反覆重審完成；零High/Medium blocker |
 | P3-E | Accepted | authorized live六案例6/6與PG audit/full regression通過 |
-| P3-F | Implementation completed; pending independent acceptance | V12 live完整跑完：260/260 strict且全正確、violations=0、transport 100%；待fresh session獨立驗收 |
+| P3-F | Accepted／Closed | F-A1 remediation重新驗收通過：PG16 217/0-skip、V12重算260/260＋0 violations＋130/130 |
+| P3 Combined | Closed | `b59e466`發布＋`d51e9a9` tmpfs修復；CI `32962320231`兩required jobs成功 |
 | P4～P8 | Not started | 不得提前宣告能力或繞過後續 gate |
 
 P3-B+C已發布於commit `55c9a16ced2fbc2ec3b3d5cfd46abcdabcb56069`；本機與遠端
@@ -29,10 +30,10 @@ non-integration `809 passed, 102 deselected`，真實PostgreSQL 16
 
 P3-D工作包維持**Accepted**。P3-E final authorized live batch六案例6/6成功、6 PG audit rows，
 full `1174 passed, 165 deselected`、PG16 `150 passed, 15 deselected, 0 skipped`，狀態為**Accepted**。
-P3-F V10 source-only split與offline report已完成：split
-`237620d1faefaa797f16a4c5e784ef113491cbaa8859a88977dae9c19c56ae63`、report
-`aea1b77c94e2482b62b0fc40209f216f7629fa77a719679ce1008c3489622c38`、616/616。P3-F尚未Accepted；
-新live evidence未授權／未執行，P4仍未開始。
+P3-F於2026-08-26由獨立重新驗收判定**Accepted**（F-A1 remediation紅→綠重注入驗證、targeted 423、
+non-integration 1299、PG16整合217/0-skip、V12 evidence離線重算260/260＋violations=0＋130/130
+fail-closed），隨後完成**P3 Combined closure**：工作樹以`b59e466`發布，CI tmpfs修復`d51e9a9`，
+exact-SHA run `32962320231`兩required jobs成功。P4未開始。
 
 ## 核心邊界
 
@@ -111,10 +112,8 @@ uv run ruff format .
 
 ## 下一步
 
-P3-B+C Combined Gate已Closed並發布；P3-D、P3-E維持Accepted。P3-F已完成offline與authorized
-real-provider live證據：V12 batch在eval層注入const-pinned `response_format`後**完整執行**——
-260/260 strict且全正確、violations=0、130/130 pre-network fail-closed、transport雙門檻100%，
-Live Model Quality與Provider Transport同批雙綠。狀態為**implementation completed; pending
-independent acceptance**；下一步由未參與實作的fresh session以`P3F_ACCEPTANCE_PROMPT.md`驗收。
-Transport GREEN僅為本批snapshot，P6前需另行授權rolling canary重驗。不得把P3規劃或後續關門
-解讀為Paper order readiness。
+**P3 Combined Gate已Closed並發布至`main`（`d51e9a9`，CI `32962320231`兩jobs成功）。**
+下一個Gate是**P4 deterministic Risk（Not started）**，需使用者明確授權後由fresh session開始。
+存續義務：Provider Transport GREEN僅為V12批次snapshot，P6 Shadow前需另行授權的synthetic canary
+於rolling 7日且≥200 logical calls達first-attempt≥95%／eventual≤3 attempts≥99%，跌破即重開。
+不得把P3規劃或後續關門解讀為Paper order readiness。
