@@ -11,7 +11,7 @@ real endpoint is authorized; real order submission is deferred to P7.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Final, Protocol
 from urllib.parse import quote, urlencode
@@ -48,6 +48,7 @@ from seven_lens.execution.orders import (
 
 _TIMEOUT_STATUS_CODES: Final[frozenset[int]] = frozenset({408, 429, 500, 502, 503, 504})
 _MAX_PAGINATION_PAGES: Final[int] = 100
+_ORDER_SUBMISSION_LOOKBACK = timedelta(days=1)
 
 
 class AlpacaResponse:
@@ -209,7 +210,11 @@ class AlpacaPaperAdapter:
         orders: list[BrokerOrder] = []
         seen: set[str] = set()
         cursor: str | None = None
-        submitted_after = datetime.combine(since.value.date(), datetime.min.time(), tzinfo=UTC)
+        submitted_after = datetime.combine(
+            (since.value - _ORDER_SUBMISSION_LOOKBACK).date(),
+            datetime.min.time(),
+            tzinfo=UTC,
+        )
         for _ in range(100):
             query = {"status": "all", "limit": "500", "direction": "asc"}
             if cursor is None:

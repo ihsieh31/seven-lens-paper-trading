@@ -9,7 +9,7 @@ pause decision belong to the caller's transaction and control plane.
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from typing import Protocol
 from uuid import uuid4
 
@@ -32,8 +32,11 @@ from seven_lens.execution.reconciliation import (
     MismatchKind,
     ReconciliationMismatch,
     ReconciliationResult,
+    ReconciliationScope,
     ReconciliationStatus,
 )
+
+_HISTORY_OVERLAP = timedelta(days=1)
 
 
 class AccountReconciliationPolicy:
@@ -139,6 +142,7 @@ class Reconciler:
                 checked_orders=0,
                 checked_fills=0,
                 observed_at=self._clock(),
+                scope=ReconciliationScope.PARTIAL,
             )
         except LedgerInvariantError as error:
             detail = str(error)[:200] if str(error).strip() else "ledger invariant failure"
@@ -155,6 +159,7 @@ class Reconciler:
                 checked_orders=0,
                 checked_fills=0,
                 observed_at=self._clock(),
+                scope=ReconciliationScope.PARTIAL,
             )
         unit_of_work.reconciliations.add(result)
         if result.status is ReconciliationStatus.MISMATCH:
@@ -179,14 +184,16 @@ class Reconciler:
     ) -> UtcTimestamp:
         """The earliest broker update time this run must re-examine.
 
-        Every order updated after the previous run's observed_at must be
-        compared; with no previous evidence, the trading date's start is the
-        wall of the record.
+        Reconciliation REST history can be temporarily incomplete.  The
+        one-day overlap is explicit and bounded: a late-visible terminal
+        update inside that allowance is re-examined on the next run without
+        permitting an unbounded history scan.
         """
         latest = unit_of_work.reconciliations.latest()
         if latest is not None:
-            return latest.observed_at
-        return UtcTimestamp(datetime.combine(trading_date.value, time.min, tzinfo=UTC))
+            return UtcTimestamp(latest.observed_at.value - _HISTORY_OVERLAP)
+        trading_start = datetime.combine(trading_date.value, time.min, tzinfo=UTC)
+        return UtcTimestamp(trading_start - _HISTORY_OVERLAP)
 
     def collect(
         self, unit_of_work: _ReconciliationUnitOfWork, trading_date: TradingDate
@@ -552,4 +559,9 @@ class Reconciler:
             checked_orders=checked_orders,
             checked_fills=checked_fills,
             observed_at=self._clock(),
+            scope=(
+                ReconciliationScope.FULL
+                if self._account_policy is not None
+                else ReconciliationScope.PARTIAL
+            ),
         )

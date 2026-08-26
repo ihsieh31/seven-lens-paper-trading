@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import timedelta
 from uuid import uuid4
@@ -38,6 +39,7 @@ from seven_lens.execution.reconciliation import (
     MismatchKind,
     ReconciliationMismatch,
     ReconciliationResult,
+    ReconciliationScope,
     ReconciliationStatus,
 )
 
@@ -55,6 +57,23 @@ class _HistoryFailureBroker(FakePaperBroker):
     def list_recent_orders(self, *, since: UtcTimestamp) -> tuple[BrokerOrder, ...]:
         del since
         raise BrokerTransportError("injected history failure")
+
+
+class _LateVisibleHistoryBroker(FakePaperBroker):
+    """Hide one terminal order until a later reconciliation run."""
+
+    def __init__(self, *, hidden_client_id: str, clock: Callable[[], UtcTimestamp]) -> None:
+        super().__init__(clock=clock, hidden_client_ids={hidden_client_id})
+        self._history_visible = False
+
+    def list_recent_orders(self, *, since: UtcTimestamp) -> tuple[BrokerOrder, ...]:
+        if not self._history_visible:
+            return ()
+        return super().list_recent_orders(since=since)
+
+    def reveal_order(self, client_order_id: ClientOrderId) -> None:
+        super().reveal_order(client_order_id)
+        self._history_visible = True
 
 
 class _SnapshotRaceBroker(FakePaperBroker):
@@ -197,6 +216,28 @@ class TestReconciliationResult:
             observed_at=_BASE_TIME,
         )
         assert mismatch.status is ReconciliationStatus.MISMATCH
+
+    def test_only_full_scope_clean_is_resume_safe(self) -> None:
+        partial = ReconciliationResult.create(
+            trading_date=_TRADING_DATE,
+            mismatches=(),
+            checked_orders=0,
+            checked_fills=0,
+            observed_at=_BASE_TIME,
+        )
+        full = ReconciliationResult.create(
+            trading_date=_TRADING_DATE,
+            mismatches=(),
+            checked_orders=0,
+            checked_fills=0,
+            observed_at=_BASE_TIME,
+            scope=ReconciliationScope.FULL,
+        )
+
+        assert partial.scope is ReconciliationScope.PARTIAL
+        assert partial.is_resume_safe is False
+        assert full.scope is ReconciliationScope.FULL
+        assert full.is_resume_safe is True
 
     def test_consistency_violations_are_rejected(self) -> None:
         with pytest.raises(ValueError, match="CLEAN requires"):
@@ -358,6 +399,47 @@ class TestReconciler:
 
         kinds = {mismatch.kind for mismatch in result.mismatches}
         assert MismatchKind.STATUS_MISMATCH in kinds  # broker CANCELED, mirror ACCEPTED
+
+    def test_late_visible_terminal_update_is_rechecked_inside_bounded_overlap(self) -> None:
+        class MutableClock:
+            def __init__(self) -> None:
+                self.now = UtcTimestamp.from_isoformat("2026-08-16T23:55:00.000000Z")
+
+            def __call__(self) -> UtcTimestamp:
+                return self.now
+
+        clock = MutableClock()
+        intent = _intent(target_version=18)
+        broker = _LateVisibleHistoryBroker(
+            hidden_client_id=intent.client_order_id.value,
+            clock=clock,
+        )
+        accepted = broker.submit_order(intent)
+        assert isinstance(accepted, SubmitAccepted)
+        orders = FakeOrderRepository()
+        orders.record_broker_order(accepted.order)
+
+        clock.now = UtcTimestamp.from_isoformat("2026-08-17T00:20:00.000000Z")
+        orders.update_broker_order_status(
+            accepted.order.broker_order_id,
+            BrokerOrderStatus.CANCELED,
+            0,
+            broker_observed_at=clock(),
+        )
+        clock.now = UtcTimestamp.from_isoformat("2026-08-17T00:30:00.000000Z")
+        broker.force_status(intent.client_order_id, BrokerOrderStatus.FILLED)
+
+        unit_of_work = _UnitOfWork(orders)
+        clock.now = UtcTimestamp.from_isoformat("2026-08-17T01:00:00.000000Z")
+        first = Reconciler(broker=broker, clock=clock).collect(unit_of_work, _TRADING_DATE)
+        assert first.status is ReconciliationStatus.CLEAN
+        unit_of_work.reconciliations.add(first)
+
+        clock.now = UtcTimestamp.from_isoformat("2026-08-17T02:00:00.000000Z")
+        broker.reveal_order(intent.client_order_id)
+        second = Reconciler(broker=broker, clock=clock).collect(unit_of_work, _TRADING_DATE)
+
+        assert MismatchKind.STATUS_MISMATCH in {mismatch.kind for mismatch in second.mismatches}
 
     def test_equal_timestamp_terminal_history_conflict_is_not_deduplicated(self) -> None:
         orders = FakeOrderRepository()

@@ -484,7 +484,7 @@ class TestRecentOrderPagination:
         recent = dict(_ORDER_PAYLOAD)
         recent["id"] = "broker-recent"
         recent["client_order_id"] = "slv1-seven-lens-2026-08-17-open-t501-AAPL-buy"
-        recent["submitted_at"] = "2026-08-17T13:00:00.000000Z"
+        recent["submitted_at"] = "2026-08-16T23:55:00.000000Z"
         recent["updated_at"] = "2026-08-17T13:40:00.000000Z"
 
         def responder(_method: str, url: str) -> AlpacaResponse:
@@ -499,6 +499,9 @@ class TestRecentOrderPagination:
 
         assert [order.broker_order_id for order in orders] == ["broker-recent"]
         assert "after=" in transport.requests[0][1]
+        assert parse_qs(urlsplit(transport.requests[0][1]).query)["after"] == [
+            "2026-08-16T00:00:00.000000Z"
+        ]
         assert "after_order_id=broker-000499" in transport.requests[1][1]
 
 
