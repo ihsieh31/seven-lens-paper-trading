@@ -9,8 +9,10 @@ import pytest
 
 from fakes.control import FakeControlRepository
 from fakes.orders import FakeOrderRepository
+from seven_lens.application.execution_service import ExecutionEngine
 from seven_lens.domain.value_objects import RunId, TradingDate, UtcTimestamp
 from seven_lens.execution.control import ControlCommand
+from seven_lens.execution.fake_broker import FakePaperBroker
 from seven_lens.execution.orders import (
     BrokerOrder,
     BrokerOrderStatus,
@@ -55,6 +57,13 @@ class _UnitOfWork:
         self.commit_count += 1
 
 
+class _PauseCommitFailureUnitOfWork(_UnitOfWork):
+    def commit(self) -> None:
+        self.commit_count += 1
+        if self.control.state().entries_paused:
+            raise RuntimeError("injected pause commit failure")
+
+
 def _setup() -> tuple[_UnitOfWork, OrderIntent, BrokerOrder]:
     intent = OrderIntent.create(
         strategy="seven-lens",
@@ -95,6 +104,29 @@ def _setup() -> tuple[_UnitOfWork, OrderIntent, BrokerOrder]:
     )
     orders.record_broker_order(mirror)
     return _UnitOfWork(orders), intent, mirror
+
+
+def _new_outbox_intent(orders: FakeOrderRepository) -> OrderIntent:
+    intent = OrderIntent.create(
+        strategy="seven-lens",
+        trading_date=_TRADING_DATE,
+        window="open",
+        target_version=2,
+        symbol=Symbol("AAPL"),
+        side=OrderSide.BUY,
+        quantity=OrderQuantity(10),
+        intent_type=OrderIntentType.REBALANCE,
+        limit_price=Price.from_cents(10_000),
+        collar=PriceCollar(reference=Price.from_cents(10_000), offset_bps=100),
+        earliest_submit_at=_T0,
+        cancel_at=_CANCEL_AT,
+        run_id=RunId.new(),
+        created_at=_T0,
+    )
+    orders.add(intent)
+    orders.transition_status(intent.client_order_id, OrderStatus.RISK_APPROVED)
+    orders.transition_status(intent.client_order_id, OrderStatus.OUTBOX_PENDING)
+    return intent
 
 
 def _fill_update(execution_id: str, quantity: int, occurred_at: UtcTimestamp) -> FillUpdate:
@@ -274,8 +306,9 @@ class TestStatusConflictConvergence:
         )
         assert current is not None and current.status is expected_intent_status
         assert unit_of_work.rollback_count == rollbacks_before + 1
-        # Rollback happens first; the safety pause and its audit are separate commits.
-        assert unit_of_work.commit_count == commits_before + 2
+        # Rollback happens first; the unresolved marker, safety pause, and its
+        # audit are separate commits.
+        assert unit_of_work.commit_count == commits_before + 3
         state = unit_of_work.control.state()
         assert state.entries_paused is True
         assert state.paused_reason == "reconciliation required; conflicting status"
@@ -309,7 +342,7 @@ class TestStatusConflictConvergence:
             rollbacks_before,
             BrokerOrderStatus.PARTIALLY_FILLED,
             5,
-            OrderStatus.PARTIALLY_FILLED,
+            OrderStatus.REVIEW_REQUIRED,
         )
 
     def test_filled_status_with_mismatched_quantity_is_typed_rolled_back_and_paused(
@@ -331,7 +364,7 @@ class TestStatusConflictConvergence:
             rollbacks_before,
             BrokerOrderStatus.ACCEPTED,
             0,
-            OrderStatus.ACKNOWLEDGED,
+            OrderStatus.REVIEW_REQUIRED,
         )
 
     def test_overfill_beyond_order_quantity_is_typed_rolled_back_and_paused(self) -> None:
@@ -354,7 +387,7 @@ class TestStatusConflictConvergence:
             rollbacks_before,
             BrokerOrderStatus.ACCEPTED,
             0,
-            OrderStatus.ACKNOWLEDGED,
+            OrderStatus.REVIEW_REQUIRED,
         )
 
     def test_illegal_broker_transition_is_typed_rolled_back_and_paused(self) -> None:
@@ -378,7 +411,7 @@ class TestStatusConflictConvergence:
             rollbacks_before,
             BrokerOrderStatus.CANCELED,
             5,
-            OrderStatus.CANCELED,
+            OrderStatus.REVIEW_REQUIRED,
         )
 
     def test_equal_timestamp_conflicting_payload_is_typed_rolled_back_and_paused(
@@ -404,7 +437,7 @@ class TestStatusConflictConvergence:
             rollbacks_before,
             BrokerOrderStatus.ACCEPTED,
             0,
-            OrderStatus.ACKNOWLEDGED,
+            OrderStatus.REVIEW_REQUIRED,
         )
 
     def test_equal_timestamp_identical_payload_stays_duplicate_without_pause(self) -> None:
@@ -422,6 +455,34 @@ class TestStatusConflictConvergence:
         assert unit_of_work.control.commands == []
         assert unit_of_work.rollback_count == 0
         assert unit_of_work.commit_count == 0
+
+    def test_pause_commit_failure_leaves_durable_gate_for_second_actor(self) -> None:
+        unit_of_work, intent, _mirror = _setup()
+        failing_uow = _PauseCommitFailureUnitOfWork(unit_of_work.orders)
+        failing_uow.control = unit_of_work.control
+        conflicting_update = _status_update(intent, BrokerOrderStatus.PARTIALLY_FILLED, 4, _T1)
+
+        with pytest.raises(TradeUpdateError, match="pause"):
+            TradeUpdateConsumer().apply(failing_uow, conflicting_update)
+
+        # Simulate the failed pause transaction being rolled back in the
+        # control row while the durable unresolved marker remains committed.
+        failing_uow.control.set_entries_paused(False, None)
+
+        unresolved = failing_uow.orders.get(intent.client_order_id)
+        assert unresolved is not None
+        assert unresolved.status is OrderStatus.REVIEW_REQUIRED
+
+        second_intent = _new_outbox_intent(failing_uow.orders)
+        second_uow = _UnitOfWork(failing_uow.orders)
+        second_uow.control = failing_uow.control
+        broker = FakePaperBroker(clock=lambda: _T0)
+        engine = ExecutionEngine(broker=broker, clock=lambda: _T0, control=second_uow.control)
+
+        result = engine.submit_from_outbox(second_uow, second_intent.client_order_id)
+
+        assert result.status is OrderStatus.UNKNOWN
+        assert broker.get_order(second_intent.client_order_id) is None
 
     def test_audit_failure_leaves_conflict_pause_durable_and_observable(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -444,7 +505,7 @@ class TestStatusConflictConvergence:
         state = unit_of_work.control.state()
         assert state.entries_paused is True
         assert state.paused_reason == "reconciliation required; conflicting status"
-        assert unit_of_work.commit_count == 1
+        assert unit_of_work.commit_count == 2
         assert "trade_update_conflict_pause_audit_failed" in caplog.text
 
     def test_stale_unknown_and_monotonic_paths_never_pause(self) -> None:

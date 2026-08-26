@@ -150,8 +150,38 @@ class TradeUpdateConsumer:
             return self._apply_status(unit_of_work, update)
         raise TradeUpdateError("unknown trade update type")
 
-    def _persist_conflict_pause(self, unit_of_work: _ConsumerUnitOfWork, conflict: str) -> None:
-        """Persist entries_paused and an audit command after an unrepresentable update."""
+    def _persist_conflict_marker(
+        self,
+        unit_of_work: _ConsumerUnitOfWork,
+        client_order_id: ClientOrderId,
+        conflict: str,
+    ) -> None:
+        """Persist the unresolved intent before relying on the global pause."""
+        intent = unit_of_work.orders.get(client_order_id)
+        if intent is None:
+            raise TradeUpdateError(
+                f"cannot persist unresolved intent after {conflict}; order intent is missing"
+            )
+        if intent.status in (OrderStatus.UNKNOWN, OrderStatus.REVIEW_REQUIRED):
+            return
+        try:
+            unit_of_work.orders.transition_status(client_order_id, OrderStatus.REVIEW_REQUIRED)
+            # This is the independent fail-closed gate.  A later pause commit
+            # may fail, but another connection must still see this marker.
+            unit_of_work.commit()
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                unit_of_work.rollback()
+            raise TradeUpdateError(f"failed to persist unresolved intent after {conflict}") from exc
+
+    def _persist_conflict_pause(
+        self,
+        unit_of_work: _ConsumerUnitOfWork,
+        client_order_id: ClientOrderId,
+        conflict: str,
+    ) -> None:
+        """Persist an unresolved marker, then entries_paused and an audit command."""
+        self._persist_conflict_marker(unit_of_work, client_order_id, conflict)
         # Use the same connection as the accepted fact when possible; rollback
         # has already cleared derived state, so this is a fresh transaction.
         try:
@@ -282,13 +312,13 @@ class TradeUpdateConsumer:
             with contextlib.suppress(Exception):
                 unit_of_work.rollback()
             # Durably pause for reconciliation; an exception is not a durable gate.
-            self._persist_conflict_pause(unit_of_work, "conflicting fill")
+            self._persist_conflict_pause(unit_of_work, mirror.client_order_id, "conflicting fill")
             raise
         except Exception as exc:
             with contextlib.suppress(Exception):
                 unit_of_work.rollback()
             # Preserve fill fact, persist pause, then surface typed error.
-            self._persist_conflict_pause(unit_of_work, "conflicting fill")
+            self._persist_conflict_pause(unit_of_work, mirror.client_order_id, "conflicting fill")
             raise TradeUpdateError(
                 "trade update cannot be applied fail-safely; reconciliation required"
             ) from exc
@@ -355,12 +385,12 @@ class TradeUpdateConsumer:
             with contextlib.suppress(Exception):
                 unit_of_work.rollback()
             # Durably pause for reconciliation; an exception is not a durable gate.
-            self._persist_conflict_pause(unit_of_work, "conflicting status")
+            self._persist_conflict_pause(unit_of_work, update.client_order_id, "conflicting status")
             raise
         except Exception as exc:
             with contextlib.suppress(Exception):
                 unit_of_work.rollback()
-            self._persist_conflict_pause(unit_of_work, "conflicting status")
+            self._persist_conflict_pause(unit_of_work, update.client_order_id, "conflicting status")
             raise TradeUpdateError(
                 "trade update cannot be applied fail-safely; reconciliation required"
             ) from exc

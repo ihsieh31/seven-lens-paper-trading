@@ -295,7 +295,7 @@ class TestOrderStateMachine:
         for targets in ORDER_STATUS_TRANSITIONS.values():
             assert all(type(target) is OrderStatus for target in targets)
 
-    def test_terminal_statuses_have_no_exits(self) -> None:
+    def test_terminal_statuses_only_exit_to_reconciliation_review(self) -> None:
         assert (
             frozenset(
                 {
@@ -308,7 +308,7 @@ class TestOrderStateMachine:
             == TERMINAL_ORDER_STATUSES
         )
         for status in TERMINAL_ORDER_STATUSES:
-            assert ORDER_STATUS_TRANSITIONS[status] == frozenset()
+            assert ORDER_STATUS_TRANSITIONS[status] == frozenset({OrderStatus.REVIEW_REQUIRED})
 
     def test_full_matrix_is_explicitly_decided(self) -> None:
         for current in OrderStatus:

@@ -842,6 +842,85 @@ def test_pg_conflicting_fill_preserves_fact_and_durable_gate(migrated_postgres: 
             engine.submit_from_outbox(uow, b2.client_order_id)
 
 
+def test_pg_pause_commit_failure_leaves_review_gate_for_second_actor(
+    migrated_postgres: str,
+) -> None:
+    from seven_lens.execution.trade_updates import (
+        OrderStatusUpdate,
+        TradeUpdateConsumer,
+        TradeUpdateError,
+    )
+
+    intent = _intent(703)
+    with PostgresUnitOfWork(migrated_postgres) as uow:
+        uow.orders.add(intent)
+        for status in (
+            OrderStatus.RISK_APPROVED,
+            OrderStatus.OUTBOX_PENDING,
+            OrderStatus.SUBMITTING,
+            OrderStatus.ACKNOWLEDGED,
+        ):
+            uow.orders.transition_status(intent.client_order_id, status)
+        stored_mirror = uow.orders.record_broker_order(
+            BrokerOrder(
+                broker_order_id="b-pause-commit-failure",
+                client_order_id=intent.client_order_id,
+                symbol=intent.symbol,
+                side=intent.side,
+                quantity=intent.quantity,
+                filled_quantity=0,
+                limit_price=intent.limit_price,
+                status=BrokerOrderStatus.ACCEPTED,
+                submitted_at=_BASE,
+                updated_at=_BASE,
+            )
+        )
+        conflict_at = stored_mirror.updated_at
+        uow.commit()
+
+    with PostgresUnitOfWork(migrated_postgres) as uow:
+        real_commit = uow.commit
+
+        def fail_pause_commit() -> None:
+            if uow.control.state().entries_paused:
+                raise RuntimeError("injected pause commit failure")
+            real_commit()
+
+        uow.commit = fail_pause_commit
+        with pytest.raises(TradeUpdateError, match="entries_paused"):
+            TradeUpdateConsumer().apply(
+                uow,
+                OrderStatusUpdate(
+                    client_order_id=intent.client_order_id,
+                    broker_order_id=stored_mirror.broker_order_id,
+                    status=BrokerOrderStatus.PARTIALLY_FILLED,
+                    filled_quantity=4,
+                    observed_at=conflict_at,
+                ),
+            )
+
+    with psycopg.connect(migrated_postgres) as conn:
+        intent_row = conn.execute(
+            "SELECT status FROM order_intents WHERE client_order_id=%s",
+            (intent.client_order_id.value,),
+        ).fetchone()
+        assert intent_row == ("REVIEW_REQUIRED",)
+        control_row = conn.execute(
+            "SELECT entries_paused FROM control_state WHERE singleton"
+        ).fetchone()
+        assert control_row == (False,)
+
+    second = _intent(704)
+    with PostgresUnitOfWork(migrated_postgres) as uow:
+        _seed_outbox(uow, second)
+        broker = _CountingBroker()
+        result = ExecutionEngine(
+            broker=broker, clock=lambda: _BASE, control=uow.control
+        ).submit_from_outbox(uow, second.client_order_id)
+        assert result.status is OrderStatus.UNKNOWN
+        assert broker.calls == []
+
+
 # ---------------------------------------------------------------------------
 # Status-update conflicts converge on the real PostgreSQL guards
 # ---------------------------------------------------------------------------
@@ -908,7 +987,7 @@ def test_pg_status_quantity_regression_is_typed_rolled_back_and_durable_paused(
             "SELECT status FROM order_intents WHERE client_order_id=%s",
             (intent.client_order_id.value,),
         ).fetchone()
-        assert intent_row == ("ACKNOWLEDGED",)
+        assert intent_row == ("REVIEW_REQUIRED",)
         control_row = conn.execute(
             "SELECT entries_paused, paused_reason FROM control_state WHERE singleton"
         ).fetchone()

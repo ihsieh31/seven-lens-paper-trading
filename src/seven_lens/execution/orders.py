@@ -144,10 +144,13 @@ ORDER_STATUS_TRANSITIONS: Final[dict[OrderStatus, frozenset[OrderStatus]]] = {
             OrderStatus.REVIEW_REQUIRED,
         }
     ),
-    OrderStatus.FILLED: frozenset(),
-    OrderStatus.CANCELED: frozenset(),
-    OrderStatus.REJECTED: frozenset(),
-    OrderStatus.EXPIRED: frozenset(),
+    # A broker update can conflict after the local intent reached a terminal
+    # state.  REVIEW_REQUIRED is the only safe escape hatch: it blocks new
+    # entries while preserving the original terminal history for reconciliation.
+    OrderStatus.FILLED: frozenset({OrderStatus.REVIEW_REQUIRED}),
+    OrderStatus.CANCELED: frozenset({OrderStatus.REVIEW_REQUIRED}),
+    OrderStatus.REJECTED: frozenset({OrderStatus.REVIEW_REQUIRED}),
+    OrderStatus.EXPIRED: frozenset({OrderStatus.REVIEW_REQUIRED}),
     OrderStatus.REVIEW_REQUIRED: frozenset(),
 }
 
