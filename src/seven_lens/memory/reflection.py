@@ -162,7 +162,10 @@ class InMemoryReflectionRepository:
                 if type(existing) is not DailyReflectionRecord:
                     raise RuntimeError("persisted reflection type is invalid")
                 existing.verify_integrity()
-                if existing.content_hash == record.content_hash:
+                if (
+                    existing.content_hash == record.content_hash
+                    and existing.correction_reason is record.correction_reason
+                ):
                     return
                 raise RuntimeError("reflection identity collision")
             correction_targets = {
@@ -307,6 +310,7 @@ class ReflectionPipeline:
         required_open_position_source_ids = record_fields.pop(
             "required_open_position_source_ids", ()
         )
+        record_fields.setdefault("correction_reason", None)
         if type(cutoff) is not UtcTimestamp or type(record_id) is not str:
             raise ValueError("reflection record identity/cutoff is invalid")
         # Reject the complete source envelope before any resolver read or provider call. The
@@ -348,6 +352,7 @@ class ReflectionPipeline:
                 "provider_version": existing.provider_version,
                 "data_version": existing.data_version,
                 "memory_version": existing.memory_version,
+                "correction_reason": existing.correction_reason,
             }
             if (
                 existing.sources != sources

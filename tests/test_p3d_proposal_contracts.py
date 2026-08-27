@@ -6,6 +6,7 @@ import hashlib
 import json
 from dataclasses import FrozenInstanceError, replace
 from decimal import Decimal
+from enum import StrEnum
 from typing import cast
 
 import pytest
@@ -28,6 +29,7 @@ from seven_lens.analysis.contracts import (
     build_portfolio_snapshot,
     canonical_wire_json,
 )
+from seven_lens.analysis.ports import DebateArgument, ProviderStage
 from seven_lens.analysis.proposal_contracts import (
     PortfolioProposal,
     ProposalContext,
@@ -71,6 +73,41 @@ DEBATE_ORDER = (
     (RiskViewpoint.CONSERVATIVE, 2),
     (RiskViewpoint.NEUTRAL, 2),
 )
+
+
+class _OtherStage(StrEnum):
+    BULL = "BULL"
+
+
+@pytest.mark.parametrize("side", (ProviderStage.BULL, ProviderStage.BEAR))
+def test_debate_argument_accepts_only_exact_bull_or_bear_provider_stage(
+    side: ProviderStage,
+) -> None:
+    argument = DebateArgument(
+        input_id=rid(1),
+        packet_hash="a" * 64,
+        symbol="MSFT",
+        side=side,
+        round_number=1,
+        argument="bounded argument",
+        evidence_refs=("evidence.1",),
+    )
+
+    assert argument.side is side
+
+
+@pytest.mark.parametrize("side", ("BULL", "BEAR", _OtherStage.BULL))
+def test_debate_argument_rejects_strenum_equal_but_wrong_side_values(side: object) -> None:
+    with pytest.raises(ValueError, match="debate side"):
+        DebateArgument(
+            input_id=rid(1),
+            packet_hash="a" * 64,
+            symbol="MSFT",
+            side=side,  # type: ignore[arg-type]
+            round_number=1,
+            argument="bounded argument",
+            evidence_refs=("evidence.1",),
+        )
 
 
 def parent_input(window: AnalysisWindow = AnalysisWindow.PRIMARY) -> AnalysisInput:
@@ -291,20 +328,39 @@ def test_child_identity_derivation_matches_golden_vectors_and_domains() -> None:
     )
     assert str(derive_bundle_id(parent.input_id)) == "a823f3d2-47f9-4aa8-90eb-fe280c02ce7e"
     ctx_one = derive_context_id(derive_bundle_id(parent.input_id), 1, "a" * 64, None)
-    assert str(ctx_one) == "2b299a5a-4352-413e-9453-9ce698ee4464"
+    assert str(ctx_one) == "1338ab20-08a0-4ae4-9906-f624cdd14e5b"
     assert str(
         derive_context_id(derive_bundle_id(parent.input_id), 2, "a" * 64, rid(11), "d" * 64)
-    ) == ("2e192423-b0ad-46a9-9a32-a704845754ac")
-    assert str(derive_debate_id(ctx_one)) == "559bc0a5-0be6-49aa-9805-632b047df1cb"
+    ) == ("da99f02e-a907-4e06-8294-0a5b348ed387")
+    assert str(derive_debate_id(ctx_one)) == "3415d1f5-4992-418b-b93e-e44efbb6079e"
     assert str(derive_argument_id(ctx_one, RiskViewpoint.AGGRESSIVE, 1)) == (
-        "b41d2f80-a62e-427a-a8e1-03229d9b72fc"
+        "7ed8d922-8303-4d59-8f15-f95b027c80b8"
     )
-    assert str(derive_proposal_id(ctx_one)) == "1e0dbc88-1733-4df8-a73a-508bb83b4001"
-    assert str(derive_proposal_run_id(ctx_one)) == "ac6b8a43-debe-4900-8934-1ad75979e7fb"
+    assert str(derive_proposal_id(ctx_one)) == "18a48bc0-ede0-4bdf-8110-402d21dc7eec"
+    assert str(derive_proposal_run_id(ctx_one)) == "29d28358-c85c-41a6-be83-ea25a8e712f6"
     assert derive_child_run_id(parent.input_id, "MSFT") != derive_child_input_id(
         parent.input_id, "MSFT"
     )
     assert derive_child_run_id(parent.input_id, "MSFT") != derive_child_run_id(rid(3), "MSFT")
+
+
+def test_context_identity_binds_the_superseded_proposal_hash() -> None:
+    parent = parent_input()
+    bundle_id = derive_bundle_id(parent.input_id)
+
+    first = derive_context_id(bundle_id, 2, "a" * 64, rid(11), "d" * 64)
+    same = derive_context_id(bundle_id, 2, "a" * 64, rid(11), "d" * 64)
+    different_id = derive_context_id(bundle_id, 2, "a" * 64, rid(12), "d" * 64)
+    different_hash = derive_context_id(bundle_id, 2, "a" * 64, rid(11), "e" * 64)
+
+    assert first == same
+    assert first != different_id
+    assert first != different_hash
+    assert derive_context_id(bundle_id, 1, "a" * 64, None) == derive_context_id(
+        bundle_id, 1, "a" * 64, None
+    )
+    with pytest.raises(ValueError, match="appear together"):
+        derive_context_id(bundle_id, 2, "a" * 64, rid(11), None)
 
 
 def test_bundle_items_cover_focus_symbols_exactly_and_derive_citations() -> None:

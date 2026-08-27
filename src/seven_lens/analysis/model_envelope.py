@@ -298,7 +298,11 @@ class CanonicalEnvelopeSection:
 
 @dataclass(frozen=True, slots=True, repr=False)
 class SanitizedProviderEnvelope:
-    """All and only the material one isolated model invocation may observe."""
+    """All and only the material one isolated model invocation may observe.
+
+    ``snapshot_hash`` is the trusted source-lineage hash; ``projected_snapshot_hash``
+    is the hash of the exact de-identified snapshot section delivered to the provider.
+    """
 
     stage: EnvelopeStage
     role: EnvelopeRole
@@ -316,6 +320,7 @@ class SanitizedProviderEnvelope:
     bundle_id: RunId | None
     packet_hash: str | None
     snapshot_hash: str
+    projected_snapshot_hash: str
     context_hash: str | None
     bundle_hash: str | None
     universe_hash: str
@@ -477,6 +482,7 @@ class SanitizedProviderEnvelope:
             "bundle_id": bundle_id,
             "packet_hash": packet_hash,
             "snapshot_hash": snapshot_hash,
+            "projected_snapshot_hash": projected_snapshot.content_hash,
             "context_hash": context_hash,
             "bundle_hash": bundle_hash,
             "universe_hash": universe_hash,
@@ -519,7 +525,7 @@ class SanitizedProviderEnvelope:
             value = getattr(self, field)
             if value is not None and type(value) is not RunId:
                 raise ValueError(f"envelope {field} is invalid")
-        for field in ("snapshot_hash", "universe_hash"):
+        for field in ("snapshot_hash", "projected_snapshot_hash", "universe_hash"):
             _valid_hash(getattr(self, field), field)
         for field in ("packet_hash", "context_hash", "bundle_hash"):
             value = getattr(self, field)
@@ -586,8 +592,10 @@ class SanitizedProviderEnvelope:
                 raise ValueError(f"envelope {field} section is invalid")
             value.__post_init__()
         snapshot_wire = self.portfolio_snapshot.to_dict()
-        if snapshot_wire.get("content_hash") != self.snapshot_hash:
+        if snapshot_wire.get("source_content_hash") != self.snapshot_hash:
             raise ValueError("envelope snapshot hash is invalid")
+        if self.portfolio_snapshot.content_hash != self.projected_snapshot_hash:
+            raise ValueError("envelope projected snapshot hash is invalid")
         if type(self.prior_outputs) is not tuple or len(self.prior_outputs) > MAX_PRIOR_OUTPUTS:
             raise ValueError("envelope prior outputs exceed the bounded list")
         for output in self.prior_outputs:
@@ -690,6 +698,7 @@ class SanitizedProviderEnvelope:
             "bundle_id": None if self.bundle_id is None else str(self.bundle_id),
             "packet_hash": self.packet_hash,
             "snapshot_hash": self.snapshot_hash,
+            "projected_snapshot_hash": self.projected_snapshot_hash,
             "context_hash": self.context_hash,
             "bundle_hash": self.bundle_hash,
             "universe_hash": self.universe_hash,
@@ -1260,6 +1269,10 @@ def _validate_source_projection(
 
 def _deidentified_snapshot(snapshot: PortfolioSnapshot) -> dict[str, JsonValue]:
     wire = snapshot.to_wire()
+    source_hash = wire.pop("content_hash")
+    if type(source_hash) is not str:
+        raise ValueError("portfolio snapshot source hash is invalid")
+    wire["source_content_hash"] = source_hash
     open_orders = cast(list[dict[str, JsonValue]], wire["open_orders"])
     for index, item in enumerate(open_orders, start=1):
         item["reference_id"] = f"open-order-{index:03d}"

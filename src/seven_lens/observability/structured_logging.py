@@ -13,6 +13,7 @@ from seven_lens.security.redaction import DefaultSecretRedactor, JsonValue, Secr
 _STRUCTURED_FIELDS_ATTRIBUTE: Final = "seven_lens_fields"
 _FALLBACK_EVENT: Final = "structured_log_serialization_failed"
 _FALLBACK_REASON: Final = "unsafe_or_unserializable_fields"
+WARNING_LEVEL: Final[int] = logging.WARNING
 
 
 class JsonFormatter(logging.Formatter):
@@ -52,6 +53,24 @@ def log_event(
         validate_telemetry_context(telemetry_context)
         fields["telemetry"] = telemetry_context.to_log_fields()
     logger.log(level, event, extra={_STRUCTURED_FIELDS_ATTRIBUTE: fields})
+
+
+def log_named_event(
+    logger_name: str,
+    event: str,
+    *,
+    level: int = logging.INFO,
+    telemetry_context: TelemetryContext | None = None,
+    **fields: object,
+) -> None:
+    """Emit a structured event for a module without importing logging at its boundary."""
+    log_event(
+        logging.getLogger(logger_name),
+        event,
+        level=level,
+        telemetry_context=telemetry_context,
+        **fields,
+    )
 
 
 def _serialize_json(value: JsonValue) -> str:

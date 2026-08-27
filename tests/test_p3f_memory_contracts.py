@@ -10,6 +10,7 @@ from seven_lens.domain.value_objects import UtcTimestamp
 from seven_lens.memory.contracts import (
     MEMORY_SCHEMA_VERSION,
     ArtifactState,
+    CorrectionReason,
     DailyReflectionRecord,
     FactKind,
     FactRef,
@@ -87,7 +88,15 @@ def record(
     observations: tuple[ReflectionObservation, ...] | None = None,
     created: int = 1,
     cutoff: int = 0,
+    correction_reason: CorrectionReason | None = None,
 ) -> DailyReflectionRecord:
+    typed_observations = observations or (observation(),)
+    if (
+        correction_reason is None
+        and typed_observations
+        and all(item.kind is ObservationKind.CORRECTION for item in typed_observations)
+    ):
+        correction_reason = CorrectionReason.SOURCE_CORRECTION
     return build_daily_reflection(
         record_id=record_id,
         schema_version=MEMORY_SCHEMA_VERSION,
@@ -100,12 +109,13 @@ def record(
         research_bundle_hash="b" * 64,
         portfolio_snapshot_hash="c" * 64,
         sources=sources or (source(),),
-        observations=observations or (observation(),),
+        observations=typed_observations,
         prompt_version="p3f.prompt.1",
         model_version="scripted.1",
         provider_version="offline.1",
         data_version="fixture.1",
         memory_version="p3f.1",
+        correction_reason=correction_reason,
     )
 
 
@@ -190,12 +200,58 @@ def test_correction_is_a_new_linked_record_and_original_hash_stays_unchanged() -
     )
     assert correction.observations[0].supersedes_record_id == original.record_id
     assert original.content_hash == before
+
+
+@pytest.mark.parametrize("reason", tuple(CorrectionReason))
+def test_correction_reason_is_closed_typed_metadata(reason: CorrectionReason) -> None:
+    original = record(record_id="reflection.reason.original")
+    before = original.content_hash
+    correction = record(
+        record_id="reflection.reason.correction",
+        created=2,
+        cutoff=1,
+        observations=(observation(kind=ObservationKind.CORRECTION, supersedes=original.record_id),),
+        correction_reason=reason,
+    )
+    assert correction.correction_reason is reason
+
+    fields = {
+        name: getattr(correction, name)
+        for name in (
+            "record_id",
+            "schema_version",
+            "created_at",
+            "available_at",
+            "as_of",
+            "cutoff_at",
+            "proposal_id",
+            "decision_id",
+            "research_bundle_hash",
+            "portfolio_snapshot_hash",
+            "sources",
+            "observations",
+            "prompt_version",
+            "model_version",
+            "provider_version",
+            "data_version",
+            "memory_version",
+        )
+    }
+    with pytest.raises(ValueError, match="correction reason is required"):
+        build_daily_reflection(**fields)
+    with pytest.raises(ValueError, match="correction reason is required"):
+        build_daily_reflection(**fields, correction_reason="FACTUAL_ERROR")
     assert correction.content_hash != original.content_hash
     repository = InMemoryReflectionRepository()
     repository.append(original)
     repository.append(correction)
     assert repository.get(original.record_id) is original
     assert original.content_hash == before
+    alternate_reason = next(
+        item for item in CorrectionReason if item is not correction.correction_reason
+    )
+    with pytest.raises(RuntimeError, match="identity collision"):
+        repository.append(replace(correction, correction_reason=alternate_reason))
 
 
 def test_in_memory_repository_loads_only_effective_reflections_as_of_cutoff() -> None:

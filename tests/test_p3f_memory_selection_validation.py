@@ -7,11 +7,13 @@ import pytest
 from seven_lens.memory.contracts import (
     MEMORY_SCHEMA_VERSION,
     ArtifactState,
+    CorrectionReason,
     DailyReflectionRecord,
     FactKind,
     FactRef,
     MemoryCategory,
     MemoryEntry,
+    MemoryInvalidationReason,
     ObservationKind,
     ReflectionObservation,
     ReflectionSourceRef,
@@ -30,7 +32,7 @@ from seven_lens.memory.template import (
     CURATION_TEMPLATE_VERSION,
     load_curation_template,
 )
-from seven_lens.memory.validation import MemoryValidator
+from seven_lens.memory.validation import MemoryValidator, ValidationIssue, ValidationResult
 from test_p3f_memory_contracts import artifact, entry, record, source, ts
 
 
@@ -104,6 +106,48 @@ def test_validator_recomputes_provider_controlled_category_and_importance() -> N
         requested_cutoff=ts(2),
     )
     assert importance_override.issues[0].code == "provider_importance_override"
+
+
+@pytest.mark.parametrize(
+    ("stage", "reason"),
+    [
+        ("schema_resource", MemoryInvalidationReason.SCHEMA),
+        ("source_lineage", MemoryInvalidationReason.LINEAGE),
+        ("correction_lineage", MemoryInvalidationReason.LINEAGE),
+        ("point_in_time", MemoryInvalidationReason.FUTURE_LEAKAGE),
+        ("prompt_injection", MemoryInvalidationReason.PROMPT_INJECTION),
+        ("fact_token_closure", MemoryInvalidationReason.FACT_CLOSURE),
+        ("evidence_closure", MemoryInvalidationReason.FACT_CLOSURE),
+        ("deterministic_policy", MemoryInvalidationReason.BOUNDS),
+        ("canonical_integrity", MemoryInvalidationReason.INTEGRITY),
+    ],
+)
+def test_invalid_validation_result_maps_to_closed_invalidation_reason(
+    stage: str, reason: MemoryInvalidationReason
+) -> None:
+    result = ValidationResult(
+        artifact().with_state(ArtifactState.INVALID),
+        (ValidationIssue(stage, "synthetic"),),
+    )
+    assert result.invalidation_reason_code == reason.value
+
+
+def test_invalid_validation_result_rejects_unknown_or_mixed_reason_stages() -> None:
+    unknown = ValidationResult(
+        artifact().with_state(ArtifactState.INVALID),
+        (ValidationIssue("unknown", "synthetic"),),
+    )
+    with pytest.raises(ValueError, match="no invalidation reason"):
+        _ = unknown.invalidation_reason_code
+
+    mixed = ValidationResult(
+        artifact().with_state(ArtifactState.INVALID),
+        (
+            ValidationIssue("source_lineage", "synthetic"),
+            ValidationIssue("prompt_injection", "synthetic"),
+        ),
+    )
+    assert mixed.invalidation_reason_code == MemoryInvalidationReason.INTEGRITY.value
 
 
 def _policy_record(
@@ -425,6 +469,7 @@ def _lineage_record(record_id: str, target_id: str, fact_id: str) -> DailyReflec
         provider_version="offline.1",
         data_version="fixture.1",
         memory_version="p3f.1",
+        correction_reason=CorrectionReason.LINEAGE_REPAIR,
     )
 
 

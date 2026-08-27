@@ -8,6 +8,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from typing import Protocol, cast
 
+from seven_lens.application.ports.content_store import (
+    ContentStoreError,
+    ContentStoreMissingError,
+)
 from seven_lens.domain.value_objects import UtcTimestamp
 from seven_lens.memory.contracts import ArtifactState, DailyReflectionRecord, MemoryArtifact
 from seven_lens.memory.validation import MemoryValidator, ValidationResult
@@ -48,6 +52,10 @@ class ValidationContext:
     requested_cutoff: UtcTimestamp
 
 
+class MemorySelectionError(RuntimeError):
+    """A persisted historical candidate failed an infrastructure or validator invariant."""
+
+
 class InMemoryPromotionRepository:
     """Metadata state machine with an atomic single-current pointer and full history."""
 
@@ -56,6 +64,7 @@ class InMemoryPromotionRepository:
         self._current_id: str | None = None
         self._promotion_history: list[PromotionEvent] = []
         self._validation_contexts: dict[str, ValidationContext] = {}
+        self._invalidation_reasons: dict[str, str] = {}
         self._lock = threading.Lock()
         self._now = now
 
@@ -90,22 +99,40 @@ class InMemoryPromotionRepository:
         source_records: dict[str, DailyReflectionRecord] | None = None,
         requested_cutoff: UtcTimestamp | None = None,
     ) -> None:
+        if type(result) is not ValidationResult:
+            raise ValueError("only an exact validation result can be saved")
         artifact = result.artifact
         if artifact.state not in {ArtifactState.VALIDATED, ArtifactState.INVALID}:
             raise ValueError("validation result state is invalid")
+        if artifact.state is ArtifactState.VALIDATED and not result.valid:
+            raise ValueError("validated artifact requires a successful validation result")
+        if artifact.state is ArtifactState.INVALID and result.valid:
+            raise ValueError("invalid artifact requires an unsuccessful validation result")
+        invalidation_reason = (
+            result.invalidation_reason_code if artifact.state is ArtifactState.INVALID else None
+        )
         with self._lock:
             existing = self._artifacts.get(artifact.artifact_id)
             if existing is None or existing.content_hash != artifact.content_hash:
                 raise RuntimeError("candidate is unavailable for validation")
             if existing.state is ArtifactState.CURRENT:
+                if artifact.state is ArtifactState.INVALID:
+                    raise RuntimeError("current artifact cannot be invalidated")
                 return
             if (
                 existing.state is ArtifactState.INVALID
                 and artifact.state is not ArtifactState.INVALID
             ):
                 raise RuntimeError("invalid artifact cannot be revived")
+            if existing.state is ArtifactState.INVALID:
+                if self._invalidation_reasons.get(artifact.artifact_id) != invalidation_reason:
+                    raise RuntimeError("invalid artifact identity collision")
+                return
             self._artifacts[artifact.artifact_id] = artifact
-            if artifact.state is ArtifactState.VALIDATED:
+            if artifact.state is ArtifactState.INVALID:
+                self._validation_contexts.pop(artifact.artifact_id, None)
+                self._invalidation_reasons[artifact.artifact_id] = cast(str, invalidation_reason)
+            elif artifact.state is ArtifactState.VALIDATED:
                 if type(source_records) is not dict or type(requested_cutoff) is not UtcTimestamp:
                     # Direct repository state-machine tests may omit context, but such artifacts
                     # are intentionally ineligible for historical selection.
@@ -114,6 +141,43 @@ class InMemoryPromotionRepository:
                     self._validation_contexts[artifact.artifact_id] = ValidationContext(
                         dict(source_records), requested_cutoff
                     )
+
+    def mark_validated(
+        self,
+        result: ValidationResult,
+        *,
+        source_records: dict[str, DailyReflectionRecord] | None = None,
+        requested_cutoff: UtcTimestamp | None = None,
+    ) -> None:
+        if type(result) is not ValidationResult or not result.valid:
+            raise ValueError("only an exact successful validation result can be marked validated")
+        self.save_validation(
+            result,
+            source_records=source_records,
+            requested_cutoff=requested_cutoff,
+        )
+
+    def mark_invalid(self, result: ValidationResult) -> bool:
+        if type(result) is not ValidationResult or result.valid:
+            raise ValueError("only an exact unsuccessful validation result can be marked invalid")
+        artifact = result.artifact
+        reason = result.invalidation_reason_code
+        if artifact.state is not ArtifactState.INVALID:
+            raise ValueError("invalid result must carry an INVALID artifact")
+        with self._lock:
+            existing = self._artifacts.get(artifact.artifact_id)
+            if existing is None or existing.content_hash != artifact.content_hash:
+                raise RuntimeError("candidate is unavailable for invalidation")
+            if existing.state is ArtifactState.CURRENT:
+                raise RuntimeError("current artifact cannot be invalidated")
+            if existing.state is ArtifactState.INVALID:
+                if self._invalidation_reasons.get(artifact.artifact_id) != reason:
+                    raise RuntimeError("invalid artifact identity collision")
+                return False
+            self._artifacts[artifact.artifact_id] = artifact
+            self._validation_contexts.pop(artifact.artifact_id, None)
+            self._invalidation_reasons[artifact.artifact_id] = reason
+            return True
 
     def promote(self, artifact_id: str, content_hash: str) -> MemoryArtifact:
         with self._lock:
@@ -212,11 +276,14 @@ class MemoryPromoter:
         result = self._validator.validate(
             artifact, source_records=source_records, requested_cutoff=requested_cutoff
         )
-        self._repository.save_validation(
-            result,
-            source_records=source_records,
-            requested_cutoff=requested_cutoff,
-        )
+        if result.valid:
+            self._repository.mark_validated(
+                result,
+                source_records=source_records,
+                requested_cutoff=requested_cutoff,
+            )
+        else:
+            self._repository.mark_invalid(result)
         self._failure_injector("validate")
         if result.valid:
             self._repository.promote(artifact.artifact_id, artifact.content_hash)
@@ -232,17 +299,23 @@ class MemoryPromoter:
                 continue
             try:
                 content = self._content_store.get(artifact.content_hash)
+            except ContentStoreMissingError:
+                continue
+            except (ContentStoreError, OSError) as error:
+                raise MemorySelectionError("memory selection content store failure") from error
+            try:
                 revalidated = self._validator.validate(
                     replace(artifact, state=ArtifactState.CANDIDATE),
                     source_records=context.source_records,
                     requested_cutoff=context.requested_cutoff,
                 )
-            except Exception:
-                continue
+            except Exception as error:
+                raise MemorySelectionError("memory selection validation failed") from error
             if (
-                content == artifact.canonical_content_bytes()
-                and hashlib.sha256(content).hexdigest() == artifact.content_hash
-                and revalidated.valid
+                content != artifact.canonical_content_bytes()
+                or hashlib.sha256(content).hexdigest() != artifact.content_hash
             ):
+                raise MemorySelectionError("memory selection content integrity failed")
+            if revalidated.valid:
                 return MemorySelection(artifact, None)
         return MemorySelection(None, MemoryAlert("NO_SAFE_MEMORY", as_of))

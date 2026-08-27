@@ -34,6 +34,7 @@ from seven_lens.infrastructure.postgres_roles import (
 )
 from seven_lens.memory.contracts import (
     ArtifactState,
+    CorrectionReason,
     FactKind,
     FactRef,
     MemoryCategory,
@@ -51,7 +52,7 @@ from seven_lens.memory.curation import (
     ScriptedCurationProvider,
 )
 from seven_lens.memory.selection import MemoryCandidate
-from seven_lens.memory.validation import MemoryValidator
+from seven_lens.memory.validation import MemoryValidator, ValidationIssue, ValidationResult
 
 pytestmark = pytest.mark.integration
 
@@ -124,7 +125,13 @@ def _candidate(record, artifact_id: str, previous: str | None = None):
     )
 
 
-def _correction(record, *, cutoff: UtcTimestamp, record_id: str):
+def _correction(
+    record,
+    *,
+    cutoff: UtcTimestamp,
+    record_id: str,
+    reason: CorrectionReason = CorrectionReason.SOURCE_CORRECTION,
+):
     observation = ReflectionObservation(
         ObservationKind.CORRECTION,
         "turnover limit corrected",
@@ -152,6 +159,7 @@ def _correction(record, *, cutoff: UtcTimestamp, record_id: str):
         provider_version="scripted.1",
         data_version="data.1",
         memory_version="memory.1",
+        correction_reason=reason,
     )
 
 
@@ -426,7 +434,10 @@ def test_single_head_migration_rejects_legacy_branch_without_repairing_it(
 ) -> None:
     from seven_lens.infrastructure.migrations import current_version, migrate, rollback
 
-    assert current_version(migrated_postgres) == 16
+    assert current_version(migrated_postgres) == 19
+    assert rollback(migrated_postgres) == 18
+    assert rollback(migrated_postgres) == 17
+    assert rollback(migrated_postgres) == 16
     assert rollback(migrated_postgres) == 15
     record = _reflection("reflection.legacy-branch")
     first = _correction(
@@ -501,6 +512,80 @@ def test_correction_replay_rejects_different_reason_identity(migrated_postgres: 
                 ),
             )
         assert failure.value.sqlstate == "23505"
+
+
+@pytest.mark.parametrize("reason", tuple(CorrectionReason))
+def test_correction_reason_round_trips_as_typed_metadata(
+    migrated_postgres: str, reason: CorrectionReason
+) -> None:
+    original = _reflection("reflection.reason.original")
+    correction = _correction(
+        original,
+        cutoff=original.available_at,
+        record_id=f"reflection.reason.{reason.value.lower()}",
+        reason=reason,
+    )
+    with psycopg.connect(migrated_postgres) as connection:
+        repository = PostgresMemoryRepository(connection)
+        repository.append_reflection(original)
+        repository.append_reflection(correction)
+        assert repository.get(correction.record_id) == correction
+        assert connection.execute(
+            "SELECT correction_reason_code FROM public.approved_reflection_records "
+            "WHERE reflection_id = %s",
+            (correction.record_id,),
+        ).fetchone() == (reason.value,)
+        connection.commit()
+
+
+def test_memory_invalidation_is_append_only_idempotent_and_blocks_promotion(
+    migrated_postgres: str,
+) -> None:
+    record = _reflection("reflection.memory-reject")
+    candidate = _candidate(record, "memory.memory-reject")
+    with psycopg.connect(migrated_postgres) as connection:
+        repository = PostgresMemoryRepository(connection)
+        repository.append_reflection(record)
+        content = candidate.canonical_content_bytes()
+        repository.register_candidate(candidate, candidate.content_hash, len(content))
+        result = MemoryValidator().validate(
+            candidate,
+            source_records={},
+            requested_cutoff=candidate.cutoff_at,
+        )
+        assert not result.valid
+        assert result.invalidation_reason_code == "LINEAGE"
+        assert repository.mark_invalid(result) is True
+        assert repository.mark_invalid(result) is False
+        assert connection.execute(
+            "SELECT state, reason_code FROM public.memory_artifact_state_events "
+            "WHERE artifact_id = %s ORDER BY state",
+            (candidate.artifact_id,),
+        ).fetchall() == [("CANDIDATE", "REGISTERED"), ("INVALID", "LINEAGE")]
+        with pytest.raises(PostgresMemoryError) as failure:
+            repository.promote(candidate.artifact_id, UtcTimestamp.now())
+        assert failure.value.sqlstate == "23514"
+        connection.rollback()
+
+
+def test_memory_invalidation_rejects_a_current_artifact(
+    migrated_postgres: str,
+) -> None:
+    record = _reflection("reflection.memory-reject.current")
+    candidate = _candidate(record, "memory.memory-reject.current")
+    with psycopg.connect(migrated_postgres) as connection:
+        repository = PostgresMemoryRepository(connection)
+        repository.append_reflection(record)
+        _register_and_validate(repository, record, candidate)
+        assert repository.promote(candidate.artifact_id, UtcTimestamp.now())
+        result = ValidationResult(
+            candidate.with_state(ArtifactState.INVALID),
+            (ValidationIssue("prompt_injection", "synthetic"),),
+        )
+        with pytest.raises(PostgresMemoryError) as failure:
+            repository.mark_invalid(result)
+        assert failure.value.sqlstate == "23514"
+        connection.rollback()
 
 
 def test_validation_replay_requires_exact_report_identity(migrated_postgres: str) -> None:

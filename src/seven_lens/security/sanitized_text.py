@@ -13,8 +13,18 @@ _URI = re.compile(
     r")"
 )
 _BARE_HOST = re.compile(
-    r"(?i)(?:\b[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?\.)+"
-    r"(?:ai|app|cn|co|com|dev|gov|info|invalid|io|net|org)(?::[0-9]{1,5})?(?:/[^\s]*)?"
+    r"(?i)(?:\b[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"[a-z][a-z0-9-]{0,61}[a-z0-9](?::[0-9]{1,5})?(?:/[^\s]*)?"
+    r"(?![a-z0-9-]|\.(?=[a-z0-9.-]))"
+)
+# Typed project identifiers can contain dots but are not hostnames.  Keep this
+# exception to known namespaces only; arbitrary dotted free text remains blocked.
+_CANONICAL_REFERENCE = re.compile(
+    r"(?i)(?<![a-z0-9_-])(?:"
+    r"(?:claim|evidence|source|fact|decision|reflection|memory|market|outside|foreign|p3[a-f])\."
+    r"[a-z0-9][a-z0-9._:-]{0,94}|"
+    r"seven-lens\.[a-z0-9][a-z0-9._:-]{0,94}"
+    r")(?![a-z0-9._:-])"
 )
 _EMAIL = re.compile(r"(?i)\b[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}\b")
 _ABSOLUTE_PATH = re.compile(r"(?:^|\s)(?:/[A-Za-z0-9._-]+/|[A-Za-z]:\\)")
@@ -43,6 +53,7 @@ def validate_sanitized_text(
     *,
     maximum: int,
     empty: bool = False,
+    allow_bare_host: bool = False,
 ) -> str:
     """Return one bounded string or reject identity, secret, URI, and path material."""
 
@@ -61,9 +72,14 @@ def validate_sanitized_text(
         raise ValueError(f"{field} contains prohibited invisible format controls")
     folded = normalized.casefold()
     label_view = re.sub(r"[_\-]+", " ", folded)
+    bare_host = _BARE_HOST.search(folded)
     if (
         _URI.search(folded)
-        or _BARE_HOST.search(folded)
+        or (
+            not allow_bare_host
+            and bare_host is not None
+            and _CANONICAL_REFERENCE.search(folded) is None
+        )
         or _EMAIL.search(folded)
         or _ABSOLUTE_PATH.search(normalized)
         or _RELATIVE_PATH.search(normalized)

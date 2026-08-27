@@ -171,6 +171,7 @@ class ModelTransportErrorCode(StrEnum):
     PROTOCOL = "PROTOCOL"
     SCHEMA = "SCHEMA"
     OVERSIZE = "OVERSIZE"
+    # Kept for decoding older callers; ModelTransportError normalizes it to TIMEOUT.
     DEADLINE = "DEADLINE"
     AUDIT = "AUDIT"
 
@@ -198,8 +199,11 @@ class ModelTransportError(RuntimeError):
     def __init__(self, code: ModelTransportErrorCode) -> None:
         if type(code) is not ModelTransportErrorCode:
             raise ValueError("model transport error code is invalid")
-        self.code = code
-        super().__init__(_ERROR_MESSAGES[code])
+        normalized = (
+            ModelTransportErrorCode.TIMEOUT if code is ModelTransportErrorCode.DEADLINE else code
+        )
+        self.code = normalized
+        super().__init__(_ERROR_MESSAGES[normalized])
 
     def __repr__(self) -> str:
         return f"ModelTransportError(code={self.code.value!r})"

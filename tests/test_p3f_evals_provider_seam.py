@@ -538,16 +538,20 @@ def test_failure_and_timeout_are_attempt_level_fail_fast_records() -> None:
     assert error.value.partial_run.request_count == 2
     assert error.value.partial_run.records[-1].outcome == "FAILED"
 
-    slow = ScriptedSingleAttemptExecutor((_response(cases[0], ExpectedDecision.ACCEPT),))
-    ticks = iter((0, 46_000_000_000, 46_000_000_000))
-    with pytest.raises(LiveEvalExecutionError) as timeout:
-        _execute(
-            (cases[0],),
-            _authorization([cases[0].case_id]),
-            slow,
-            monotonic_ns=lambda: next(ticks),
-        )
-    assert timeout.value.partial_run.records[0].outcome == "FAILED"
+    slow = ScriptedSingleAttemptExecutor(
+        tuple(_response(cases[0], ExpectedDecision.ACCEPT) for _ in range(3))
+    )
+    ticks = iter((0, 46_000_000_000, 46_000_000_000) * 3)
+    run = _execute(
+        (cases[0],),
+        _authorization([cases[0].case_id]),
+        slow,
+        monotonic_ns=lambda: next(ticks),
+        sleep=lambda _: None,
+    )
+    assert run.request_count == 3
+    assert all(record.outcome == "FAILED" for record in run.records)
+    assert all(record.error_code == "TIMEOUT" for record in run.records)
 
 
 def test_transient_errors_retry_twice_then_continue_without_hiding_attempts() -> None:

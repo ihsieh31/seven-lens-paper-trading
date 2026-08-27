@@ -284,7 +284,8 @@ serialized byte budgets。大型raw evidence只能進未來另行驗收的conten
 - `resume_entries`：必須先通過 health + reconciliation；不能由 timeout 自動恢復。
 - `cancel_open_orders`：取消 Paper 未成交委託。
 - `flatten_paper`：只對 Paper 帳戶產生受控平倉 intent；要求明確二次確認。
-- `shutdown_after_reconcile`：完成 reconciliation 後安全停止。
+- runtime lifecycle 尚無安全停止 consumer，因此 control API 不宣告
+  `shutdown_after_reconcile`；若未來需要，必須先在 P6/P7 實作可驗證的 lifecycle consumer。
 
 無人值守不代表沒有人工緊急控制；它代表正常日不需人工批准每一筆交易。
 

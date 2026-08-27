@@ -201,6 +201,33 @@
   [Circuit Breaker](https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker) guidance要求有限
   重試並在持續失敗時停止呼叫。這些是設計依據，不是Agnes可用性證明。
 
+### ADR-034 — `flatten_paper` 的緊急風險退出例外
+
+- 日期：2026-08-27
+- 狀態：Accepted（Batch B 治理修復）
+- `flatten_paper` 是 control-plane 的緊急 authority；在操作員明確確認、entries 已暫停、所有既有委託已解析／取消，
+  並完成 broker/local position agreement 與 US-equity tradability preflight 後，才可建立新的 `RISK_EXIT`。
+- 此例外只允許 SELL-only，且只可降低既有 projected long position；不得建立新 exposure。每個退出數量不得超過該
+  projected position，並沿用既有 price collar 與 deterministic flatten generation。
+- control plane 是唯一可在一般 Risk approval ownership 之外建立並內部推進這類 `RISK_EXIT` 的路徑；這不是一般
+  rebalance 的風控核准替代品。
+- 任何未來 BUY-to-cover 或 short-position flatten 支援，都必須另行 review 並建立新的明確 authority／風險決策。
+
+### ADR-035 — Runtime control-state mutation authority 窄化
+
+- 日期：2026-08-27
+- 狀態：Accepted（P1–P3 full remediation independent acceptance）
+- runtime role 對 `public.control_state` 僅保留 SELECT；不得取得 table-level 或 column-level UPDATE，
+  以避免任何 runtime process 直接清除 `entries_paused` 或改寫 flatten generation。
+- 需要的 runtime control authority 必須經固定 schema-qualified `SECURITY DEFINER` functions：
+  `lock_control_state_for_submission()`、`pause_entries(TEXT)`、`resume_entries()`、
+  `bump_flatten_generation()`；函式固定 `search_path = pg_catalog, public, pg_temp`，並撤銷 PUBLIC EXECUTE。
+- `resume_entries()` 在同一個 PostgreSQL transaction 內鎖定 control singleton，重新確認最新 reconciliation
+  為 `FULL + CLEAN` 且沒有 `UNKNOWN`／`REVIEW_REQUIRED` order intents；application control plane 仍負責
+  command/audit persistence。
+- migration 0019 的 up/down pair、runtime ACL verifier、runtime direct-update PoC 與完整 PostgreSQL 16
+  integration 是此 authority decision 的驗收證據。任何 privilege drift 必須使 provisioning／startup fail closed。
+
 ## Superseded／historical index
 
 | ADR | 狀態 | 取代關係／保留內容 |

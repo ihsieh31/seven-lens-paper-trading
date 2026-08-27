@@ -132,7 +132,10 @@ class DebateArgument:
     evidence_refs: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        if self.side not in {ProviderStage.BULL, ProviderStage.BEAR}:
+        if type(self.side) is not ProviderStage or self.side not in (
+            ProviderStage.BULL,
+            ProviderStage.BEAR,
+        ):
             raise ValueError("debate side is invalid")
         if self.round_number not in {1, 2}:
             raise ValueError("debate round is invalid")

@@ -279,7 +279,7 @@ def derive_model_call_id(
     if type(stage) is not ModelCallStage or type(role) is not ModelCallRole:
         raise ValueError("model-call audit identity material is invalid")
     _bounded_integer(round_number, "round number", minimum=0, maximum=2)
-    _bounded_integer(route_ordinal, "route ordinal", minimum=1, maximum=2)
+    _bounded_integer(route_ordinal, "route ordinal", minimum=1, maximum=1)
     material = b"\x00".join(
         value.encode("utf-8")
         for value in (

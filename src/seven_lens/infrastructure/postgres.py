@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import TracebackType
-from typing import Self, cast
+from typing import Final, Self, cast
 from urllib.parse import quote_plus
 from uuid import UUID
 
@@ -61,6 +61,16 @@ from seven_lens.execution.reconciliation import (
 
 class PersistenceInvariantError(RuntimeError):
     """Raised when data returned by PostgreSQL violates a domain invariant."""
+
+
+MAX_OPENING_CASH_CENTS: Final[int] = 100_000_000_000
+
+
+def _validate_opening_cash_cents(value: int) -> None:
+    if type(value) is not int or not 0 <= value <= MAX_OPENING_CASH_CENTS:
+        raise ValueError(
+            f"opening_cash_cents must be a non-negative integer up to {MAX_OPENING_CASH_CENTS}"
+        )
 
 
 class RuntimeDsn:
@@ -158,6 +168,22 @@ class PostgresUnitOfWork:
         connection.rollback()
         _set_local_utc_timezone(connection)
         self._has_uncommitted_work = False
+
+    def begin_reconciliation_snapshot(self) -> None:
+        """Restart the pristine UoW transaction at REPEATABLE READ.
+
+        Entering the UoW already starts a timezone-only transaction. PostgreSQL
+        requires isolation to be selected before application queries, so this
+        boundary restarts that pristine transaction before reconciliation reads.
+        """
+        connection = self._require_connection()
+        if self._has_uncommitted_work:
+            raise UnitOfWorkStateError(
+                "reconciliation snapshot must begin before any unit-of-work writes"
+            )
+        connection.rollback()
+        connection.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
+        _set_local_utc_timezone(connection)
 
     def persist_safety_pause(self, reason: str) -> None:
         """Persist only the shared pause through one fresh independent connection."""
@@ -813,17 +839,12 @@ class PostgresControlRepository:
         racing toward UNKNOWN.  RISK_EXIT bypasses this guard entirely.
         """
         with self._unit_of_work._require_connection().cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT entries_paused, paused_reason, updated_at, flatten_generation
-                FROM control_state
-                WHERE singleton
-                FOR UPDATE
-                """
+            cursor.execute("SELECT * FROM public.lock_control_state_for_submission()")
+            row = _row(cursor.fetchone(), "control state submission guard")
+        if len(row) != 4:
+            raise PersistenceInvariantError(
+                "control state submission guard returned an invalid column count"
             )
-            row = cursor.fetchone()
-        if row is None:
-            raise PersistenceInvariantError("control state row is missing")
         paused_reason = row[1]
         if paused_reason is not None and type(paused_reason) is not str:
             raise PersistenceInvariantError("database paused_reason must be text or null")
@@ -844,32 +865,26 @@ class PostgresControlRepository:
 
     def bump_flatten_generation(self) -> int:
         with self._unit_of_work._require_connection().cursor() as cursor:
-            cursor.execute(
-                """
-                UPDATE control_state
-                SET flatten_generation = flatten_generation + 1
-                WHERE singleton
-                RETURNING flatten_generation
-                """
-            )
+            cursor.execute("SELECT public.bump_flatten_generation()")
             row = _row(cursor.fetchone(), "control state flatten generation bump")
         self._unit_of_work._mark_write()
         return _integer(row[0], "flatten_generation")
 
     def set_entries_paused(self, paused: bool, reason: str | None) -> ControlStateSnapshot:
+        if type(paused) is not bool:
+            raise PersistenceInvariantError("paused state must be a boolean")
+        if not paused and reason is not None:
+            raise PersistenceInvariantError("paused_reason must be null when entries are resumed")
         with self._unit_of_work._require_connection().cursor() as cursor:
-            cursor.execute(
-                """
-                UPDATE control_state
-                SET entries_paused = %s, paused_reason = %s
-                WHERE singleton
-                RETURNING entries_paused, paused_reason, updated_at, flatten_generation
-                """,
-                (paused, reason),
-            )
-            row = cursor.fetchone()
-        if row is None:
-            raise PersistenceInvariantError("control state row is missing")
+            if paused:
+                cursor.execute("SELECT * FROM public.pause_entries(%s)", (reason,))
+                operation = "control-state pause"
+            else:
+                cursor.execute("SELECT * FROM public.resume_entries()")
+                operation = "control-state resume"
+            row = _row(cursor.fetchone(), operation)
+        if len(row) != 4:
+            raise PersistenceInvariantError(f"{operation} returned an invalid column count")
         paused_reason = row[1]
         if paused_reason is not None and type(paused_reason) is not str:
             raise PersistenceInvariantError("database paused_reason must be text or null")
@@ -956,8 +971,7 @@ class AccountBaseline:
             or len(self.account_id) > 100
         ):
             raise ValueError("account_id must be non-empty text up to 100 characters")
-        if type(self.opening_cash_cents) is not int or self.opening_cash_cents < 0:
-            raise ValueError("opening_cash_cents must be a non-negative integer")
+        _validate_opening_cash_cents(self.opening_cash_cents)
         if not isinstance(self.effective_at, UtcTimestamp):
             raise ValueError("effective_at must be a UtcTimestamp")
         if not isinstance(self.created_at, UtcTimestamp):
@@ -1003,8 +1017,7 @@ class PostgresAccountBaselineRepository:
         """
         if type(account_id) is not str or not account_id.strip() or len(account_id) > 100:
             raise ValueError("account_id must be non-empty text up to 100 characters")
-        if type(opening_cash_cents) is not int or opening_cash_cents < 0:
-            raise ValueError("opening_cash_cents must be a non-negative integer")
+        _validate_opening_cash_cents(opening_cash_cents)
         if not isinstance(effective_at, UtcTimestamp):
             raise ValueError("effective_at must be a UtcTimestamp")
         with self._unit_of_work._require_connection().cursor() as cursor:
@@ -1052,8 +1065,7 @@ class PostgresAccountBaselineRepository:
     ) -> AccountBaseline:
         if type(account_id) is not str or not account_id.strip() or len(account_id) > 100:
             raise ValueError("account_id must be bounded text")
-        if type(opening_cash_cents) is not int or opening_cash_cents < 0:
-            raise ValueError("opening_cash_cents must be non-negative")
+        _validate_opening_cash_cents(opening_cash_cents)
         if not isinstance(effective_at, UtcTimestamp):
             raise ValueError("effective_at must be a UtcTimestamp")
         if cutoff_occurred_at is not None and not isinstance(cutoff_occurred_at, UtcTimestamp):
@@ -1249,30 +1261,6 @@ def _boolean(value: object, field_name: str) -> bool:
     if type(value) is not bool:
         raise PersistenceInvariantError(f"database {field_name} must be a boolean")
     return value
-
-
-def _reconciliation_result(row: tuple[object, ...]) -> ReconciliationResult:
-    if len(row) not in (8, 9):
-        raise PersistenceInvariantError("reconciliation query returned an invalid column count")
-    scope = ReconciliationScope.PARTIAL
-    if len(row) == 9:
-        scope = ReconciliationScope(_text(row[8], "scope"))
-    kinds_raw = row[4]
-    if type(kinds_raw) is not list:
-        raise PersistenceInvariantError("database mismatch_kinds must be an array")
-    mismatches = tuple(
-        ReconciliationMismatch(kind=MismatchKind(kind), detail=kind) for kind in kinds_raw
-    )
-    return ReconciliationResult(
-        run_id=_uuid(row[0], "run_id"),
-        trading_date=_trading_date(row[1]),
-        status=ReconciliationStatus(_text(row[2], "status")),
-        mismatches=mismatches,
-        checked_orders=_integer(row[5], "checked_orders"),
-        checked_fills=_integer(row[6], "checked_fills"),
-        observed_at=_timestamp(row[7], "observed_at"),
-        scope=scope,
-    )
 
 
 def _uuid(value: object, field_name: str) -> UUID:

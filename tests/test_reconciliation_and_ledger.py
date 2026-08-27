@@ -280,10 +280,12 @@ class TestReconciler:
         orders, broker = self._seeded(version=1)
         self._submit(orders, broker, 1)
         reconciler = Reconciler(broker=broker, clock=_FixedClock())
+        unit_of_work = _UnitOfWork(orders)
 
-        result = reconciler.collect(_UnitOfWork(orders), _TRADING_DATE)
+        result = reconciler.collect(unit_of_work, _TRADING_DATE)
 
         assert result.status is ReconciliationStatus.CLEAN
+        assert unit_of_work.snapshot_count == 1
         # One local mirror plus the broker's own open-order view were checked.
         assert result.checked_orders == 2
 
@@ -504,6 +506,10 @@ class _UnitOfWork:
         self.reconciliations = FakeReconciliationRepository()
         self.control = FakeControlRepository(_BASE_TIME)
         self.commit_count = 0
+        self.snapshot_count = 0
+
+    def begin_reconciliation_snapshot(self) -> None:
+        self.snapshot_count += 1
 
     def commit(self) -> None:
         self.commit_count += 1

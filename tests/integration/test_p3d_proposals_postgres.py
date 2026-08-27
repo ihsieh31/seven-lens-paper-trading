@@ -431,7 +431,7 @@ def test_p3d_sql_identity_golden_vectors_and_duplicate_json_rejection(
     with psycopg.connect(migrated_postgres, autocommit=True) as database:
         row = database.execute(
             "SELECT public.p3d_derive_run_id(%s, %s, %s), "
-            "public.p3d_derive_run_id(%s, %s, %s, %s, %s)",
+            "public.p3d_derive_run_id(%s, %s, %s, %s, %s, %s)",
             (
                 "seven-lens.p3d.child-run.v1",
                 str(parent.input_id),
@@ -440,6 +440,7 @@ def test_p3d_sql_identity_golden_vectors_and_duplicate_json_rejection(
                 str(built.bundle_id),
                 "1",
                 parent.portfolio_snapshot.content_hash,
+                "",
                 "",
             ),
         ).fetchone()
@@ -1320,8 +1321,10 @@ def test_p3d_terminal_sink_is_enforced_in_postgres(migrated_postgres) -> None:
         database.close()
 
 
-@pytest.mark.parametrize("variant", ["null_expiry", "invalid_uuid", "uppercase_uuid"])
-def test_p3d_raw_proposal_rejects_null_expiry_and_noncanonical_uuid(
+@pytest.mark.parametrize(
+    "variant", ["null_expiry", "invalid_uuid", "uppercase_uuid", "negative_zero"]
+)
+def test_p3d_raw_proposal_rejects_noncanonical_wire_values(
     migrated_postgres: str,
     variant: str,
 ) -> None:
@@ -1345,9 +1348,12 @@ def test_p3d_raw_proposal_rejects_null_expiry_and_noncanonical_uuid(
         elif variant == "invalid_uuid":
             wire["proposal_id"] = "not-a-uuid"
             expected = "UUID text is invalid"
-        else:
+        elif variant == "uppercase_uuid":
             wire["proposal_id"] = wire["proposal_id"].upper()
             expected = "UUID text is invalid"
+        else:
+            wire["requests"][0]["target_weight"] = "-0.000000"
+            expected = "proposal request is outside the frozen context"
         payload = json.dumps(wire, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
         with pytest.raises(psycopg.errors.CheckViolation, match=expected):
             _raw_advance(

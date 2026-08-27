@@ -3,6 +3,22 @@
 本檔只保留可影響目前決策的里程碑。逐輪缺陷、命令輸出與已被取代的敘述保留於 Git history；
 目前狀態以 `PROJECT_HANDOFF.md` 與 `PROGRESS.md` 為準。
 
+## 2026-08-27 — P1–P3 full remediation independent acceptance
+
+- 依使用者授權，針對當前 local worktree 完成只涵蓋 P1–P3 的 read-only independent acceptance；未修改、
+  commit、push，未呼叫 live provider/model。驗收 target 為 HEAD `40092dd8120dfaeccf029ce411b3cd525844c1e2`
+  加上當時 77 筆未提交工作樹變更。
+- 上一輪發現的 `NEW-P2-01` 已重驗關閉：runtime role 對 `control_state` direct UPDATE 得到 SQLSTATE
+  `42501`；未達 latest FULL+CLEAN 時 direct `resume_entries()` 得到 `55000`；pause 狀態保留，受控
+  resume 成功。修復由 migration 0019、fixed-path `SECURITY DEFINER` functions 與 ACL verifier 組成。
+- 驗收證據：`./scripts/verify_p1.sh` 為 `1386 passed, 245 deselected`；P1–P3 targeted suites 為
+  `857 passed`；`./scripts/verify_p1.sh --postgres` 為 PostgreSQL 16 `243 passed, 2 deselected,
+  0 skipped`；Ruff format/check、mypy、`git diff --check` 全綠。
+- 逐項結論：P1-1、P2-1～P2-5、P2-7、P3-1～P3-20、P3-22～P3-27 Accepted；P2-6 為
+  `ACCEPTED AS DOWNGRADED / TAXONOMY CLEANUP`；P3-4、P3-28 為 `ACCEPTED DESIGN / DEFERRED`；
+  P3-21 為 `FALSE POSITIVE`。沒有新的 P1/P2/P3 blocker。
+- P4～P8 未驗收、未開始；Provider Transport rolling canary 仍是 OPEN-027 的 P6 前置義務。
+
 ## 2026-08-26 — response_format注入與V12 live batch雙Gate全綠
 
 - 使用者授權「注入response_format＋執行V12」。實作：`JsonModelRequest`新增預設關閉的
@@ -523,3 +539,26 @@
 - 修復比照P3D既有慣例改為分組斷言：輪內以set比較、跨階段（debates→RESEARCH_MANAGER→TRADER）
   維持嚴格順序、總數與purity性質不變。本地stress 30/30＋整檔31 passed＋non-integration
   `1299 passed, 232 deselected`＋Ruff format/lint全綠。
+
+## 2026-08-27 — P3 cleanup remediation Batch E/F/G implementation verification
+
+- 起點精確為計畫 baseline `40092dd8120dfaeccf029ce411b3cd525844c1e2`；工作樹已有 A–E 大量
+  未提交修復，全部視為既有使用者成果保留。A–D 未在本輪宣告驗收。
+- Batch E 完成 P3-19/20/22/24/26：closed typed correction reason 端到端持久化；selection 僅對
+  intentionally missing stale CAS object fallback，systemic store／integrity／validator failure typed surface；
+  in-memory/PG invalidation state parity＋migration 0018；source/projected/envelope hashes 分離；production
+  coordinator 依 capability-minimal `MemoryRepository` port。
+- Batch F 完成 P3-10：`PostgresUnitOfWork.begin_reconciliation_snapshot()` 在任何 local read 前重啟
+  pristine transaction 為 `REPEATABLE READ`；已有 write 時 fail closed。真實 PG 雙連線測試證明同一
+  snapshot 看不到 concurrent commit，下一個 UoW 才看到新 reconciliation authority。
+- Batch G：刪除零 caller `_reconciliation_result`；移除 baseline/expected-cash 不可達分支但不改財務
+  數學；FakeOrderRepository 既有 commit/rollback snapshot fidelity 保留；`expire_overdue` 明記未提交
+  pre-broker transitions 為 all-or-nothing sweep；刪除無 lifecycle consumer 的
+  `SHUTDOWN_AFTER_RECONCILE` application/domain API；P3-21 新增真實 SQL negative-zero regression；
+  event verifier 保留並明確由 P4 production composition 擁有。
+- 驗證：E focused `144 passed`；F/G nearby `258 passed`；第一次 PG run 僅新 regression error-message
+  regex 不符（SQL 實際已以23514拒絕），修正斷言後完整 PG16
+  `236 passed, 2 deselected, 0 skipped`；`verify_p1.sh` 完整 non-integration
+  `1386 passed, 238 deselected`。Ruff format/check、mypy、`git diff --check` 全綠。
+- 狀態（實作驗證當下）：Batch E/F/G implementation verification completed；當時仍待 A–G independent
+  acceptance。其後本檔最上方的 2026-08-27 acceptance 已完成；未 commit、未 push、未呼叫 provider/model/broker。

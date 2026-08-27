@@ -279,7 +279,7 @@ class PriceCollar:
         floor = (self.reference.value * _bps_factor(-self.offset_bps)).quantize(
             _CENTS, rounding=ROUND_FLOOR
         )
-        return Price(floor)
+        return Price(max(floor, _CENTS))
 
     @property
     def upper_limit(self) -> Price:

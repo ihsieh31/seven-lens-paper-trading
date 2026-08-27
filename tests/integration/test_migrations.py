@@ -42,13 +42,13 @@ def test_clean_apply_repeat_verify_and_schema_contract(test_database_url: str) -
     try:
         assert current_version(test_database_url) == 0
 
-        assert migrate(test_database_url) == 16
-        assert current_version(test_database_url) == 16
-        assert verify_schema(test_database_url) == 16
+        assert migrate(test_database_url) == 19
+        assert current_version(test_database_url) == 19
+        assert verify_schema(test_database_url) == 19
 
         # Applying an already-applied migration is idempotent and checksum-checked.
-        assert migrate(test_database_url) == 16
-        assert verify_schema(test_database_url) == 16
+        assert migrate(test_database_url) == 19
+        assert verify_schema(test_database_url) == 19
 
         with _connection(test_database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
@@ -129,7 +129,7 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
     _drop_all_migrations(test_database_url)
     try:
         assert current_version(test_database_url) == 0
-        assert migrate(test_database_url) == 16
+        assert migrate(test_database_url) == 19
         with _connection(test_database_url) as connection:
             checksum_0010 = connection.execute(
                 "SELECT checksum FROM public.schema_migrations WHERE version = 10"
@@ -146,6 +146,9 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
                 is False
             )
 
+        assert rollback(test_database_url) == 18
+        assert rollback(test_database_url) == 17
+        assert rollback(test_database_url) == 16
         assert rollback(test_database_url) == 15
         assert rollback(test_database_url) == 14
         assert rollback(test_database_url) == 13
@@ -170,8 +173,11 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
         with pytest.raises(MigrationError, match="migration version does not match"):
             verify_schema(test_database_url)
 
-        assert migrate(test_database_url) == 16
-        assert verify_schema(test_database_url) == 16
+        assert migrate(test_database_url) == 19
+        assert verify_schema(test_database_url) == 19
+        assert rollback(test_database_url) == 18
+        assert rollback(test_database_url) == 17
+        assert rollback(test_database_url) == 16
         assert rollback(test_database_url) == 15
         assert rollback(test_database_url) == 14
         assert rollback(test_database_url) == 13
@@ -200,8 +206,8 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
         with pytest.raises(MigrationError, match="migration version does not match"):
             verify_schema(test_database_url)
 
-        assert migrate(test_database_url) == 16
-        assert verify_schema(test_database_url) == 16
+        assert migrate(test_database_url) == 19
+        assert verify_schema(test_database_url) == 19
         with _connection(test_database_url) as connection:
             assert (
                 connection.execute(
@@ -220,6 +226,9 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
                 ).fetchone()[0]
                 is False
             )
+        assert rollback(test_database_url) == 18
+        assert rollback(test_database_url) == 17
+        assert rollback(test_database_url) == 16
         assert rollback(test_database_url) == 15
         assert rollback(test_database_url) == 14
         assert rollback(test_database_url) == 13
@@ -278,8 +287,8 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
             verify_schema(test_database_url)
 
         # A restored/disposable database can be rebuilt exactly from the migration.
-        assert migrate(test_database_url) == 16
-        assert verify_schema(test_database_url) == 16
+        assert migrate(test_database_url) == 19
+        assert verify_schema(test_database_url) == 19
     finally:
         _drop_all_migrations(test_database_url)
 
@@ -290,7 +299,10 @@ def test_reconciliation_scope_upgrade_defaults_legacy_clean_to_partial(
     """Rows created before 0014 remain non-resumable after the upgrade."""
     _drop_all_migrations(test_database_url)
     try:
-        assert migrate(test_database_url) == 16
+        assert migrate(test_database_url) == 19
+        assert rollback(test_database_url) == 18
+        assert rollback(test_database_url) == 17
+        assert rollback(test_database_url) == 16
         assert rollback(test_database_url) == 15
         assert rollback(test_database_url) == 14
         assert rollback(test_database_url) == 13
@@ -307,7 +319,7 @@ def test_reconciliation_scope_upgrade_defaults_legacy_clean_to_partial(
                 """
             )
             connection.commit()
-        assert migrate(test_database_url) == 16
+        assert migrate(test_database_url) == 19
         with _connection(test_database_url) as connection:
             assert connection.execute(
                 "SELECT scope FROM public.reconciliation_runs "
@@ -324,8 +336,8 @@ def test_account_hardening_down_removes_unrepresentable_mismatch_evidence(
     _drop_all_migrations(test_database_url)
     run_id = "00000000-0000-0000-0000-000000000008"
     try:
-        assert migrate(test_database_url) == 16
-        for expected_version in (15, 14, 13, 12, 11, 10, 9, 8):
+        assert migrate(test_database_url) == 19
+        for expected_version in (18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8):
             assert rollback(test_database_url) == expected_version
 
         with _connection(test_database_url) as connection:
@@ -364,8 +376,8 @@ def test_account_hardening_down_removes_unrepresentable_mismatch_evidence(
             ).fetchone() == (0,)
 
         # The downgraded database remains rebuildable from the migration set.
-        assert migrate(test_database_url) == 16
-        assert verify_schema(test_database_url) == 16
+        assert migrate(test_database_url) == 19
+        assert verify_schema(test_database_url) == 19
     finally:
         _drop_all_migrations(test_database_url)
 
@@ -378,8 +390,15 @@ def test_privileged_schema_catalog_is_hardened(migrated_postgres: str) -> None:
         "transition_job_status",
         "guard_job_instance_status_write",
     )
+    control_functions = (
+        "lock_control_state_for_submission",
+        "pause_entries",
+        "resume_entries",
+        "bump_flatten_generation",
+    )
     protected_functions = (
         *privileged_functions,
+        *control_functions,
         "domain_event_payload_is_valid",
         "audit_event_payload_is_valid",
     )
@@ -412,6 +431,10 @@ def test_privileged_schema_catalog_is_hardened(migrated_postgres: str) -> None:
             assert settings == ["search_path=pg_catalog, public, pg_temp"]
             if function_name != "guard_job_instance_status_write":
                 assert "public.job_instances" in definition
+        for function_name in control_functions:
+            _, settings, definition, _ = by_name[function_name]
+            assert settings == ["search_path=pg_catalog, public, pg_temp"]
+            assert "public.control_state" in definition
 
         cursor.execute(
             """

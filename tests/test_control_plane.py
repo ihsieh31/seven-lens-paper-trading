@@ -10,6 +10,7 @@ from fakes.orders import FakeOrderRepository
 from seven_lens.application.control_service import (
     ControlPlane,
     ControlPlaneError,
+    LedgerFlattenPriceProvider,
     ResumeBlockedError,
 )
 from seven_lens.application.execution_service import ExecutionEngine
@@ -278,18 +279,20 @@ def _seed_filled_position(
     *,
     symbol: str,
     quantity: int,
+    target_version: int = 1,
+    price_cents: int = 10_000,
 ) -> None:
     intent = OrderIntent.create(
         strategy="seven-lens",
         trading_date=_TRADING_DATE,
         window="open",
-        target_version=1,
+        target_version=target_version,
         symbol=Symbol(symbol),
         side=OrderSide.BUY,
         quantity=OrderQuantity(quantity),
         intent_type=OrderIntentType.REBALANCE,
-        limit_price=Price.from_cents(10_000),
-        collar=PriceCollar(reference=Price.from_cents(10_000), offset_bps=100),
+        limit_price=Price.from_cents(price_cents),
+        collar=PriceCollar(reference=Price.from_cents(price_cents), offset_bps=100),
         earliest_submit_at=_BASE_TIME,
         cancel_at=_CANCEL_AT,
         run_id=RunId.new(),
@@ -303,7 +306,7 @@ def _seed_filled_position(
     unit_of_work.orders.record_broker_order(accepted.order)
     fill = broker.apply_fill(
         accepted.order.broker_order_id,
-        FakeFillStep(quantity=OrderQuantity(quantity), price=Price.from_cents(10_000)),
+        FakeFillStep(quantity=OrderQuantity(quantity), price=Price.from_cents(price_cents)),
     )
     unit_of_work.orders.add_fill(fill)
 
@@ -361,6 +364,8 @@ class TestFlattenPaper:
         assert submitted[0].side is OrderSide.SELL
         assert submitted[0].symbol == Symbol("AAPL")
         assert submitted[0].quantity.value == 10
+        assert submitted[0].intent_type is OrderIntentType.RISK_EXIT
+        assert submitted[0].quantity.value <= 10
         assert submitted[0].status is OrderStatus.ACKNOWLEDGED
         assert submitted[0].target_version == 1
         assert [record.command.value for record in unit_of_work.control.commands] == [
@@ -445,8 +450,12 @@ class TestFlattenPaper:
             )
 
         assert [record.command.value for record in unit_of_work.control.commands] == [
-            "PAUSE_ENTRIES"
+            "PAUSE_ENTRIES",
+            "FLATTEN_PAPER",
         ]
+        assert unit_of_work.control.commands[-1].reason.startswith(
+            "PARTIAL_FAILURE 0/1 ControlPlaneError"
+        )
         assert unit_of_work.orders.list_by_status(OrderStatus.SUBMITTING) == ()
         assert unit_of_work.orders.list_by_status(OrderStatus.UNKNOWN) == ()
 
@@ -469,8 +478,12 @@ class TestFlattenPaper:
 
         assert unit_of_work.orders.list_by_status(OrderStatus.ACKNOWLEDGED) == ()
         assert [record.command.value for record in unit_of_work.control.commands] == [
-            "PAUSE_ENTRIES"
+            "PAUSE_ENTRIES",
+            "FLATTEN_PAPER",
         ]
+        assert unit_of_work.control.commands[-1].reason.startswith(
+            "PARTIAL_FAILURE 0/1 ControlPlaneError"
+        )
 
     def test_flatten_aborts_while_an_existing_cancel_is_still_pending(self) -> None:
         unit_of_work = _UnitOfWork()
@@ -607,8 +620,36 @@ class TestFlattenPaper:
         assert unit_of_work.control.state().flatten_generation == 0
         assert unit_of_work.orders.list_by_status(OrderStatus.ACKNOWLEDGED) == ()
         assert [record.command.value for record in unit_of_work.control.commands] == [
-            "PAUSE_ENTRIES"
+            "PAUSE_ENTRIES",
+            "FLATTEN_PAPER",
         ]
+        assert unit_of_work.control.commands[-1].reason.startswith(
+            "PARTIAL_FAILURE 0/1 ControlPlaneError"
+        )
+
+    def test_default_flatten_price_uses_the_latest_local_fill(self) -> None:
+        unit_of_work = _UnitOfWork()
+        broker = FakePaperBroker(clock=_FixedClock())
+        _seed_filled_position(
+            unit_of_work,
+            broker,
+            symbol="AAPL",
+            quantity=10,
+            target_version=1,
+            price_cents=10_000,
+        )
+        _seed_filled_position(
+            unit_of_work,
+            broker,
+            symbol="AAPL",
+            quantity=5,
+            target_version=2,
+            price_cents=12_000,
+        )
+
+        provider = LedgerFlattenPriceProvider(unit_of_work)
+
+        assert provider.current_price(Symbol("AAPL")) == Price.from_cents(12_000)
 
     def test_each_flatten_uses_a_new_durable_generation(self) -> None:
         unit_of_work = _UnitOfWork()
@@ -656,13 +697,3 @@ class TestFlattenPaper:
             == 3
         )
         assert unit_of_work.control.state().flatten_generation == 3
-
-
-class TestShutdownAfterReconcile:
-    def test_shutdown_intent_is_audited(self) -> None:
-        unit_of_work = _UnitOfWork()
-        plane = ControlPlane(clock=_FixedClock())
-        plane.shutdown_after_reconcile(unit_of_work, reason="maintenance", actor="owner")
-        assert [record.command.value for record in unit_of_work.control.commands] == [
-            "SHUTDOWN_AFTER_RECONCILE"
-        ]

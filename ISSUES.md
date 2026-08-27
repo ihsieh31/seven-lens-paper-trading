@@ -46,14 +46,6 @@ Issue關閉不會自動關閉較大的phase gate。
 - 控制：`SINGLE_ACCOUNT_UNVERIFIED`固定fail closed；本地ticket/reference不能自我升權。
 - 關閉：可信外部授權、帳號集合綁定、quota ledger、ADR與獨立驗收全部完成。
 
-### OPEN-025 — 真實模型provider能力／隱私／輸出穩定性
-
-- 嚴重度：High／P3-E blocker
-- 問題：模型名稱、reasoning參數、Chat/Responses API、failover與資料政策尚未由runtime驗證。
-- 控制：P3-B+C只用scripted fake；目前沒有Agnes/OpenCode refs或network client。
-- 關閉：P3-E完成capability audit、sanitized contract smoke、schema/timeout/failover/privacy與
-  held-out eval。
-
 ### OPEN-027 — Agnes transport可靠性不可由單次P3-F batch永久證明
 
 - 嚴重度：High／P6 blocker；不是P3-F功能正確性blocker。
@@ -97,9 +89,12 @@ native smoke需要專用namespace與另行授權，不得查詢現有真實item�
 | CLOSED-020～023 | P2 UNKNOWN、cash/NAV、recovery/pagination/flatten與concurrency/partial audit修復 |
 | P2-ACC-001～009 | P2 final remediation全數Closed；證據見`PROGRESS.md` |
 | CLOSED-024 | migration 0010 down漏刪version row已修復並通過up/down/up |
+| CLOSED-025 | P3-E provider capability／privacy／output stability 已完成 capability audit、sanitized contract、timeout/failover、privacy 與 held-out evidence；P3-E Accepted，後續 rolling transport 另由 OPEN-027 管理 |
 | CLOSED-P3C-024（原OPEN-024） | R6獨立驗收Accepted；P3-B+C Combined Gate Closed，證據見`PROJECT_HANDOFF.md` |
 | CLOSED-026（原OPEN-026的P3部分） | P3-F於2026-08-26由獨立重新驗收Accepted（F-A1 remediation紅→綠重注入、PG16 217/0-skip、V12重算260/260＋violations=0＋130/130 fail-closed）；event對抗驗收先前已通過，immutable lineage、≤4,000行curation、future-leakage與Live Model Quality條件全數滿足。Transport rolling canary另列OPEN-027 |
+| CLOSED-035 | P3 cleanup remediation Batch A–G 已於2026-08-27完成 current-worktree 的獨立 source、adversarial、完整 regression 與 real-PG acceptance；evidence 為 targeted 857、non-integration 1386/245 deselected、PG16 243/2 deselected/0 skipped |
+| NEW-P2-01 — CLOSED | runtime role 原可直接 UPDATE `control_state` 的 authority blocker 已由 migration 0019、fixed-path `SECURITY DEFINER` control functions、ACL verifier 與 real-PG direct-update probe 關閉；direct update `42501`、unsafe resume `55000` |
 | SUPERSEDED-021 | 舊cash/NAV關閉理由被P2-CUR證據取代 |
 
-目前沒有已知Open issue可由文件改寫自行關閉；所有Gate blocker都必須由source/tests與適當的真實
-integration evidence結案。
+目前沒有剩餘的 P1/P2/P3 Gate blocker；OPEN-002～007、OPEN-027 與其他 residual/future-phase issue
+仍需依各自的外部、營運或後續 phase 關閉條件處理，不能由本次 acceptance 擴張關閉。

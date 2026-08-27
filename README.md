@@ -14,7 +14,7 @@ execution 只能處理已核准的 Paper `OrderIntent`。本專案沒有 Alpaca 
 | P0 規格／治理 | Closed | 核心範圍、Paper-only 與風控邊界 |
 | P1 基礎／權威狀態 | Closed | typed config、Keychain、PostgreSQL、telemetry、CI |
 | P2 Paper 執行安全 | Closed | order/fill/reconciliation/control；真實下單仍未授權 |
-| **P3 研究／提案／記憶** | **Closed** | A～F 全部驗收後合併關門；詳見下節與 `WORKLOG.md` |
+| **P3 研究／提案／記憶** | **Closed** | A～F 與 cleanup Batch A～G 均已驗收；詳見下節與 `WORKLOG.md` |
 | P4～P8 | Not started | deterministic Risk → 驗證 → Shadow → Supervised → Unattended |
 
 ## P3 Close
@@ -32,6 +32,12 @@ provider isolation、immutable reflection lineage、bounded curated memory 與 s
   fail-closed；Provider Transport first-attempt/eventual 皆 100%（僅為該批 snapshot）。
 - 發布：工作樹以 `b59e466` 登載、CI tmpfs 修復 `d51e9a9`；exact-SHA run `32962320231`
   的 `quality-unit` 與 `postgres-integration` 兩 required jobs 成功。
+
+2026-08-27 的 P1–P3 full remediation independent acceptance 另外確認：完整 non-integration
+`1386 passed, 245 deselected`、targeted P1–P3 `857 passed`、PostgreSQL 16 integration
+`243 passed, 2 deselected, 0 skipped`。runtime role 對 `control_state` 的 direct UPDATE 以 SQLSTATE
+`42501` 拒絕，未達 FULL+CLEAN 的 direct resume 以 `55000` 拒絕；P3-4／P3-28 仍為明確 deferred，
+P3-21 維持 FALSE POSITIVE。
 
 ## 核心邊界
 

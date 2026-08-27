@@ -171,7 +171,12 @@ def _symbol(value: object) -> str:
 
 
 def _ref(value: object, field: str) -> str:
-    result = _text(value, field, maximum=96)
+    result = validate_sanitized_text(
+        value,
+        field,
+        maximum=96,
+        allow_bare_host=True,
+    )
     if _REF.fullmatch(result) is None:
         raise ValueError(f"{field} must use canonical reference format")
     return result
@@ -184,7 +189,12 @@ def _hash(value: object, field: str) -> str:
 
 
 def _version(value: object, field: str) -> str:
-    result = _text(value, field, maximum=64)
+    result = validate_sanitized_text(
+        value,
+        field,
+        maximum=64,
+        allow_bare_host=True,
+    )
     if _VERSION.fullmatch(result) is None:
         raise ValueError(f"{field} must use canonical version text")
     return result
@@ -1233,11 +1243,11 @@ class InvestmentDebateState:
         for name in (
             "bull_arguments",
             "bear_arguments",
-            "verified_claims",
-            "disputed_claims",
             "unresolved_conflicts",
         ):
             object.__setattr__(self, name, _strings(getattr(self, name), name))
+        for name in ("verified_claims", "disputed_claims"):
+            object.__setattr__(self, name, _refs(getattr(self, name), name))
         _integer(self.round_count, "round_count", maximum=2)
         if type(self.complete) is not bool:
             raise ValueError("complete must be an exact bool")
@@ -1273,8 +1283,8 @@ class InvestmentDebateState:
             _symbol(r["symbol"]),
             _strings(r["bull_arguments"], "bull_arguments"),
             _strings(r["bear_arguments"], "bear_arguments"),
-            _strings(r["verified_claims"], "verified_claims"),
-            _strings(r["disputed_claims"], "disputed_claims"),
+            _refs(r["verified_claims"], "verified_claims"),
+            _refs(r["disputed_claims"], "disputed_claims"),
             _strings(r["unresolved_conflicts"], "unresolved_conflicts"),
             _integer(r["round_count"], "round_count", maximum=2),
             r["complete"],

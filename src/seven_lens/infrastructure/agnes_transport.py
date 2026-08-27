@@ -606,7 +606,7 @@ class AgnesJsonModelTransport:
             raise ModelTransportError(ModelTransportErrorCode.CONFIG)
         remaining = self._remaining_seconds(request.deadline)
         if remaining <= 0:
-            raise ModelTransportError(ModelTransportErrorCode.DEADLINE)
+            raise ModelTransportError(ModelTransportErrorCode.TIMEOUT)
         if request.max_output_tokens > self._config.max_output_tokens:
             raise ModelTransportError(ModelTransportErrorCode.CONFIG)
         body = build_agnes_request_body(self._config, request)
@@ -635,7 +635,7 @@ class AgnesJsonModelTransport:
         except Exception:
             raise ModelTransportError(ModelTransportErrorCode.TRANSIENT) from None
         if self._remaining_seconds(request.deadline) <= 0:
-            raise ModelTransportError(ModelTransportErrorCode.DEADLINE)
+            raise ModelTransportError(ModelTransportErrorCode.TIMEOUT)
         if type(response) is not RawHttpResponse:
             raise ModelTransportError(ModelTransportErrorCode.PROTOCOL)
         if response.final_url != _EXACT_ENDPOINT:

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from seven_lens.domain.value_objects import UtcTimestamp
 from seven_lens.infrastructure.content_store import ContentStoreError, FileContentStore
 from seven_lens.infrastructure.source_http import (
     GetRequest,
@@ -61,6 +62,80 @@ def source_record(
         ("MSFT",),
         ("claim.revenue",),
     )
+
+
+@pytest.mark.parametrize(
+    ("reason", "source", "as_of", "expected"),
+    [
+        pytest.param("allowed rights", source_record(), timestamp(), True),
+        pytest.param(
+            "unknown rights",
+            replace(source_record(), rights_status=RightsStatus.UNKNOWN),
+            timestamp(),
+            False,
+        ),
+        pytest.param(
+            "prohibited rights",
+            replace(source_record(), rights_status=RightsStatus.PROHIBITED),
+            timestamp(),
+            False,
+        ),
+        pytest.param(
+            "allowed robots",
+            replace(source_record(), robots_status=RobotsStatus.ALLOWED),
+            timestamp(),
+            True,
+        ),
+        pytest.param(
+            "unknown robots",
+            replace(source_record(), robots_status=RobotsStatus.UNKNOWN),
+            timestamp(),
+            False,
+        ),
+        pytest.param(
+            "prohibited robots",
+            replace(source_record(), robots_status=RobotsStatus.PROHIBITED),
+            timestamp(),
+            False,
+        ),
+        pytest.param(
+            "tombstoned",
+            replace(source_record(), tombstone=True),
+            timestamp(),
+            False,
+        ),
+        pytest.param(
+            "published at cutoff",
+            source_record(),
+            timestamp(),
+            True,
+        ),
+        pytest.param(
+            "published after cutoff",
+            replace(source_record(), published_at=timestamp(1)),
+            timestamp(),
+            False,
+        ),
+        pytest.param(
+            "available at cutoff",
+            source_record(),
+            timestamp(),
+            True,
+        ),
+        pytest.param(
+            "available after cutoff",
+            source_record(available_minutes=1),
+            timestamp(),
+            False,
+        ),
+    ],
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+def test_source_record_eligibility_matrix(
+    reason: str, source: SourceRecord, as_of: UtcTimestamp, expected: bool
+) -> None:
+    del reason
+    assert source.eligible_at(as_of) is expected
 
 
 def evidence_packet() -> EvidencePacket:

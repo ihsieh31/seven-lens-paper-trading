@@ -229,6 +229,9 @@ class TestStackBuilding:
                 self.control = control
                 self.account_baselines = _BaselineRepo()
 
+            def begin_reconciliation_snapshot(self):
+                pass
+
             def commit(self):
                 pass
 

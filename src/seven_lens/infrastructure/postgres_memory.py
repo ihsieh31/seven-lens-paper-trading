@@ -11,10 +11,12 @@ from typing import Any
 
 import psycopg
 
+from seven_lens.application.ports.memory import MemoryRepository
 from seven_lens.domain.value_objects import UtcTimestamp
 from seven_lens.infrastructure.content_store import FileContentStore, StoredContent
 from seven_lens.memory.contracts import (
     ArtifactState,
+    CorrectionReason,
     DailyReflectionRecord,
     FactKind,
     FactRef,
@@ -72,6 +74,9 @@ class PostgresMemoryRepository:
         if len(corrections) > 1:
             raise ValueError("one reflection cannot supersede multiple records")
         superseded = next(iter(corrections), None)
+        correction_reason = record.correction_reason if superseded is not None else None
+        if superseded is not None and type(correction_reason) is not CorrectionReason:
+            raise ValueError("correction record has no closed correction reason")
         content = _canonical_bytes(record.content_wire())
         try:
             self._connection.execute(
@@ -105,7 +110,7 @@ class PostgresMemoryRepository:
                     [item.content_hash for item in record.sources],
                     [item.available_at.value for item in record.sources],
                     superseded,
-                    "SOURCE_CORRECTION" if superseded is not None else None,
+                    None if correction_reason is None else correction_reason.value,
                 ),
             )
         except psycopg.Error as error:
@@ -118,20 +123,25 @@ class PostgresMemoryRepository:
         if type(record_id) is not str or not record_id:
             raise ValueError("record_id must be non-empty text")
         row = self._connection.execute(
-            "SELECT content_hash, content_bytes FROM public.approved_reflection_records "
+            "SELECT content_hash, content_bytes, correction_reason_code "
+            "FROM public.approved_reflection_records "
             "WHERE reflection_id = %s",
             (record_id,),
         ).fetchone()
         if row is None:
             return None
-        return _reflection_from_bytes(bytes(row[1]), str(row[0]))
+        return _reflection_from_bytes(
+            bytes(row[1]),
+            str(row[0]),
+            _correction_reason(row[2]),
+        )
 
     def load_reflections(self, cutoff: UtcTimestamp) -> tuple[DailyReflectionRecord, ...]:
         if type(cutoff) is not UtcTimestamp:
             raise ValueError("cutoff must be an exact UtcTimestamp")
         rows = self._connection.execute(
             """
-            SELECT record.content_hash, record.content_bytes
+            SELECT record.content_hash, record.content_bytes, record.correction_reason_code
             FROM public.approved_reflection_records AS record
             WHERE record.available_at <= %s AND record.cutoff_at <= %s
               AND NOT EXISTS (
@@ -146,7 +156,10 @@ class PostgresMemoryRepository:
             """,
             (cutoff.value, cutoff.value, cutoff.value, cutoff.value, cutoff.value),
         ).fetchall()
-        return tuple(_reflection_from_bytes(bytes(row[1]), str(row[0])) for row in rows)
+        return tuple(
+            _reflection_from_bytes(bytes(row[1]), str(row[0]), _correction_reason(row[2]))
+            for row in rows
+        )
 
     def register_candidate(
         self,
@@ -242,6 +255,25 @@ class PostgresMemoryRepository:
         except psycopg.Error as error:
             raise _translate("memory validation transition failed", error) from error
 
+    def mark_invalid(self, result: ValidationResult) -> bool:
+        if type(result) is not ValidationResult or result.valid:
+            raise ValueError(
+                "only an exact unsuccessful deterministic ValidationResult is accepted"
+            )
+        artifact = result.artifact
+        artifact.verify_integrity()
+        reason_code = result.invalidation_reason_code
+        try:
+            row = self._connection.execute(
+                "SELECT public.invalidate_memory_artifact(%s,%s,%s)",
+                (artifact.artifact_id, artifact.content_hash, reason_code),
+            ).fetchone()
+        except psycopg.Error as error:
+            raise _translate("memory invalidation transition failed", error) from error
+        if row is None or type(row[0]) is not bool:
+            raise PostgresMemoryError("memory invalidation authority returned invalid result")
+        return row[0]
+
     def promote(self, artifact_id: str, requested_as_of: UtcTimestamp) -> bool:
         if type(requested_as_of) is not UtcTimestamp:
             raise ValueError("requested_as_of must be an exact UtcTimestamp")
@@ -292,7 +324,7 @@ class PostgresMemoryPromotionCoordinator:
 
     def __init__(
         self,
-        repository: PostgresMemoryRepository,
+        repository: MemoryRepository,
         content_store: FileContentStore,
         validator: MemoryValidator,
         *,
@@ -401,6 +433,7 @@ class PostgresMemoryPromotionCoordinator:
             )
             self._repository.append_curation_audit(curation_audit)
             if not result.valid:
+                self._repository.mark_invalid(result)
                 return result
             report_hash = hashlib.sha256(
                 _canonical_bytes(
@@ -432,6 +465,10 @@ class PostgresMemoryPromotionCoordinator:
 PostgresMemoryPromoter = PostgresMemoryPromotionCoordinator
 
 
+# Keep the production adapter checked against the application-facing capability boundary.
+_POSTGRES_MEMORY_REPOSITORY_PORT: type[MemoryRepository] = PostgresMemoryRepository
+
+
 def _canonical_bytes(value: object) -> bytes:
     return json.dumps(
         value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")
@@ -444,7 +481,11 @@ def _utc(value: object) -> UtcTimestamp:
     return UtcTimestamp.from_isoformat(value)
 
 
-def _reflection_from_bytes(content: bytes, content_hash: str) -> DailyReflectionRecord:
+def _reflection_from_bytes(
+    content: bytes,
+    content_hash: str,
+    correction_reason: CorrectionReason | None,
+) -> DailyReflectionRecord:
     try:
         value = json.loads(content)
         sources = tuple(
@@ -492,9 +533,21 @@ def _reflection_from_bytes(content: bytes, content_hash: str) -> DailyReflection
             data_version=value["data_version"],
             memory_version=value["memory_version"],
             content_hash=content_hash,
+            correction_reason=correction_reason,
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
         raise PostgresMemoryError("persisted reflection bytes are invalid") from error
+
+
+def _correction_reason(value: object) -> CorrectionReason | None:
+    if value is None:
+        return None
+    if type(value) is not str:
+        raise PostgresMemoryError("persisted correction reason is invalid")
+    try:
+        return CorrectionReason(value)
+    except (TypeError, ValueError) as error:
+        raise PostgresMemoryError("persisted correction reason is invalid") from error
 
 
 def _artifact_from_bytes(content: bytes, content_hash: str) -> MemoryArtifact:

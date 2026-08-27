@@ -30,7 +30,12 @@ from seven_lens.execution.orders import (
 )
 from seven_lens.execution.reconciliation import MismatchKind, ReconciliationStatus
 from seven_lens.execution.trade_updates import TradeUpdateConsumer, TradeUpdateError, fill_update
-from seven_lens.infrastructure.postgres import AccountBaseline, PersistenceInvariantError
+from seven_lens.infrastructure.postgres import (
+    MAX_OPENING_CASH_CENTS,
+    AccountBaseline,
+    PersistenceInvariantError,
+    PostgresAccountBaselineRepository,
+)
 
 _T0 = UtcTimestamp.from_isoformat("2026-08-17T13:00:00.000000Z")
 _T1 = UtcTimestamp.from_isoformat("2026-08-17T13:01:00.000000Z")
@@ -38,6 +43,55 @@ _T2 = UtcTimestamp.from_isoformat("2026-08-17T13:02:00.000000Z")
 _T3 = UtcTimestamp.from_isoformat("2026-08-17T13:03:00.000000Z")
 _CANCEL_AT = UtcTimestamp.from_isoformat("2026-08-17T13:45:00.000000Z")
 _TD = TradingDate.from_isoformat("2026-08-17")
+
+
+def _baseline(opening_cash_cents: int) -> AccountBaseline:
+    return AccountBaseline(
+        account_id="paper-1",
+        opening_cash_cents=opening_cash_cents,
+        effective_at=_T0,
+        created_at=_T0,
+        updated_at=_T0,
+    )
+
+
+@pytest.mark.parametrize("opening_cash_cents", (0, MAX_OPENING_CASH_CENTS))
+def test_account_baseline_accepts_the_database_cash_bound(opening_cash_cents: int) -> None:
+    assert _baseline(opening_cash_cents).opening_cash_cents == opening_cash_cents
+
+
+@pytest.mark.parametrize("opening_cash_cents", (-1, MAX_OPENING_CASH_CENTS + 1))
+def test_account_baseline_rejects_values_outside_the_database_cash_bound(
+    opening_cash_cents: int,
+) -> None:
+    with pytest.raises(ValueError, match="opening_cash_cents"):
+        _baseline(opening_cash_cents)
+
+
+class _NoConnectionBaselineUnitOfWork:
+    def _require_connection(self) -> object:
+        raise AssertionError("invalid opening cash must be rejected before SQL")
+
+
+@pytest.mark.parametrize("method", ("set_baseline", "add_revision"))
+def test_baseline_writes_reject_out_of_range_cash_before_sql(method: str) -> None:
+    repository = PostgresAccountBaselineRepository(_NoConnectionBaselineUnitOfWork())  # type: ignore[arg-type]
+    arguments: tuple[object, ...]
+    if method == "set_baseline":
+        arguments = ("paper-1", MAX_OPENING_CASH_CENTS + 1, _T0)
+    else:
+        arguments = (
+            "paper-1",
+            MAX_OPENING_CASH_CENTS + 1,
+            _T0,
+            None,
+            None,
+            "reason",
+            "actor",
+        )
+
+    with pytest.raises(ValueError, match="opening_cash_cents"):
+        getattr(repository, method)(*arguments)
 
 
 class _FakeBaselineRepo:
@@ -63,6 +117,9 @@ class _UoW:
         self.reconciliations = rec or FakeReconciliationRepository()
         self.account_baselines = _FakeBaselineRepo(baseline)
         self.commit_count = 0
+
+    def begin_reconciliation_snapshot(self) -> None:
+        pass
 
     def commit(self) -> None:
         self.commit_count += 1

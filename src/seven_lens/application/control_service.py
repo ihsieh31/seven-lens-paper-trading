@@ -25,6 +25,7 @@ from seven_lens.execution.control import (
 )
 from seven_lens.execution.ledger import LedgerProjection, project_ledger
 from seven_lens.execution.orders import (
+    Fill,
     OrderIntent,
     OrderIntentType,
     OrderQuantity,
@@ -75,16 +76,22 @@ class LedgerFlattenPriceProvider:
         self._unit_of_work = unit_of_work
 
     def current_price(self, symbol: Symbol) -> Price:
-        projection = project_ledger(
-            self._unit_of_work.orders.list_all_fills(),
-            {
-                order.broker_order_id: order
-                for order in self._unit_of_work.orders.list_all_broker_orders()
-            },
-        )
-        for lot in projection.lots:
-            if lot.symbol == symbol:
-                return lot.price
+        broker_orders = {
+            order.broker_order_id: order
+            for order in self._unit_of_work.orders.list_all_broker_orders()
+        }
+        matching_fills: list[Fill] = []
+        for fill in self._unit_of_work.orders.list_all_fills():
+            order = broker_orders.get(fill.broker_order_id)
+            if order is None:
+                raise ControlPlaneError("flatten found a fill without a local broker order")
+            if order.symbol == symbol:
+                matching_fills.append(fill)
+        if matching_fills:
+            return max(
+                matching_fills,
+                key=lambda fill: (fill.occurred_at.value, fill.execution_id),
+            ).price
         raise ControlPlaneError("flatten found no local fill price for a projected position")
 
 
@@ -341,29 +348,50 @@ class ControlPlane:
             )
             unit_of_work.commit()
             raise ControlPlaneError(f"flatten aborted: {unresolved_error}")
-        mirrors = unit_of_work.orders.list_all_broker_orders()
-        projection = project_ledger(
-            unit_of_work.orders.list_all_fills(),
-            {order.broker_order_id: order for order in mirrors},
-        )
-        self._assert_positions_agree(engine, projection)
-        self._assert_flatten_assets_tradable(engine, projection)
-        prices = (
-            self._prices if self._prices is not None else LedgerFlattenPriceProvider(unit_of_work)
-        )
         submitted: list[OrderIntent] = []
-        now = self._clock()
-        cancel_at = UtcTimestamp(now.value + timedelta(hours=_FLATTEN_CANCEL_HOURS))
-        positions = sorted(projection.positions.items(), key=lambda item: item[0].value)
-        priced_positions = [
-            (
-                symbol,
-                quantity,
-                PriceCollar(reference=prices.current_price(symbol), offset_bps=_FLATTEN_COLLAR_BPS),
+        positions: list[tuple[Symbol, int]] = []
+        try:
+            mirrors = unit_of_work.orders.list_all_broker_orders()
+            projection = project_ledger(
+                unit_of_work.orders.list_all_fills(),
+                {order.broker_order_id: order for order in mirrors},
             )
-            for symbol, quantity in positions
-        ]
-        generation = unit_of_work.control.bump_flatten_generation()
+            positions = sorted(projection.positions.items(), key=lambda item: item[0].value)
+            self._assert_positions_agree(engine, projection)
+            self._assert_flatten_assets_tradable(engine, projection)
+            prices = (
+                self._prices
+                if self._prices is not None
+                else LedgerFlattenPriceProvider(unit_of_work)
+            )
+            now = self._clock()
+            cancel_at = UtcTimestamp(now.value + timedelta(hours=_FLATTEN_CANCEL_HOURS))
+            priced_positions = [
+                (
+                    symbol,
+                    quantity,
+                    PriceCollar(
+                        reference=prices.current_price(symbol), offset_bps=_FLATTEN_COLLAR_BPS
+                    ),
+                )
+                for symbol, quantity in positions
+            ]
+            generation = unit_of_work.control.bump_flatten_generation()
+        except Exception as error:
+            self._record_partial_failure(
+                unit_of_work,
+                ControlCommand.FLATTEN_PAPER,
+                reason,
+                actor,
+                completed=0,
+                total=len(positions),
+                error=error,
+            )
+            unit_of_work.commit()
+            if isinstance(error, ControlPlaneError):
+                raise
+            raise ControlPlaneError("flatten preflight failed; entries remain paused") from error
+
         try:
             for symbol, quantity, collar in priced_positions:
                 intent = OrderIntent.create(
@@ -444,13 +472,6 @@ class ControlPlane:
                     "flatten aborted: the broker cannot trade a projected position as US equity "
                     f"{symbol.value}"
                 )
-
-    def shutdown_after_reconcile(
-        self, unit_of_work: _ControlUnitOfWork, *, reason: str, actor: str
-    ) -> None:
-        """Record the intent to stop only after the next CLEAN reconciliation."""
-        self._record(unit_of_work, ControlCommand.SHUTDOWN_AFTER_RECONCILE, reason, actor)
-        unit_of_work.commit()
 
     def _record(
         self,

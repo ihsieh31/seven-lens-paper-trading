@@ -162,6 +162,13 @@ class TestUsdAmount:
 
 
 class TestPriceCollar:
+    def test_lower_limit_is_clamped_to_one_cent(self) -> None:
+        collar = PriceCollar(reference=Price.from_cents(1), offset_bps=500)
+
+        assert collar.lower_limit == Price.from_cents(1)
+        assert collar.upper_limit == Price.from_cents(2)
+        assert collar.contains(Price.from_cents(1))
+
     def test_bounds_are_floored_and_ceiled_to_cents(self) -> None:
         collar = PriceCollar(reference=Price.from_cents(3_333), offset_bps=7)
         assert collar.lower_limit.value == Decimal("33.30")

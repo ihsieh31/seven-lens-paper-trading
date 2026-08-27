@@ -74,6 +74,21 @@ def test_ordinary_financial_prose_and_nonidentity_names_remain_valid() -> None:
     assert section.to_dict()["publisher"] == "A bounded issuer disclosure"
 
 
+@pytest.mark.parametrize("text", ("example.xyz", "example.tech", "example.cloud", "example.me"))
+def test_bare_host_detection_does_not_depend_on_a_short_tld_allowlist(text: str) -> None:
+    with pytest.raises(ValueError, match="prohibited"):
+        validate_sanitized_text(text, "test text", maximum=8_192)
+
+
+@pytest.mark.parametrize("text", ("version 1.2.3", "decimal 12.50", "ordinary sentence."))
+def test_dotted_numeric_prose_and_sentence_punctuation_remain_valid(text: str) -> None:
+    assert validate_sanitized_text(text, "test text", maximum=8_192) == text
+
+
+def test_known_canonical_claim_reference_remains_valid() -> None:
+    assert validate_sanitized_text("claim.revenue", "test text", maximum=8_192) == "claim.revenue"
+
+
 @pytest.mark.parametrize("text", PROHIBITED_TEXT)
 def test_sensitive_model_output_closes_schema_failure_without_authority(text: str) -> None:
     wire = _valid_report().to_wire()

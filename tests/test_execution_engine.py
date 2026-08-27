@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import replace
 
 import pytest
@@ -426,8 +427,11 @@ class TestMismatchAndExpiry:
         parked = orders.get(intent.client_order_id)
         assert parked is not None and parked.status is OrderStatus.SUBMITTING
 
-    def test_window_cutoff_cancels_broker_accepted_orders(self) -> None:
+    def test_window_cutoff_cancels_broker_accepted_orders(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         """A past-deadline accepted order is canceled at the broker, not orphaned."""
+        caplog.set_level(logging.WARNING, logger="seven_lens.application.execution_service")
         orders = FakeOrderRepository()
         intent = _outbox_intent(orders)
         broker = FakePaperBroker(clock=MutableClock())
@@ -441,6 +445,14 @@ class TestMismatchAndExpiry:
         assert closed[0].status is OrderStatus.CANCELED
         mirror = orders.get_broker_order(intent.client_order_id)
         assert mirror is not None and mirror.status is BrokerOrderStatus.CANCELED
+        assert not any(
+            record.msg
+            in {
+                "expire_overdue_cancel_transport_failure",
+                "expire_overdue_cancel_reconciliation_required",
+            }
+            for record in caplog.records
+        )
         assert late.expire_overdue(unit_of_work) == ()
 
     def test_window_cutoff_expires_intents_without_broker_orders(self) -> None:
@@ -482,7 +494,9 @@ class TestMismatchAndExpiry:
         mirror = orders.get_broker_order(intent.client_order_id)
         assert mirror is not None and mirror.broker_order_id == "fake-order-000001"
 
-    def test_window_cutoff_never_expires_on_cancel_transport_failure(self) -> None:
+    def test_window_cutoff_never_expires_on_cancel_transport_failure(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
         orders = FakeOrderRepository()
         intent = _outbox_intent(orders)
         broker = FakePaperBroker(clock=MutableClock())
@@ -520,6 +534,7 @@ class TestMismatchAndExpiry:
             def account(self):  # type: ignore[no-untyped-def]
                 return self._inner.account()
 
+        caplog.set_level(logging.WARNING, logger="seven_lens.application.execution_service")
         late = ExecutionEngine(broker=CancelFailsBroker(broker), clock=MutableClock(now=_CANCEL_AT))
         closed = late.expire_overdue(unit_of_work)
 
@@ -528,6 +543,48 @@ class TestMismatchAndExpiry:
         # to recovery and reconciliation rather than a local expiry.
         current = orders.get(intent.client_order_id)
         assert current is not None and current.status is OrderStatus.CANCEL_PENDING
+        records = [
+            record
+            for record in caplog.records
+            if record.msg == "expire_overdue_cancel_transport_failure"
+        ]
+        assert len(records) == 1
+        assert records[0].seven_lens_fields == {
+            "client_order_id": intent.client_order_id.value,
+            "status": OrderStatus.ACKNOWLEDGED.value,
+        }
+        assert "cancel outcome unknown" not in caplog.text
+
+    def test_window_cutoff_logs_reconciliation_conflict_without_changing_state(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        orders = FakeOrderRepository()
+        intent = _outbox_intent(orders)
+        broker = FakePaperBroker(clock=MutableClock())
+        engine, unit_of_work, _ = _engine(orders, broker)
+        engine.submit_from_outbox(unit_of_work, intent.client_order_id)
+        late = ExecutionEngine(broker=broker, clock=MutableClock(now=_CANCEL_AT))
+
+        def fail_cancel(_unit_of_work: object, _client_order_id: ClientOrderId) -> object:
+            raise BrokerMirrorMismatchError("provider body must not be logged")
+
+        monkeypatch.setattr(late, "request_cancel", fail_cancel)
+        caplog.set_level(logging.WARNING, logger="seven_lens.application.execution_service")
+
+        assert late.expire_overdue(unit_of_work) == ()
+        current = orders.get(intent.client_order_id)
+        assert current is not None and current.status is OrderStatus.ACKNOWLEDGED
+        records = [
+            record
+            for record in caplog.records
+            if record.msg == "expire_overdue_cancel_reconciliation_required"
+        ]
+        assert len(records) == 1
+        assert records[0].seven_lens_fields == {
+            "client_order_id": intent.client_order_id.value,
+            "status": OrderStatus.ACKNOWLEDGED.value,
+        }
+        assert "provider body must not be logged" not in caplog.text
 
     def test_missing_intent_fails_closed(self) -> None:
         engine, unit_of_work, _ = _engine(

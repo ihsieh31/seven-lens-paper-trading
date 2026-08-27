@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import math
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -493,27 +492,6 @@ _ROUTE_CLAIM_KEYS: Final = {
     "reasoning_requested",
     "citation_text",
 }
-
-
-def _latency_metrics(values: list[int], deadline_ms: int) -> dict[str, JsonValue]:
-    if not values:
-        raise ValueError("latency denominator is empty")
-    ordered = sorted(values)
-    timeouts = sum(value > deadline_ms for value in values)
-    return {
-        "denominator": len(values),
-        "p50_ms": _percentile(ordered, 0.50),
-        "p95_ms": _percentile(ordered, 0.95),
-        "max_ms": ordered[-1],
-        "timeout_count": timeouts,
-        "deadline_ms": deadline_ms,
-        "passed": timeouts == 0 and ordered[-1] <= deadline_ms,
-    }
-
-
-def _percentile(values: list[int], quantile: float) -> int:
-    index = max(0, math.ceil(quantile * len(values)) - 1)
-    return values[index]
 
 
 def _fraction(numerator: int, denominator: int) -> dict[str, JsonValue]:

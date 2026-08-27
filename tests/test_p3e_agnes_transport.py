@@ -518,7 +518,7 @@ def test_expired_deadline_prevents_executor_and_late_valid_response_has_zero_aut
     executor = FakeExecutor(_raw_response())
     with pytest.raises(ModelTransportError) as caught:
         _transport(executor).execute(_request(deadline=expired))
-    assert caught.value.code is ModelTransportErrorCode.DEADLINE
+    assert caught.value.code is ModelTransportErrorCode.TIMEOUT
     assert executor.requests == []
 
     clock = MutableClock()
@@ -532,7 +532,7 @@ def test_expired_deadline_prevents_executor_and_late_valid_response_has_zero_aut
     late = LateExecutor(_raw_response())
     with pytest.raises(ModelTransportError) as late_error:
         _transport(late, clock=clock).execute(_request())
-    assert late_error.value.code is ModelTransportErrorCode.DEADLINE
+    assert late_error.value.code is ModelTransportErrorCode.TIMEOUT
     assert len(late.requests) == 1
 
 

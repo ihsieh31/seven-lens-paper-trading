@@ -1,14 +1,22 @@
 # Project Handoff
 
-最後更新：2026-08-26（P3 收尾後）
+最後更新：2026-08-27（P1–P3 full remediation independent acceptance 後）
 專案：`/Users/zongen/Downloads/codex/trading`
 
 ## 1. 目前唯一狀態
 
-**P0／P1／P2／P3 全部 Closed；P4～P8 Not started。**
-`main`＝`origin/main`，工作樹乾淨。P3 以 commit `b59e466` 發布、CI tmpfs 修復 `d51e9a9`、治理同步
-`660e062`；exact-SHA CI run `32962320231` 與 `32963312426` 的 `quality-unit`＋`postgres-integration`
-兩 required jobs 均成功。
+**P1–P3 full remediation 已完成獨立驗收並 Accepted；P4～P8 尚未開始。**
+目前 HEAD=`40092dd`（`main`＝`origin/main`），工作樹包含 Batch A–G 及 runtime control-state authority
+的未提交修復；本次驗收以當下完整工作樹為目標，未修改、commit 或 push。
+
+2026-08-27 獨立驗收證據：`./scripts/verify_p1.sh` 為 `1386 passed, 245 deselected`；targeted
+P1–P3 suites 為 `857 passed`；`./scripts/verify_p1.sh --postgres` 的 PostgreSQL 16 integration 為
+`243 passed, 2 deselected, 0 skipped`；Ruff format/check、mypy、`git diff --check` 通過。
+獨立 runtime authority probe 亦確認 direct `UPDATE control_state` 為 SQLSTATE `42501`、未達 FULL+CLEAN
+時 direct resume 為 SQLSTATE `55000`，且受控 pause/resume 路徑正常。
+
+2 個 deselected tests 是明確標記的 live provider tests；本次沒有在缺少新授權時呼叫 provider/model。
+P3-4 與 P3-28 的 future lifecycle/event wiring 仍按設計 deferred，P3-21 維持 FALSE POSITIVE。
 
 ## 2. P3 Close 摘要
 
@@ -38,9 +46,9 @@ reflection/memory/evals 各自經獨立驗收 Accepted 後合併關門；過程�
 
 ## 4. 下一個單一步驟
 
-**P4 deterministic Risk（Not started）**：production universe、hard limits、source/model overlap
-haircut、target-to-quantity translation、第一次拒絕一次重申／第二次 `NO_TRADE`、核准 targets 進既有
-P2 `OrderIntent` boundary。開始前需使用者對 scope 明確授權，並由 fresh session 依新工作包 prompt 執行。
+**由使用者明確授權後，另開 P4 deterministic Risk work package。** P1–P3 已有 source、adversarial、
+完整 regression 與 real-PG acceptance；不得把本次 acceptance 延伸成 P4 authority，也不得在 P4 前
+取得新的 risk、broker、order 或 live-money authority。
 
 ## 5. 文件地圖
 

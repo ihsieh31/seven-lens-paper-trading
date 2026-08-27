@@ -21,6 +21,7 @@ from seven_lens.execution.orders import (
     OrderIntentType,
     OrderQuantity,
     OrderSide,
+    OrderStatus,
     Price,
     PriceCollar,
     Symbol,
@@ -32,7 +33,7 @@ from seven_lens.execution.reconciliation import (
     ReconciliationScope,
     ReconciliationStatus,
 )
-from seven_lens.infrastructure.postgres import PostgresUnitOfWork
+from seven_lens.infrastructure.postgres import PostgresUnitOfWork, UnitOfWorkStateError
 
 pytestmark = pytest.mark.integration
 
@@ -108,6 +109,35 @@ def test_broker_outage_persists_mismatch_and_pauses_in_postgres(
             (result.run_id,),
         ).fetchone()
     assert stored == (["BROKER_QUERY_FAILURE"],)
+
+
+def test_reconciliation_snapshot_keeps_one_local_repeatable_read_view(
+    migrated_postgres: str,
+) -> None:
+    inserted = ReconciliationResult.create(
+        trading_date=_TRADING_DATE,
+        mismatches=(ReconciliationMismatch(MismatchKind.STATUS_MISMATCH, "concurrent"),),
+        checked_orders=1,
+        checked_fills=0,
+        observed_at=_BASE_TIME,
+    )
+    with PostgresUnitOfWork(migrated_postgres) as snapshot:
+        snapshot.begin_reconciliation_snapshot()
+        before = snapshot.reconciliations.latest()
+        with PostgresUnitOfWork(migrated_postgres) as writer:
+            writer.reconciliations.add(inserted)
+            writer.commit()
+        assert snapshot.reconciliations.latest() == before
+
+    with PostgresUnitOfWork(migrated_postgres) as next_run:
+        assert next_run.reconciliations.latest() == inserted
+
+
+def test_reconciliation_snapshot_rejects_prior_local_writes(migrated_postgres: str) -> None:
+    with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
+        unit_of_work.control.set_entries_paused(True, "synthetic prior write")
+        with pytest.raises(UnitOfWorkStateError, match="before any unit-of-work writes"):
+            unit_of_work.begin_reconciliation_snapshot()
 
 
 def _intent(*, target_version: int) -> OrderIntent:
@@ -206,6 +236,86 @@ def test_control_commands_append_only_and_resume_gate(migrated_postgres: str) ->
         with pytest.raises(psycopg.errors.ObjectNotInPrerequisiteState):
             connection.execute("UPDATE public.control_commands SET reason = 'forged'")
         connection.rollback()
+
+
+def test_control_plane_rejects_partial_clean_resume(migrated_postgres: str) -> None:
+    plane = ControlPlane(clock=_FixedClock())
+    partial_clean = ReconciliationResult.create(
+        trading_date=_TRADING_DATE,
+        mismatches=(),
+        checked_orders=0,
+        checked_fills=0,
+        observed_at=_BASE_TIME,
+        scope=ReconciliationScope.PARTIAL,
+    )
+    with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
+        plane.pause_entries(unit_of_work, reason="partial-clean test", actor="owner")
+    with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
+        unit_of_work.reconciliations.add(partial_clean)
+        unit_of_work.commit()
+
+    with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
+        with pytest.raises(ResumeBlockedError):
+            plane.resume_entries(unit_of_work, actor="owner")
+        assert unit_of_work.control.state().entries_paused is True
+
+
+def test_control_plane_rejects_full_clean_with_unknown_intent(migrated_postgres: str) -> None:
+    plane = ControlPlane(clock=_FixedClock())
+    clean = ReconciliationResult.create(
+        trading_date=_TRADING_DATE,
+        mismatches=(),
+        checked_orders=0,
+        checked_fills=0,
+        observed_at=_BASE_TIME,
+        scope=ReconciliationScope.FULL,
+    )
+    intent = _intent(target_version=101)
+    with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
+        plane.pause_entries(unit_of_work, reason="unknown blocker test", actor="owner")
+    with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
+        unit_of_work.reconciliations.add(clean)
+        unit_of_work.orders.add(intent)
+        unit_of_work.orders.transition_status(intent.client_order_id, OrderStatus.RISK_APPROVED)
+        unit_of_work.orders.transition_status(intent.client_order_id, OrderStatus.OUTBOX_PENDING)
+        unit_of_work.orders.transition_status(intent.client_order_id, OrderStatus.SUBMITTING)
+        unit_of_work.orders.transition_status(intent.client_order_id, OrderStatus.UNKNOWN)
+        unit_of_work.commit()
+
+    with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
+        with pytest.raises(ResumeBlockedError, match="UNKNOWN"):
+            plane.resume_entries(unit_of_work, actor="owner")
+        assert unit_of_work.control.state().entries_paused is True
+
+
+def test_control_plane_rejects_full_clean_with_review_required_intent(
+    migrated_postgres: str,
+) -> None:
+    plane = ControlPlane(clock=_FixedClock())
+    clean = ReconciliationResult.create(
+        trading_date=_TRADING_DATE,
+        mismatches=(),
+        checked_orders=0,
+        checked_fills=0,
+        observed_at=_BASE_TIME,
+        scope=ReconciliationScope.FULL,
+    )
+    intent = _intent(target_version=102)
+    with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
+        plane.pause_entries(unit_of_work, reason="review blocker test", actor="owner")
+    with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
+        unit_of_work.reconciliations.add(clean)
+        unit_of_work.orders.add(intent)
+        unit_of_work.orders.transition_status(intent.client_order_id, OrderStatus.RISK_APPROVED)
+        unit_of_work.orders.transition_status(intent.client_order_id, OrderStatus.OUTBOX_PENDING)
+        unit_of_work.orders.transition_status(intent.client_order_id, OrderStatus.SUBMITTING)
+        unit_of_work.orders.transition_status(intent.client_order_id, OrderStatus.REVIEW_REQUIRED)
+        unit_of_work.commit()
+
+    with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
+        with pytest.raises(ResumeBlockedError, match="REVIEW_REQUIRED"):
+            plane.resume_entries(unit_of_work, actor="owner")
+        assert unit_of_work.control.state().entries_paused is True
 
 
 def test_reconciliation_mismatch_wins_over_concurrent_resume(

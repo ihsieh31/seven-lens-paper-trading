@@ -85,6 +85,18 @@ def test_audit_record_is_exact_bounded_and_deterministically_identified() -> Non
     assert record.to_claim().call_id == record.call_id
 
 
+def test_model_call_identity_rejects_unsupported_second_route() -> None:
+    with pytest.raises(ValueError, match="route ordinal"):
+        derive_model_call_id(
+            _rid(2),
+            _rid(4),
+            ModelCallStage.ANALYST,
+            ModelCallRole.TECHNICAL,
+            0,
+            2,
+        )
+
+
 def test_claim_decision_requires_replay_authority_only_when_closed() -> None:
     assert ModelCallClaimResult(ModelCallClaimDecision.CLAIMED, None).attempt is None
     with pytest.raises(ValueError, match="replay authority"):

@@ -80,7 +80,7 @@ _ERROR_MESSAGES: Final = {
     ModelTransportErrorCode.PROTOCOL: "model provider protocol response is invalid",
     ModelTransportErrorCode.SCHEMA: "model provider output schema is invalid",
     ModelTransportErrorCode.OVERSIZE: "model provider output exceeds the fixed limit",
-    ModelTransportErrorCode.DEADLINE: "model provider deadline was exceeded",
+    ModelTransportErrorCode.DEADLINE: "model provider request timed out",
     ModelTransportErrorCode.AUDIT: "model call audit failed",
 }
 
@@ -119,9 +119,12 @@ _TRANSPORT_AUDIT_CODE: Final = {
     ModelTransportErrorCode.PROTOCOL: ModelCallErrorCode.PROTOCOL,
     ModelTransportErrorCode.SCHEMA: ModelCallErrorCode.SCHEMA,
     ModelTransportErrorCode.OVERSIZE: ModelCallErrorCode.OVERSIZE,
-    ModelTransportErrorCode.DEADLINE: ModelCallErrorCode.DEADLINE,
 }
-_AUDIT_TRANSPORT_CODE: Final = {value: key for key, value in _TRANSPORT_AUDIT_CODE.items()}
+_AUDIT_TRANSPORT_CODE: Final = {
+    **{value: key for key, value in _TRANSPORT_AUDIT_CODE.items()},
+    # Historical audit rows may contain DEADLINE; replay them under the closed TIMEOUT taxonomy.
+    ModelCallErrorCode.DEADLINE: ModelTransportErrorCode.TIMEOUT,
+}
 
 
 class ModelInvocationError(RuntimeError):
@@ -132,8 +135,11 @@ class ModelInvocationError(RuntimeError):
     def __init__(self, code: ModelTransportErrorCode) -> None:
         if type(code) is not ModelTransportErrorCode:
             raise ValueError("model invocation error code is invalid")
-        self.code = code
-        super().__init__(_ERROR_MESSAGES[code])
+        normalized = (
+            ModelTransportErrorCode.TIMEOUT if code is ModelTransportErrorCode.DEADLINE else code
+        )
+        self.code = normalized
+        super().__init__(_ERROR_MESSAGES[normalized])
 
     def __repr__(self) -> str:
         return f"ModelInvocationError(code={self.code.value!r})"
@@ -256,9 +262,9 @@ class AuditedModelInvoker:
                 claim,
                 started_at,
                 completed_at,
-                ModelCallErrorCode.DEADLINE,
+                ModelCallErrorCode.TIMEOUT,
             )
-            raise ModelInvocationError(ModelTransportErrorCode.DEADLINE)
+            raise ModelInvocationError(ModelTransportErrorCode.TIMEOUT)
         try:
             prompt = build_model_prompt(envelope, output_contract)
         except (AttributeError, KeyError, TypeError, ValueError):
@@ -336,10 +342,10 @@ class AuditedModelInvoker:
                 claim,
                 started_at,
                 completed_at,
-                ModelCallErrorCode.DEADLINE,
+                ModelCallErrorCode.TIMEOUT,
                 response=response,
             )
-            raise ModelInvocationError(ModelTransportErrorCode.DEADLINE)
+            raise ModelInvocationError(ModelTransportErrorCode.TIMEOUT)
         if len(response.content.encode("utf-8")) > MAX_SERIALIZED_BYTES:
             self._persist_failure(
                 claim,
@@ -421,7 +427,7 @@ class AuditedModelInvoker:
         except (AttributeError, TypeError, ValueError):
             raise ModelInvocationError(ModelTransportErrorCode.AUDIT) from None
         if self._timestamp().value > envelope.deadline.value:
-            raise ModelInvocationError(ModelTransportErrorCode.DEADLINE)
+            raise ModelInvocationError(ModelTransportErrorCode.TIMEOUT)
         if attempt.record.outcome is ModelCallOutcome.FAILURE:
             code = _AUDIT_TRANSPORT_CODE.get(attempt.record.error_code)
             if code is None:

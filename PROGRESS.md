@@ -1,6 +1,6 @@
 # Progress
 
-最後更新：2026-08-26（P3 收尾後）
+最後更新：2026-08-27（P1–P3 full remediation independent acceptance 後）
 
 ## 目前 Gate
 
@@ -10,6 +10,24 @@ P3 於 2026-08-26 完成最後子閘的獨立重新驗收後一次性關門，�
 `d51e9a9` 修復 CI postgres service tmpfs、`660e062` 完成治理同步；exact-SHA run `32962320231`
 與 `32963312426` 的 `quality-unit`＋`postgres-integration` 兩 required jobs 均成功。
 
+## 2026-08-27 P1–P3 full remediation 狀態
+
+- Batch A–G：已完成 current worktree 的獨立 source、adversarial、regression 與 real PostgreSQL 驗收，
+  狀態為 Accepted。
+- Batch E：P3-19/20/22/24/26 已完成 typed correction provenance、selection infra error、repository
+  invalidation parity、source/projected hash 與 application memory port 修復。
+- Batch F：P3-10 已以 reconciliation-specific `REPEATABLE READ` UoW boundary 修復，並以雙連線
+  真實 PG 測試證明同一 run 不混合兩個 local committed snapshots。
+- Batch G：移除 dead reconciliation helper／不可達分支與無 consumer 的 shutdown API；保留 sweep
+  all-or-nothing 語意；補 P3-21 SQL regression；`market_data/events.py` production wiring 明確 deferred
+  至 P4。
+- NEW-P2-01：runtime role 對 `control_state` 的直接 UPDATE 權限已撤銷，改由固定
+  `SECURITY DEFINER` control functions 提供窄化 authority；real-PG direct-update／unsafe-resume
+  對抗 probe 均按預期拒絕。
+- 獨立驗收證據：targeted P1–P3 `857 passed`；完整 non-integration `1386 passed, 245 deselected`；
+  PostgreSQL 16 `243 passed, 2 deselected, 0 skipped`；Ruff format/check、mypy、`git diff --check`
+  全綠。2 個 deselected 為明確 live provider tests，沒有 silent skip，也沒有本次 provider/model call。
+
 ## Phase 狀態
 
 | 階段 | 狀態 | 說明 |
@@ -17,7 +35,7 @@ P3 於 2026-08-26 完成最後子閘的獨立重新驗收後一次性關門，�
 | P0 規格與治理 | Closed | Paper-only、投資流程、資料與安全基線 |
 | P1 專案骨架與權威狀態 | Closed | Python/uv、typed config、PostgreSQL、Keychain、telemetry、CI |
 | P2 Alpaca Paper 執行安全 | Closed | order/fill/reconciliation/control/NAV/runtime authority；真實下單仍未授權 |
-| **P3 研究／提案／記憶** | **Closed** | upstream contracts、evidence/event、研究管線、Risk Debate／提案、provider isolation、reflection lineage、bounded memory 與 eval 治理；A～F 子閘各自獨立驗收後合併關門 |
+| **P3 研究／提案／記憶** | **Closed** | upstream contracts、evidence/event、研究管線、Risk Debate／提案、provider isolation、reflection lineage、bounded memory 與 eval 治理；A～F 子閘及 cleanup Batch A～G 均已獨立驗收 |
 | P4 deterministic Risk | Not started | hard limits、target-to-quantity、`OrderIntent` boundary |
 | P5 validation | Not started | point-in-time walk-forward、attribution、economic fills |
 | P6 Shadow | Not started | 至少20交易日，零送單 |

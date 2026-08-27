@@ -49,6 +49,11 @@ from seven_lens.execution.orders import (
 _TIMEOUT_STATUS_CODES: Final[frozenset[int]] = frozenset({408, 429, 500, 502, 503, 504})
 _MAX_PAGINATION_PAGES: Final[int] = 100
 _ORDER_SUBMISSION_LOOKBACK = timedelta(days=1)
+_ALPACA_REJECTION_CODE_MAP: Final[dict[int, RejectionReason]] = {
+    # Alpaca documents this code for invalid order parameters.  The message
+    # is intentionally ignored because provider wording is not stable.
+    42210000: RejectionReason.ORDER_PARAMETERS_REJECTED,
+}
 
 
 class AlpacaResponse:
@@ -463,16 +468,15 @@ def _is_duplicate_rejection(body: object) -> bool:
 
 
 def _rejection(body: object) -> SubmitRejected:
-    reason = RejectionReason.ORDER_PARAMETERS_REJECTED
     if type(body) is dict:
-        message = body.get("message")
-        if type(message) is str:
-            lowered = message.lower()
-            if "buying power" in lowered or "cash" in lowered:
-                reason = RejectionReason.INSUFFICIENT_CASH
-            elif "not tradable" in lowered or "symbol" in lowered:
-                reason = RejectionReason.SYMBOL_NOT_TRADEABLE
-    return SubmitRejected(reason=reason)
+        code = body.get("code")
+        if type(code) is int:
+            return SubmitRejected(
+                reason=_ALPACA_REJECTION_CODE_MAP.get(
+                    code, RejectionReason.ORDER_PARAMETERS_REJECTED
+                )
+            )
+    return SubmitRejected(reason=RejectionReason.ORDER_PARAMETERS_REJECTED)
 
 
 def _required_text(payload: object, field: str) -> str:

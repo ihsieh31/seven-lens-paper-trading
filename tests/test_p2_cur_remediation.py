@@ -82,6 +82,9 @@ class _UoW:
         self.account_baselines = _FakeBaselineRepo(baseline)
         self.commit_count = 0
 
+    def begin_reconciliation_snapshot(self) -> None:
+        pass
+
     def commit(self) -> None:
         self.commit_count += 1
 

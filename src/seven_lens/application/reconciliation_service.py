@@ -94,6 +94,8 @@ class _ReconciliationUnitOfWork(Protocol):
 
     def commit(self) -> None: ...
 
+    def begin_reconciliation_snapshot(self) -> None: ...
+
 
 _TERMINAL_INTENT_STATUSES: frozenset[OrderStatus] = frozenset(
     {
@@ -199,6 +201,9 @@ class Reconciler:
         self, unit_of_work: _ReconciliationUnitOfWork, trading_date: TradingDate
     ) -> ReconciliationResult:
         """Build the reconciliation result for this trading date."""
+        # Broker REST cannot be atomic with PostgreSQL, but every local value
+        # used by one calculation must come from a single coherent snapshot.
+        unit_of_work.begin_reconciliation_snapshot()
         mismatches: list[ReconciliationMismatch] = []
         account = self._broker.account()
         if account.environment is not BrokerEnvironment.PAPER:
@@ -417,7 +422,7 @@ class Reconciler:
                         detail="missing opening cash baseline",
                     )
                 )
-            elif baseline is not None:
+            else:
                 # Ledger cutoff: only post-baseline fills count toward expected cash.
                 # For genesis (no cutoff) all fills are included.
                 # Current positions for NAV always come from the full ledger so
@@ -426,8 +431,6 @@ class Reconciler:
                 # rather than via project_ledger(post_fills) which would fail when a
                 # post-cutoff sell consumes a pre-cutoff lot.
                 post_fills: tuple = ()  # type: ignore[type-arg]
-                broker_orders_map: dict[str, BrokerOrder] = {}
-                expected_cash: int | None = None
                 cutoff_at = getattr(baseline, "cutoff_occurred_at", None)
                 cutoff_id = getattr(baseline, "cutoff_execution_id", None)
                 all_fills = orders.list_all_fills()
@@ -451,7 +454,9 @@ class Reconciler:
                         )
                     else:
                         post_fills = all_fills
-                broker_orders_map = {o.broker_order_id: o for o in orders.list_all_broker_orders()}
+                broker_orders_map = {
+                    order.broker_order_id: order for order in orders.list_all_broker_orders()
+                }
                 opening_cash_cents = baseline.opening_cash_cents
                 if type(opening_cash_cents) is not int or opening_cash_cents < 0:
                     raise TypeError("baseline opening_cash_cents must be a non-negative integer")
@@ -467,20 +472,12 @@ class Reconciler:
                     if abs(cash_delta_cents) > 1_000_000_000_000:
                         raise LedgerInvariantError("projected cash delta exceeds the allowed range")
                 expected_cash = opening_cash_cents + cash_delta_cents
-                if expected_cash is not None:
-                    broker_cash = account.cash.cents
-                    if abs(broker_cash - expected_cash) > self._account_policy.cash_tolerance_cents:
-                        mismatches.append(
-                            ReconciliationMismatch(
-                                kind=MismatchKind.CASH_MISMATCH,
-                                detail=f"expected {expected_cash} got {broker_cash}",
-                            )
-                        )
-                else:
+                broker_cash = account.cash.cents
+                if abs(broker_cash - expected_cash) > self._account_policy.cash_tolerance_cents:
                     mismatches.append(
                         ReconciliationMismatch(
-                            kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
-                            detail="cash reconciliation unavailable",
+                            kind=MismatchKind.CASH_MISMATCH,
+                            detail=f"expected {expected_cash} got {broker_cash}",
                         )
                     )
                 # NAV reconciliation requires mark prices for every open lot.
@@ -498,25 +495,17 @@ class Reconciler:
                             )
                         else:
                             # No positions: NAV is just expected cash; compare to equity.
-                            if expected_cash is None:
+                            broker_equity = account.equity.cents
+                            if (
+                                abs(broker_equity - expected_cash)
+                                > self._account_policy.nav_tolerance_cents
+                            ):
                                 mismatches.append(
                                     ReconciliationMismatch(
-                                        kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
-                                        detail="nav reconciliation unavailable",
+                                        kind=MismatchKind.NAV_MISMATCH,
+                                        detail=f"expected {expected_cash} got {broker_equity}",
                                     )
                                 )
-                            else:
-                                broker_equity = account.equity.cents
-                                if (
-                                    abs(broker_equity - expected_cash)
-                                    > self._account_policy.nav_tolerance_cents
-                                ):
-                                    mismatches.append(
-                                        ReconciliationMismatch(
-                                            kind=MismatchKind.NAV_MISMATCH,
-                                            detail=f"expected {expected_cash} got {broker_equity}",
-                                        )
-                                    )
                     else:
                         prices: dict[Symbol, Price] = {}
                         for sym in projection.positions:
@@ -524,27 +513,19 @@ class Reconciler:
                             if not isinstance(price, Price):
                                 raise TypeError("price provider must return Price")
                             prices[sym] = price
-                        if expected_cash is None:
+                        nav = account_equity_from_cash_and_positions(
+                            expected_cash,
+                            projection.lots,
+                            prices,
+                        )
+                        broker_equity = account.equity.cents
+                        if abs(broker_equity - nav) > self._account_policy.nav_tolerance_cents:
                             mismatches.append(
                                 ReconciliationMismatch(
-                                    kind=MismatchKind.ACCOUNT_RECONCILIATION_UNAVAILABLE,
-                                    detail="nav reconciliation unavailable",
+                                    kind=MismatchKind.NAV_MISMATCH,
+                                    detail=f"expected {nav} got {broker_equity}",
                                 )
                             )
-                        else:
-                            nav = account_equity_from_cash_and_positions(
-                                expected_cash,
-                                projection.lots,
-                                prices,
-                            )
-                            broker_equity = account.equity.cents
-                            if abs(broker_equity - nav) > self._account_policy.nav_tolerance_cents:
-                                mismatches.append(
-                                    ReconciliationMismatch(
-                                        kind=MismatchKind.NAV_MISMATCH,
-                                        detail=f"expected {nav} got {broker_equity}",
-                                    )
-                                )
                 except MarkPriceUnavailableError as error:
                     detail = str(error)[:200] if str(error).strip() else "mark price unavailable"
                     mismatches.append(

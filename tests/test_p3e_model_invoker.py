@@ -302,7 +302,7 @@ def test_output_identity_version_and_citation_drift_has_zero_authority(
     assert next(iter(audit.attempts.values())).result is None
 
 
-def test_late_valid_response_is_audited_as_deadline_and_never_returned() -> None:
+def test_late_valid_response_is_audited_as_timeout_and_never_returned() -> None:
     audit = FakeAuditPort()
     transport = FakeTransport(_response())
     with pytest.raises(ModelInvocationError) as excinfo:
@@ -314,8 +314,8 @@ def test_late_valid_response_is_audited_as_deadline_and_never_returned() -> None
                 _envelope().deadline.value + timedelta(microseconds=1),
             ),
         ).invoke(_envelope(), OutputContract.ANALYST_REPORT)
-    assert excinfo.value.code is ModelTransportErrorCode.DEADLINE
-    assert next(iter(audit.attempts.values())).record.error_code is ModelCallErrorCode.DEADLINE
+    assert excinfo.value.code is ModelTransportErrorCode.TIMEOUT
+    assert next(iter(audit.attempts.values())).record.error_code is ModelCallErrorCode.TIMEOUT
 
 
 def test_transport_error_is_closed_once_without_fallback() -> None:
@@ -350,7 +350,7 @@ def test_wrong_contract_model_or_expired_replay_is_rejected_without_network() ->
             FakeTransport(_response()),
             clock=_clock(_envelope().deadline.value + timedelta(microseconds=1)),
         ).invoke(_envelope(), OutputContract.ANALYST_REPORT)
-    assert expired.value.code is ModelTransportErrorCode.DEADLINE
+    assert expired.value.code is ModelTransportErrorCode.TIMEOUT
 
 
 def test_invocation_error_is_fixed_and_does_not_expose_exception_or_prompt() -> None:

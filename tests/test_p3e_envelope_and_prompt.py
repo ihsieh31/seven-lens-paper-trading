@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import FrozenInstanceError, replace
 from typing import cast
@@ -217,7 +218,8 @@ def test_envelope_is_frozen_canonical_and_hash_covers_every_material_field() -> 
 
 
 def test_snapshot_is_complete_but_uses_only_local_opaque_order_and_fill_references() -> None:
-    wire = _envelope().to_wire()
+    envelope = _envelope()
+    wire = envelope.to_wire()
     projected = wire["portfolio_snapshot"]
     assert type(projected) is dict
     assert set(projected) == {
@@ -230,13 +232,18 @@ def test_snapshot_is_complete_but_uses_only_local_opaque_order_and_fill_referenc
         "same_day_fills",
         "borrow_statuses",
         "remaining_limits",
-        "content_hash",
+        "source_content_hash",
     }
+    assert projected["source_content_hash"] == envelope.snapshot_hash
+    assert (
+        envelope.projected_snapshot_hash
+        == hashlib.sha256(envelope.portfolio_snapshot.to_json().encode("utf-8")).hexdigest()
+    )
     open_orders = cast(list[dict[str, object]], projected["open_orders"])
     same_day_fills = cast(list[dict[str, object]], projected["same_day_fills"])
     assert open_orders[0]["reference_id"] == "open-order-001"
     assert same_day_fills[0]["reference_id"] == "same-day-fill-001"
-    rendered = envelope_text = _envelope().canonical_json
+    rendered = envelope_text = envelope.canonical_json
     assert "open.1" not in rendered
     assert "fill.1" not in envelope_text
 
@@ -511,3 +518,5 @@ def test_envelope_rejects_post_construction_tamper_on_revalidation() -> None:
     clean = _envelope()
     with pytest.raises(ValueError, match="snapshot hash"):
         replace(clean, snapshot_hash="0" * 64)
+    with pytest.raises(ValueError, match="projected snapshot hash"):
+        replace(clean, projected_snapshot_hash="0" * 64)

@@ -24,7 +24,8 @@ fi
 
 postgres_image="postgres:16.15-alpine@sha256:ab5c955e9e57ae9879d4411ab49a912be9d162455676f7bf56e951b11ac73785"
 postgres_user="seven_lens_live_owner"
-postgres_password="p2e-disposable-owner-only"
+# Test-only password; callers may replace it with another disposable value.
+postgres_password="${SEVEN_LENS_TEST_POSTGRES_PASSWORD:-seven-lens-disposable-test-only}"
 postgres_database="seven_lens_p2e"
 container_name="seven-lens-p2e-postgres-$$-${RANDOM}"
 owner_token="${container_name}-owner"

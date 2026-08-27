@@ -43,6 +43,7 @@ from seven_lens.execution.orders import (
     Symbol,
     order_transition_allowed,
 )
+from seven_lens.observability.structured_logging import WARNING_LEVEL, log_named_event
 
 _LIVE_ORDER_STATUSES: frozenset[OrderStatus] = frozenset(
     {
@@ -274,6 +275,11 @@ class ExecutionEngine:
         locally.  A canceled order stays CANCEL_PENDING until the broker proves
         CANCELED/EXPIRED/FILLED; transport failures and mirror mismatches
         change nothing locally so reconciliation can arbitrate.
+
+        Pre-broker expiry transitions are one transaction sweep: an unexpected
+        exception before the final commit leaves them uncommitted so the UoW
+        rolls the whole sweep back. Per-intent durability is intentionally not
+        promised here.
         """
         now = self._clock()
         closed_by_id: dict[str, OrderIntent] = {}
@@ -293,22 +299,40 @@ class ExecutionEngine:
                         intent.client_order_id, OrderStatus.EXPIRED
                     )
                     closed_by_id[expired.client_order_id.value] = expired
+        handled_client_order_ids: set[str] = set()
         for status in (
             OrderStatus.ACKNOWLEDGED,
             OrderStatus.PARTIALLY_FILLED,
             OrderStatus.CANCEL_PENDING,
         ):
             for intent in unit_of_work.orders.list_by_status(status):
+                if intent.client_order_id.value in handled_client_order_ids:
+                    continue
+                handled_client_order_ids.add(intent.client_order_id.value)
                 if intent.cancel_at.value <= now.value:
                     try:
                         result = self.request_cancel(unit_of_work, intent.client_order_id)
                     except BrokerTransportError:
                         # The cancel outcome is unknown; the order may still
                         # fill.  Leave it for recovery and reconciliation.
+                        log_named_event(
+                            __name__,
+                            "expire_overdue_cancel_transport_failure",
+                            level=WARNING_LEVEL,
+                            client_order_id=intent.client_order_id.value,
+                            status=intent.status.value,
+                        )
                         continue
                     except (ExecutionStateError, BrokerMirrorMismatchError):
                         # No local change is safe here: reconciliation must
                         # arbitrate the broker-truth conflict.
+                        log_named_event(
+                            __name__,
+                            "expire_overdue_cancel_reconciliation_required",
+                            level=WARNING_LEVEL,
+                            client_order_id=intent.client_order_id.value,
+                            status=intent.status.value,
+                        )
                         continue
                     closed_by_id[result.client_order_id.value] = result
         if closed_by_id:

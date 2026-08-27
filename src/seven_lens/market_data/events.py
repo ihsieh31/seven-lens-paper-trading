@@ -1,4 +1,9 @@
-"""Deterministic, fail-closed emergency event verification."""
+"""Deterministic, fail-closed emergency event verification.
+
+This is an implemented contract with production composition intentionally
+deferred to the P4 candidate/risk gate. It must not be imported into the P2
+execution path merely to create a production call graph.
+"""
 
 from __future__ import annotations
 

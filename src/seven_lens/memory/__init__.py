@@ -3,6 +3,7 @@
 from seven_lens.memory.contracts import (
     MEMORY_SCHEMA_VERSION,
     ArtifactState,
+    CorrectionReason,
     DailyReflectionRecord,
     FactKind,
     FactRef,
@@ -10,6 +11,7 @@ from seven_lens.memory.contracts import (
     MemoryArtifact,
     MemoryCategory,
     MemoryEntry,
+    MemoryInvalidationReason,
     ObservationKind,
     OutcomeObservation,
     ReflectionObservation,
@@ -28,6 +30,7 @@ from seven_lens.memory.curation import (
 __all__ = [
     "MEMORY_SCHEMA_VERSION",
     "ArtifactState",
+    "CorrectionReason",
     "CurationAuditError",
     "CurationAuditPort",
     "CurationAuditRecord",
@@ -39,6 +42,7 @@ __all__ = [
     "MemoryArtifact",
     "MemoryCategory",
     "MemoryEntry",
+    "MemoryInvalidationReason",
     "ObservationKind",
     "OutcomeObservation",
     "ReflectionObservation",

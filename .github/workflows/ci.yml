@@ -55,13 +55,15 @@ jobs:
     timeout-minutes: 20
     env:
       REQUIRE_POSTGRES_INTEGRATION: "1"
+      # Job-local fake password for the disposable CI service; never a production secret.
+      SEVEN_LENS_CI_POSTGRES_PASSWORD: seven-lens-ci-disposable-only
     services:
       postgres:
         # Docker Official Image, reviewed tag 16.15-alpine (Alpine 3.24).
         image: postgres:16.15-alpine@sha256:ab5c955e9e57ae9879d4411ab49a912be9d162455676f7bf56e951b11ac73785
         env:
           POSTGRES_USER: seven_lens_ci
-          POSTGRES_PASSWORD: p1c3-disposable-only
+          POSTGRES_PASSWORD: ${{ env.SEVEN_LENS_CI_POSTGRES_PASSWORD }}
           POSTGRES_DB: seven_lens_p1
         ports:
           - 5432/tcp
@@ -110,7 +112,7 @@ jobs:
       - name: Run zero-skip PostgreSQL integration tests
         env:
           TEST_DATABASE_URL: >-
-            postgresql://seven_lens_ci:p1c3-disposable-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/seven_lens_p1
+            postgresql://seven_lens_ci:${{ env.SEVEN_LENS_CI_POSTGRES_PASSWORD }}@127.0.0.1:${{ job.services.postgres.ports[5432] }}/seven_lens_p1
         # The `live` marker requires real Alpaca Paper credentials from the
         # operator's Keychain and must never run on CI; it is exercised only
         # by the explicit P2-E read-only verification CLI.

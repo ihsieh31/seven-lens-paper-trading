@@ -8,9 +8,19 @@ import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
+from seven_lens.application.ports.content_store import (
+    ContentStoreError,
+    ContentStoreIntegrityError,
+    ContentStoreMissingError,
+)
 
-class ContentStoreError(RuntimeError):
-    """Fixed-message CAS failure; raw content is never echoed."""
+__all__ = [
+    "ContentStoreError",
+    "ContentStoreIntegrityError",
+    "ContentStoreMissingError",
+    "FileContentStore",
+    "StoredContent",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,14 +77,28 @@ class FileContentStore:
 
     def get(self, content_hash: str) -> bytes:
         target = self._target(content_hash)
-        if not target.is_file() or target.is_symlink():
-            raise ContentStoreError("content object is unavailable")
-        content = target.read_bytes()
+        if (
+            target.parent.is_symlink()
+            or target.parent.resolve(strict=False).parent != self._resolved_root
+        ):
+            raise ContentStoreIntegrityError("content object path is not confined")
+        if target.is_symlink():
+            raise ContentStoreIntegrityError("content object is a symlink")
+        if not target.exists():
+            raise ContentStoreMissingError("content object is missing")
+        if not target.is_file():
+            raise ContentStoreIntegrityError("content object is not a regular file")
+        try:
+            content = target.read_bytes()
+        except FileNotFoundError as error:
+            raise ContentStoreMissingError("content object is missing") from error
+        except OSError as error:
+            raise ContentStoreError("content object read failed") from error
         if (
             len(content) > self._maximum_bytes
             or hashlib.sha256(content).hexdigest() != content_hash
         ):
-            raise ContentStoreError("content object verification failed")
+            raise ContentStoreIntegrityError("content object verification failed")
         return content
 
     def verify(self, content_hash: str) -> bool:

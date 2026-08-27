@@ -27,7 +27,10 @@ _LIVE_ENV: Final = "SEVEN_LENS_P2E_LIVE"
 _LIVE_EXPECTED_ACCOUNT_ID_ENV: Final = "SEVEN_LENS_P2E_EXPECTED_ACCOUNT_ID"
 _LIVE_BASELINE_CASH_CENTS_ENV: Final = "SEVEN_LENS_P2E_BASELINE_CASH_CENTS"
 _LIVE_RUNTIME_ROLE: Final = "seven_lens_p2e_live"
-_LIVE_RUNTIME_PASSWORD: Final = "p2e-disposable-runtime-only"
+# Test-only password; callers may replace it with another disposable value.
+_LIVE_RUNTIME_PASSWORD: Final = (
+    os.environ.get("SEVEN_LENS_TEST_POSTGRES_PASSWORD") or "seven-lens-disposable-test-only"
+)
 
 
 def _require_live() -> None:

@@ -126,7 +126,15 @@ def derive_context_id(
     lineage_id = "" if superseded_proposal_id is None else str(superseded_proposal_id)
     if superseded_proposal_hash is not None:
         _hash(superseded_proposal_hash, "superseded_proposal_hash")
-    return _derive_run_id(_CONTEXT_DOMAIN, str(bundle_id), str(attempt), snapshot_hash, lineage_id)
+    lineage_hash = "" if superseded_proposal_hash is None else superseded_proposal_hash
+    return _derive_run_id(
+        _CONTEXT_DOMAIN,
+        str(bundle_id),
+        str(attempt),
+        snapshot_hash,
+        lineage_id,
+        lineage_hash,
+    )
 
 
 def derive_debate_id(context_id: RunId) -> RunId:

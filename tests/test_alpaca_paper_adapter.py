@@ -248,12 +248,39 @@ class TestSubmission:
         assert body["extended_hours"] is False
         assert body["limit_price"] == "100.00"
 
-    def test_buying_power_rejection_is_classified(self) -> None:
+    def test_message_only_rejection_does_not_infer_a_fine_grained_reason(self) -> None:
         transport = RecordingTransport(
             responder=lambda m, u: AlpacaResponse(400, {"message": "insufficient buying power"})
         )
         result = _adapter(transport).submit_order(_intent())
-        assert result == SubmitRejected(reason=RejectionReason.INSUFFICIENT_CASH)
+        assert result == SubmitRejected(reason=RejectionReason.ORDER_PARAMETERS_REJECTED)
+
+    def test_known_structured_error_code_uses_the_closed_mapping(self) -> None:
+        transport = RecordingTransport(
+            responder=lambda m, u: AlpacaResponse(
+                422,
+                {"code": 42210000, "message": "provider wording may change"},
+            )
+        )
+
+        result = _adapter(transport).submit_order(_intent())
+
+        assert result == SubmitRejected(reason=RejectionReason.ORDER_PARAMETERS_REJECTED)
+
+    @pytest.mark.parametrize(
+        "body",
+        (
+            {"code": 99999999, "message": "cash is unavailable"},
+            {"code": 99999999, "message": "symbol is not tradable"},
+            {"message": "symbol is not tradable"},
+        ),
+    )
+    def test_unknown_code_or_message_uses_generic_rejection(self, body: dict[str, object]) -> None:
+        transport = RecordingTransport(responder=lambda m, u: AlpacaResponse(422, body))
+
+        result = _adapter(transport).submit_order(_intent())
+
+        assert result == SubmitRejected(reason=RejectionReason.ORDER_PARAMETERS_REJECTED)
 
     def test_generic_parameter_rejection_is_classified(self) -> None:
         transport = RecordingTransport(

@@ -11,6 +11,7 @@ from seven_lens.memory.contracts import (
     FactKind,
     MemoryArtifact,
     MemoryEntry,
+    MemoryInvalidationReason,
     ObservationKind,
 )
 from seven_lens.memory.fact_closure import reject_instruction_like_text, validate_text_fact_closure
@@ -35,6 +36,32 @@ class ValidationResult:
     @property
     def valid(self) -> bool:
         return not self.issues and self.artifact.state is ArtifactState.VALIDATED
+
+    @property
+    def invalidation_reason_code(self) -> str:
+        """Return the closed DB reason code for an invalid deterministic result."""
+        if self.valid or self.artifact.state is not ArtifactState.INVALID or not self.issues:
+            raise ValueError("only an invalid result has an invalidation reason")
+        reasons = {_INVALIDATION_REASONS.get(issue.stage) for issue in self.issues}
+        if None in reasons:
+            raise ValueError("validation issue has no invalidation reason")
+        typed_reasons = {reason for reason in reasons if reason is not None}
+        if len(typed_reasons) != 1:
+            return MemoryInvalidationReason.INTEGRITY.value
+        return next(iter(typed_reasons)).value
+
+
+_INVALIDATION_REASONS: dict[str, MemoryInvalidationReason] = {
+    "schema_resource": MemoryInvalidationReason.SCHEMA,
+    "source_lineage": MemoryInvalidationReason.LINEAGE,
+    "correction_lineage": MemoryInvalidationReason.LINEAGE,
+    "point_in_time": MemoryInvalidationReason.FUTURE_LEAKAGE,
+    "prompt_injection": MemoryInvalidationReason.PROMPT_INJECTION,
+    "fact_token_closure": MemoryInvalidationReason.FACT_CLOSURE,
+    "evidence_closure": MemoryInvalidationReason.FACT_CLOSURE,
+    "deterministic_policy": MemoryInvalidationReason.BOUNDS,
+    "canonical_integrity": MemoryInvalidationReason.INTEGRITY,
+}
 
 
 def _entry_text(entry: MemoryEntry) -> str:

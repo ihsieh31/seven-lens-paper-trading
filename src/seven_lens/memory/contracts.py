@@ -52,6 +52,14 @@ class ObservationKind(StrEnum):
     CORRECTION = "CORRECTION"
 
 
+class CorrectionReason(StrEnum):
+    """Closed provenance reasons for a reflection correction link."""
+
+    SOURCE_CORRECTION = "SOURCE_CORRECTION"
+    FACTUAL_ERROR = "FACTUAL_ERROR"
+    LINEAGE_REPAIR = "LINEAGE_REPAIR"
+
+
 class MemoryCategory(StrEnum):
     RISK_REJECTION = "RISK_REJECTION"
     FORECAST_CALIBRATION = "FORECAST_CALIBRATION"
@@ -70,15 +78,38 @@ class ArtifactState(StrEnum):
     INVALID = "INVALID"
 
 
-def _exact_text(value: object, field: str, *, maximum: int = MAX_FIELD_BYTES) -> str:
-    text = validate_sanitized_text(value, field, maximum=maximum)
+class MemoryInvalidationReason(StrEnum):
+    """Closed reason codes for deterministic memory invalidation transitions."""
+
+    SCHEMA = "SCHEMA"
+    BOUNDS = "BOUNDS"
+    LINEAGE = "LINEAGE"
+    FUTURE_LEAKAGE = "FUTURE_LEAKAGE"
+    PROMPT_INJECTION = "PROMPT_INJECTION"
+    FACT_CLOSURE = "FACT_CLOSURE"
+    INTEGRITY = "INTEGRITY"
+
+
+def _exact_text(
+    value: object,
+    field: str,
+    *,
+    maximum: int = MAX_FIELD_BYTES,
+    allow_bare_host: bool = False,
+) -> str:
+    text = validate_sanitized_text(
+        value,
+        field,
+        maximum=maximum,
+        allow_bare_host=allow_bare_host,
+    )
     if "\n" in text or "\r" in text:
         raise ValueError(f"{field} must be single-line text")
     return text
 
 
 def _ref(value: object, field: str) -> str:
-    text = _exact_text(value, field, maximum=128)
+    text = _exact_text(value, field, maximum=128, allow_bare_host=True)
     if _REF.fullmatch(text) is None:
         raise ValueError(f"{field} must use canonical reference text")
     return text
@@ -91,7 +122,7 @@ def _hash(value: object, field: str) -> str:
 
 
 def _version(value: object, field: str) -> str:
-    text = _exact_text(value, field, maximum=64)
+    text = _exact_text(value, field, maximum=64, allow_bare_host=True)
     if _VERSION.fullmatch(text) is None:
         raise ValueError(f"{field} must use canonical version text")
     return text
@@ -288,6 +319,7 @@ class DailyReflectionRecord:
     data_version: str
     memory_version: str
     content_hash: str
+    correction_reason: CorrectionReason | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "record_id", _ref(self.record_id, "record_id"))
@@ -338,6 +370,11 @@ class DailyReflectionRecord:
             raise ValueError("correction record cannot supersede itself")
         if len({item.supersedes_record_id for item in corrections}) > 1:
             raise ValueError("one correction record must supersede one exact prior record")
+        if corrections:
+            if type(self.correction_reason) is not CorrectionReason:
+                raise ValueError("correction reason is required for correction records")
+        elif self.correction_reason is not None:
+            raise ValueError("correction reason is only valid for correction records")
         if any(source.prompt_injection_flags for source in typed_sources):
             raise ValueError("reflection source is prompt-injection flagged")
         # Import locally to avoid a module cycle: this contract is the fact-closure module's

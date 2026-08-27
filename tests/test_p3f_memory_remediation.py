@@ -332,6 +332,7 @@ class _FakePostgresMemoryRepository:
         self.events: list[str] = []
         self.current: MemoryArtifact | None = None
         self.fail_audit = False
+        self.invalidated: list[str] = []
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -356,6 +357,12 @@ class _FakePostgresMemoryRepository:
     def mark_validated(self, result: ValidationResult, report_hash: str, version: str) -> None:
         assert result.valid and len(report_hash) == 64 and version == "p3f.validator.1"
         self.events.append("validate")
+
+    def mark_invalid(self, result: ValidationResult) -> bool:
+        assert not result.valid
+        self.events.append("invalidate")
+        self.invalidated.append(result.invalidation_reason_code)
+        return True
 
     def database_now(self) -> UtcTimestamp:
         return ts(4)

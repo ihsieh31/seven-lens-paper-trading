@@ -1,6 +1,6 @@
 # 開發路線圖與驗收標準
 
-最後更新：2026-08-24。時程是專注開發估算，不是日曆承諾；任何phase只有在獨立證據滿足後才
+最後更新：2026-08-27。時程是專注開發估算，不是日曆承諾；任何phase只有在獨立證據滿足後才
 能Closed。完整目前狀態見`PROJECT_HANDOFF.md`與`PROGRESS.md`。
 
 ## 狀態總覽
@@ -10,7 +10,7 @@
 | P0 | Closed | — |
 | P1 | Closed | — |
 | P2 | Closed | 真實submit仍需P7 |
-| P3 | Closed | A～F子閘全部驗收後於2026-08-26合併關門；發布`b59e466`→`d51e9a9`→`660e062`，CI `32962320231`／`32963312426` 兩required jobs成功 |
+| P3 | Closed | A～F子閘及cleanup Batch A～G 已於2026-08-27完成獨立驗收；P3-4／P3-28 deferred、P3-21 false positive |
 | P4～P8 | Not started | 依序通過前一Gate |
 
 ## P0 — 規格與治理（Closed）
@@ -52,6 +52,11 @@ P2 Closed只代表程式安全基線；真實submit、WebSocket transport與oper
 `d51e9a9`（CI tmpfs 512m→1g）→ `660e062`（治理同步）；exact-SHA run `32962320231`／`32963312426`
 兩 required jobs 成功。
 
+2026-08-27 P1–P3 full remediation independent acceptance：`verify_p1.sh` 為
+`1386 passed, 245 deselected`；targeted P1–P3 為 `857 passed`；real PostgreSQL 16 為
+`243 passed, 2 deselected, 0 skipped`。新增 runtime authority 修復經獨立 probe 驗證：direct
+`control_state` UPDATE 拒絕（`42501`），未達 FULL+CLEAN 的 direct resume 拒絕（`55000`）。
+
 完成條件「完整 graph 只產生可追溯 proposal，任何自由文字 fallback、缺來源、snapshot 缺漏或
 provider 不明都無法進 P4」已滿足。子閘 prompt 與 requirement map 歸檔於 `docs/archive/`；
 Transport rolling canary 義務見 OPEN-027。
@@ -59,6 +64,8 @@ Transport rolling canary 義務見 OPEN-027。
 ## P4 — 候選與deterministic Risk（Not started）
 
 - point-in-time production universe與quant funnel。
+- `market_data/events.py` 的 fail-closed event verifier 目前只有已實作契約；production composition
+  明確由本 Gate 擁有，P4 前不得提前接入 P2 execution path。
 - hard limits、source/model overlap haircut、target-to-quantity translation。
 - 第一次拒絕只允許一次Portfolio Manager重申；第二次固定`NO_TRADE`。
 - 只有P4可產生核准targets並進既有P2 `OrderIntent` boundary。

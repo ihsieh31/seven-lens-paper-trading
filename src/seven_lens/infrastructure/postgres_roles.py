@@ -15,7 +15,7 @@ _AUTHORITATIVE_VIEW_NAMES: Final[frozenset[str]] = frozenset(
 )
 
 # The exact table inventory of the authoritative public schema after migrations
-# 0001-0013.  Any extra or missing table is privilege-surface drift.
+# 0001-0019.  Any extra or missing table is privilege-surface drift.
 _AUTHORITATIVE_TABLE_NAMES: Final[frozenset[str]] = frozenset(
     {
         "account_baseline_revisions",
@@ -60,7 +60,58 @@ _AUTHORITATIVE_TABLE_NAMES: Final[frozenset[str]] = frozenset(
     }
 )
 
-# The exact function inventory of the public schema after migrations 0001-0013,
+# The exact non-internal trigger inventory after migrations 0001-0019.  Trigger
+# names and their target tables are safety authority, not incidental metadata.
+_AUTHORITATIVE_TRIGGER_TABLES: Final[frozenset[tuple[str, str]]] = frozenset(
+    {
+        ("domain_events_enforce_sequence", "domain_events"),
+        ("audit_events_validate_and_stamp", "audit_events"),
+        ("audit_events_append_only", "audit_events"),
+        ("domain_events_append_only", "domain_events"),
+        ("job_instances_guard_status_write", "job_instances"),
+        ("order_intents_guard_write", "order_intents"),
+        ("broker_orders_guard_write", "broker_orders"),
+        ("fills_append_only", "fills"),
+        ("reconciliation_runs_append_only", "reconciliation_runs"),
+        ("control_commands_append_only", "control_commands"),
+        ("control_state_guard_write", "control_state"),
+        ("broker_orders_guard_broker_updated_at", "broker_orders"),
+        ("broker_orders_guard_insert", "broker_orders"),
+        ("reconciliation_mismatches_append_only", "reconciliation_mismatches"),
+        ("account_baselines_guard_write", "account_baselines"),
+        ("account_baseline_revisions_guard_write", "account_baseline_revisions"),
+        ("research_bundles_guard_write", "research_bundles"),
+        ("research_bundle_items_guard_write", "research_bundle_items"),
+        ("risk_rejection_feedback_guard_write", "risk_rejection_feedback"),
+        ("proposal_contexts_guard_write", "proposal_contexts"),
+        ("proposal_runs_guard_write", "proposal_runs"),
+        ("risk_debates_guard_write", "risk_debates"),
+        ("portfolio_proposals_guard_write", "portfolio_proposals"),
+        ("proposal_stage_results_guard_write", "proposal_stage_results"),
+        ("model_call_claims_guard_write", "model_call_claims"),
+        ("model_call_claims_guard_truncate", "model_call_claims"),
+        ("model_call_audits_guard_write", "model_call_audits"),
+        ("model_call_audits_guard_truncate", "model_call_audits"),
+        ("reflection_records_guard_write", "reflection_records"),
+        ("reflection_records_guard_truncate", "reflection_records"),
+        ("reflection_sources_guard_write", "reflection_sources"),
+        ("reflection_sources_guard_truncate", "reflection_sources"),
+        ("reflection_corrections_guard_write", "reflection_corrections"),
+        ("reflection_corrections_guard_truncate", "reflection_corrections"),
+        ("memory_artifacts_guard_write", "memory_artifacts"),
+        ("memory_artifacts_guard_truncate", "memory_artifacts"),
+        ("memory_artifact_sources_guard_write", "memory_artifact_sources"),
+        ("memory_artifact_sources_guard_truncate", "memory_artifact_sources"),
+        ("memory_artifact_state_events_guard_write", "memory_artifact_state_events"),
+        ("memory_artifact_state_events_guard_truncate", "memory_artifact_state_events"),
+        ("memory_promotion_history_guard_write", "memory_promotion_history"),
+        ("memory_promotion_history_guard_truncate", "memory_promotion_history"),
+        ("memory_curation_audits_guard_write", "memory_curation_audits"),
+        ("memory_curation_audits_guard_truncate", "memory_curation_audits"),
+    }
+)
+
+# The exact function inventory of the public schema after migrations 0001-0019,
 # each entry being the function name plus its identity argument types rendered by
 # array_to_string(proargtypes::regtype[], ',').  This includes the 36 pgcrypto
 # extension functions installed by migration 0009.  Any extra function, overload
@@ -97,6 +148,10 @@ _AUTHORITATIVE_FUNCTIONS: Final[frozenset[tuple[str, str]]] = frozenset(
         ("guard_broker_order_write", ""),
         ("guard_broker_updated_at", ""),
         ("guard_control_state_write", ""),
+        ("lock_control_state_for_submission", ""),
+        ("pause_entries", "text"),
+        ("resume_entries", ""),
+        ("bump_flatten_generation", ""),
         ("guard_job_instance_status_write", ""),
         ("guard_order_intent_write", ""),
         ("guard_proposal_run_write", ""),
@@ -135,6 +190,7 @@ _AUTHORITATIVE_FUNCTIONS: Final[frozenset[tuple[str, str]]] = frozenset(
             "integer,integer,integer,text",
         ),
         ("validate_memory_artifact", "text,text,text,text"),
+        ("invalidate_memory_artifact", "text,text,text"),
         ("promote_memory_artifact", "text,text,timestamp with time zone"),
         ("current_memory_artifact", "timestamp with time zone"),
         ("current_memory_pointer_artifact", ""),
@@ -259,6 +315,7 @@ _P3_FUNCTION_SIGNATURES: Final = (
         False,
     ),
     ("public.validate_memory_artifact(text,text,text,text)", False),
+    ("public.invalidate_memory_artifact(text,text,text)", False),
     ("public.promote_memory_artifact(text,text,timestamp with time zone)", False),
     ("public.current_memory_artifact(timestamp with time zone)", True),
     ("public.current_memory_pointer_artifact()", False),
@@ -274,12 +331,22 @@ _MEMORY_FUNCTION_SIGNATURES: Final[frozenset[str]] = frozenset(
     or signature.startswith("public.register_memory_candidate(")
     or signature.startswith("public.register_memory_curation_audit(")
     or signature.startswith("public.validate_memory_artifact(")
+    or signature.startswith("public.invalidate_memory_artifact(")
     or signature.startswith("public.promote_memory_artifact(")
     or signature.startswith("public.current_memory_artifact(")
     or signature.startswith("public.current_memory_pointer_artifact(")
     or signature.startswith("public.p3f_text_is_safe(")
     or signature.startswith("public.p3f_instruction_text_is_safe(")
     or signature.startswith("public.p3f_fact_text_is_closed(")
+)
+
+_CONTROL_FUNCTION_SIGNATURES: Final[frozenset[str]] = frozenset(
+    {
+        "public.lock_control_state_for_submission()",
+        "public.pause_entries(text)",
+        "public.resume_entries()",
+        "public.bump_flatten_generation()",
+    }
 )
 
 _CURATOR_EXECUTE_SIGNATURES: Final[frozenset[str]] = frozenset(
@@ -290,6 +357,7 @@ _CURATOR_EXECUTE_SIGNATURES: Final[frozenset[str]] = frozenset(
         "public.register_memory_curation_audit(uuid,text,text,text,text,text,text,text,text,"
         "text,integer,integer,text,text,text,integer,integer,integer,text)",
         "public.validate_memory_artifact(text,text,text,text)",
+        "public.invalidate_memory_artifact(text,text,text)",
         "public.promote_memory_artifact(text,text,timestamp with time zone)",
         "public.current_memory_artifact(timestamp with time zone)",
         "public.current_memory_pointer_artifact()",
@@ -304,6 +372,10 @@ _RUNTIME_EXECUTE_SIGNATURES: Final[frozenset[str]] = frozenset(
         "public.transition_job_status(text,text,bigint,text)",
         "public.domain_event_payload_is_valid(text,jsonb)",
         "public.audit_event_payload_is_valid(text,jsonb)",
+        "public.lock_control_state_for_submission()",
+        "public.pause_entries(text)",
+        "public.resume_entries()",
+        "public.bump_flatten_generation()",
         *(signature for signature, expected in _P3_FUNCTION_SIGNATURES if expected),
     }
 )
@@ -345,6 +417,7 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
         _assert_not_owner_member(cursor, runtime_role, owner_role)
         _assert_authoritative_object_owner(cursor, owner_role)
         _assert_p3_function_security(cursor)
+        _assert_control_function_security(cursor)
 
         role = sql.Identifier(runtime_role)
         database = sql.Identifier(database_name)
@@ -355,6 +428,12 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
         cursor.execute(sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {}").format(role))
         cursor.execute(sql.SQL("REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {}").format(role))
         cursor.execute(sql.SQL("REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM {}").format(role))
+        cursor.execute(
+            sql.SQL(
+                "REVOKE UPDATE (singleton, entries_paused, paused_reason, updated_at, "
+                "flatten_generation) ON TABLE public.control_state FROM {}"
+            ).format(role)
+        )
         cursor.execute(
             sql.SQL(
                 "GRANT SELECT ON TABLE public.schema_metadata, public.schema_migrations, "
@@ -389,8 +468,7 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
         )
         cursor.execute(
             sql.SQL(
-                "GRANT UPDATE ON TABLE public.order_intents, public.broker_orders, "
-                "public.control_state TO {}"
+                "GRANT UPDATE ON TABLE public.order_intents, public.broker_orders TO {}"
             ).format(role)
         )
         for signature in (
@@ -422,6 +500,10 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
             "TIMESTAMPTZ, TIMESTAMPTZ, TEXT, TEXT, TEXT, TEXT, TEXT, BYTEA, TEXT, TEXT, "
             "TEXT, TEXT, TEXT, TEXT[], TEXT[], TEXT[], TIMESTAMPTZ[], TEXT, TEXT)",
             "public.current_memory_artifact(TIMESTAMPTZ)",
+            "public.lock_control_state_for_submission()",
+            "public.pause_entries(TEXT)",
+            "public.resume_entries()",
+            "public.bump_flatten_generation()",
         ):
             cursor.execute(
                 sql.SQL("GRANT EXECUTE ON FUNCTION {} TO {}").format(
@@ -455,6 +537,7 @@ def verify_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvidenc
         _assert_p3_runtime_privileges(cursor, runtime_role)
         _assert_runtime_function_privileges(cursor, runtime_role)
         _assert_p3_function_security(cursor)
+        _assert_control_function_security(cursor)
         _assert_no_public_privileges(cursor)
         _assert_public_schema_inventory(cursor)
     return RuntimeRoleEvidence(owner_role, runtime_role, database_name)
@@ -474,6 +557,7 @@ def provision_memory_curator_role(owner_dsn: str, curator_role: str) -> MemoryCu
         _assert_no_role_memberships(cursor, curator_role)
         _assert_authoritative_object_owner(cursor, owner_role)
         _assert_p3_function_security(cursor)
+        _assert_control_function_security(cursor)
 
         role = sql.Identifier(curator_role)
         database = sql.Identifier(database_name)
@@ -517,6 +601,7 @@ def verify_memory_curator_role(owner_dsn: str, curator_role: str) -> MemoryCurat
         _assert_runtime_is_not_object_owner(cursor, curator_role)
         _assert_curator_privileges(cursor, curator_role, database_name)
         _assert_p3_function_security(cursor)
+        _assert_control_function_security(cursor)
         _assert_no_public_privileges(cursor)
         _assert_public_schema_inventory(cursor)
     return MemoryCuratorRoleEvidence(owner_role, curator_role, database_name)
@@ -634,6 +719,8 @@ def _assert_authoritative_object_owner(cursor: psycopg.Cursor[object], owner_rol
                   'guard_order_intent_write', 'guard_broker_order_write',
                   'guard_control_state_write', 'guard_account_baseline_write',
                   'guard_account_baseline_revision_write',
+                  'lock_control_state_for_submission',
+                  'pause_entries', 'resume_entries', 'bump_flatten_generation',
                   'register_source_object', 'publish_source_object',
                   'register_source_record', 'register_evidence_packet',
                   'create_analysis_run', 'advance_analysis_stage',
@@ -742,7 +829,7 @@ def _assert_runtime_privileges(
         False,
         True,
         False,
-        True,
+        False,
         False,
         False,
         False,
@@ -751,6 +838,28 @@ def _assert_runtime_privileges(
         False,
         True,
     ):
+        raise PostgresRoleError(
+            "runtime role privileges do not match the approved least-privilege set"
+        )
+
+    cursor.execute(
+        """
+        SELECT pg_catalog.bool_or(
+                   pg_catalog.has_column_privilege(
+                       %s, 'public.control_state', column_name, 'UPDATE'
+                   )
+               )
+        FROM (VALUES
+            ('singleton'),
+            ('entries_paused'),
+            ('paused_reason'),
+            ('updated_at'),
+            ('flatten_generation')
+        ) AS control_columns(column_name)
+        """,
+        (runtime_role,),
+    )
+    if cursor.fetchone() != (False,):
         raise PostgresRoleError(
             "runtime role privileges do not match the approved least-privilege set"
         )
@@ -861,6 +970,25 @@ def _assert_p3_function_security(cursor: psycopg.Cursor[object]) -> None:
         if row != (True, expected_path):
             raise PostgresRoleError(
                 "P3 function security configuration does not match the approved set"
+            )
+
+
+def _assert_control_function_security(cursor: psycopg.Cursor[object]) -> None:
+    """Protected control-state authorities must be fixed-path SECURITY DEFINER functions."""
+
+    for signature in _CONTROL_FUNCTION_SIGNATURES:
+        cursor.execute(
+            """
+            SELECT p.prosecdef, p.proconfig
+            FROM pg_catalog.pg_proc AS p
+            WHERE p.oid = pg_catalog.to_regprocedure(%s)
+            """,
+            (signature,),
+        )
+        if cursor.fetchone() != (True, ["search_path=pg_catalog, public, pg_temp"]):
+            raise PostgresRoleError(
+                "control-state authority function security configuration does not match "
+                "the approved set"
             )
 
 
@@ -983,7 +1111,7 @@ def _assert_no_public_privileges(cursor: psycopg.Cursor[object]) -> None:
 
 
 def _assert_public_schema_inventory(cursor: psycopg.Cursor[object]) -> None:
-    """The public schema must contain exactly the authoritative tables and functions."""
+    """The public schema must contain the exact authoritative object inventory."""
 
     cursor.execute(
         """
@@ -1020,3 +1148,29 @@ def _assert_public_schema_inventory(cursor: psycopg.Cursor[object]) -> None:
     }
     if functions != _AUTHORITATIVE_FUNCTIONS:
         raise PostgresRoleError("public schema functions do not match the authoritative inventory")
+    _assert_guard_trigger_inventory(cursor)
+
+
+def _assert_guard_trigger_inventory(cursor: psycopg.Cursor[object]) -> None:
+    """Require every migration-defined safety trigger to remain origin-enabled."""
+
+    cursor.execute(
+        """
+        SELECT t.tgname, c.relname, t.tgenabled
+        FROM pg_catalog.pg_trigger AS t
+        JOIN pg_catalog.pg_class AS c ON c.oid = t.tgrelid
+        JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND NOT t.tgisinternal
+        ORDER BY t.tgname
+        """
+    )
+    observed = {
+        (str(row[0]), str(row[1])): str(row[2])
+        for row in cast("list[tuple[object, ...]]", cursor.fetchall())
+    }
+    if set(observed) != _AUTHORITATIVE_TRIGGER_TABLES or any(
+        state != "O" for state in observed.values()
+    ):
+        raise PostgresRoleError(
+            "public guard trigger inventory is missing, misplaced, disabled, or unexpected"
+        )

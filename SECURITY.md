@@ -56,7 +56,11 @@ The application runtime uses a distinct externally created login role. Before us
 `provision_runtime_role()` grants the bounded repository/function capabilities and
 `verify_runtime_role()` proves that the role is non-owner, has no elevated role flags or owner
 membership, cannot create schema/temp objects, cannot directly mutate protected state, and can
-execute only the approved functions. A failed proof stops startup or deployment.
+execute only the approved functions. `public.control_state` is SELECT-only for the runtime role;
+pause, resume, and flatten-generation changes cross explicit fixed-schema SECURITY DEFINER
+functions. The resume authority rechecks the latest FULL+CLEAN reconciliation and unresolved
+`UNKNOWN`/`REVIEW_REQUIRED` intents in the same database transaction. A failed proof stops startup
+or deployment.
 
 The P2 composition root (`application/composition.py`) defines this contract: configuration is
 parsed once at the exact-schema edge into typed frozen values (no generic mapping bag), the
@@ -90,8 +94,10 @@ run; see ADR-021 and `tests/test_execution_pause_remediation.py`.
 Privileged functions use a fixed `search_path` with `pg_catalog` first, trusted `public` next,
 and `pg_temp` last; authoritative relations and row types are schema-qualified. `PUBLIC` has no
 `CREATE` on the authoritative schema, no database `TEMPORARY`, and no execute right on protected
-functions. Runtime callers cannot replace functions, alter guard triggers, directly mutate lease
-or job state, or create temporary shadow relations.
+functions. Runtime callers cannot replace functions, alter guard triggers, directly mutate lease,
+job, or protected control state, or create temporary shadow relations. The runtime role may use
+only the explicit pause/resume/flatten-generation authorities; it has no table-wide
+`UPDATE` privilege on `control_state`.
 
 ### Persisted JSON and event payloads
 

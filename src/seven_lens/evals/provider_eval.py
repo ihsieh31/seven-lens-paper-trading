@@ -701,12 +701,10 @@ def execute_authorized_live_eval(
                 ):
                     raise ValueError("provider request hash diverged from approved live plan")
                 latency_ms = max(0, (monotonic_ns() - started) // 1_000_000)
-                if (
-                    type(response) is not bytes
-                    or len(response) > authorization.response_byte_cap
-                    or latency_ms > deadline_ms
-                ):
-                    raise ValueError("provider response violates byte or deadline contract")
+                if latency_ms > deadline_ms:
+                    raise ModelTransportError(ModelTransportErrorCode.TIMEOUT)
+                if type(response) is not bytes or len(response) > authorization.response_byte_cap:
+                    raise ValueError("provider response violates byte contract")
                 parsed = parser.parse(contract, response)
             except Exception as error:
                 latency_ms = max(0, (monotonic_ns() - started) // 1_000_000)
