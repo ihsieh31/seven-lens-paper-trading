@@ -159,6 +159,12 @@ class PostgresUnitOfWork:
         _set_local_utc_timezone(connection)
         self._has_uncommitted_work = False
 
+    def persist_safety_pause(self, reason: str) -> None:
+        """Persist only the shared pause through one fresh independent connection."""
+        with PostgresUnitOfWork(self._dsn) as safety_unit_of_work:
+            safety_unit_of_work.control.set_entries_paused(True, reason)
+            safety_unit_of_work.commit()
+
     def _require_connection(self) -> psycopg.Connection[tuple[object, ...]]:
         if self._connection is None:
             raise UnitOfWorkStateError("repository access requires an active unit of work")

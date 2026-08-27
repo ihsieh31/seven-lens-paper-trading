@@ -9,7 +9,7 @@ import pytest
 
 from fakes.control import FakeControlRepository
 from fakes.orders import FakeOrderRepository
-from seven_lens.application.execution_service import ExecutionEngine
+from seven_lens.application.execution_service import ExecutionEngine, ExecutionPausedError
 from seven_lens.domain.value_objects import RunId, TradingDate, UtcTimestamp
 from seven_lens.execution.control import ControlCommand
 from seven_lens.execution.fake_broker import FakePaperBroker
@@ -48,6 +48,7 @@ class _UnitOfWork:
         self.control = FakeControlRepository(_T0)
         self.commit_count = 0
         self.rollback_count = 0
+        self.safety_pause_count = 0
 
     def rollback(self) -> None:
         self.rollback_count += 1
@@ -56,12 +57,31 @@ class _UnitOfWork:
     def commit(self) -> None:
         self.commit_count += 1
 
+    def persist_safety_pause(self, reason: str) -> None:
+        self.safety_pause_count += 1
+        self.control.set_entries_paused(True, reason)
+
 
 class _PauseCommitFailureUnitOfWork(_UnitOfWork):
     def commit(self) -> None:
         self.commit_count += 1
         if self.control.state().entries_paused:
             raise RuntimeError("injected pause commit failure")
+
+
+class _MarkerCommitFailureUnitOfWork(_UnitOfWork):
+    def commit(self) -> None:
+        self.commit_count += 1
+        if self.orders.list_by_status(OrderStatus.REVIEW_REQUIRED):
+            raise RuntimeError("injected unresolved-marker commit failure")
+        self.orders.commit()
+
+
+class _DoubleSafetyFailureUnitOfWork(_MarkerCommitFailureUnitOfWork):
+    def persist_safety_pause(self, reason: str) -> None:
+        del reason
+        self.safety_pause_count += 1
+        raise RuntimeError("injected independent safety pause failure")
 
 
 def _setup() -> tuple[_UnitOfWork, OrderIntent, BrokerOrder]:
@@ -483,6 +503,58 @@ class TestStatusConflictConvergence:
 
         assert result.status is OrderStatus.UNKNOWN
         assert broker.get_order(second_intent.client_order_id) is None
+
+    @pytest.mark.parametrize("update_kind", ["status", "fill"])
+    def test_marker_commit_failure_uses_bounded_safety_pause_fallback(
+        self, update_kind: str
+    ) -> None:
+        base_uow, intent, _mirror = _setup()
+        # Establish the durable pre-update snapshot used by this fake UoW.
+        base_uow.orders.commit()
+        failing_uow = _MarkerCommitFailureUnitOfWork(base_uow.orders)
+        failing_uow.control = base_uow.control
+        if update_kind == "status":
+            update = _status_update(intent, BrokerOrderStatus.PARTIALLY_FILLED, 4, _T1)
+        else:
+            update = _fill_update("e-marker-failure", 11, _T1)
+
+        with pytest.raises(TradeUpdateError, match="bounded safety pause fallback"):
+            TradeUpdateConsumer().apply(failing_uow, update)
+
+        assert failing_uow.safety_pause_count == 1
+        state = failing_uow.control.state()
+        assert state.entries_paused is True
+        assert state.paused_reason == f"reconciliation required; conflicting {update_kind}"
+        unresolved = failing_uow.orders.get(intent.client_order_id)
+        assert unresolved is not None and unresolved.status is OrderStatus.ACKNOWLEDGED
+        assert failing_uow.orders.fill_count == (1 if update_kind == "fill" else 0)
+
+        second_intent = _new_outbox_intent(failing_uow.orders)
+        second_uow = _UnitOfWork(failing_uow.orders)
+        second_uow.control = failing_uow.control
+        broker = FakePaperBroker(clock=lambda: _T0)
+        engine = ExecutionEngine(broker=broker, clock=lambda: _T0, control=second_uow.control)
+
+        with pytest.raises(ExecutionPausedError):
+            engine.submit_from_outbox(second_uow, second_intent.client_order_id)
+        assert broker.get_order(second_intent.client_order_id) is None
+
+    def test_marker_and_safety_pause_failures_do_not_claim_a_durable_gate(self) -> None:
+        base_uow, intent, _mirror = _setup()
+        base_uow.orders.commit()
+        failing_uow = _DoubleSafetyFailureUnitOfWork(base_uow.orders)
+        failing_uow.control = base_uow.control
+
+        with pytest.raises(TradeUpdateError, match="safety persistence"):
+            TradeUpdateConsumer().apply(
+                failing_uow,
+                _status_update(intent, BrokerOrderStatus.PARTIALLY_FILLED, 4, _T1),
+            )
+
+        assert failing_uow.safety_pause_count == 1
+        assert failing_uow.control.state().entries_paused is False
+        unresolved = failing_uow.orders.get(intent.client_order_id)
+        assert unresolved is not None and unresolved.status is OrderStatus.ACKNOWLEDGED
 
     def test_audit_failure_leaves_conflict_pause_durable_and_observable(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture

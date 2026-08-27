@@ -131,6 +131,8 @@ class _ConsumerUnitOfWork(Protocol):
 
     def rollback(self) -> None: ...
 
+    def persist_safety_pause(self, reason: str) -> None: ...
+
 
 class _ConsumerControl(Protocol):
     def set_entries_paused(self, paused: bool, reason: str | None) -> object: ...
@@ -181,7 +183,24 @@ class TradeUpdateConsumer:
         conflict: str,
     ) -> None:
         """Persist an unresolved marker, then entries_paused and an audit command."""
-        self._persist_conflict_marker(unit_of_work, client_order_id, conflict)
+        try:
+            self._persist_conflict_marker(unit_of_work, client_order_id, conflict)
+        except TradeUpdateError as marker_error:
+            # A marker commit can fail independently of the original update.
+            # The only bounded fallback is a fresh connection that writes the
+            # shared safety blocker; it never retries the trade update or audit.
+            try:
+                unit_of_work.persist_safety_pause(f"reconciliation required; {conflict}")
+            except Exception as fallback_error:
+                _LOGGER.critical("trade_update_safety_persistence_failed")
+                raise TradeUpdateError(
+                    f"failed to persist unresolved intent and entries_paused after {conflict}; "
+                    "safety persistence failed"
+                ) from fallback_error
+            raise TradeUpdateError(
+                f"failed to persist unresolved intent after {conflict}; "
+                "bounded safety pause fallback persisted entries_paused"
+            ) from marker_error
         # Use the same connection as the accepted fact when possible; rollback
         # has already cleared derived state, so this is a fresh transaction.
         try:

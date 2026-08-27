@@ -921,6 +921,112 @@ def test_pg_pause_commit_failure_leaves_review_gate_for_second_actor(
         assert broker.calls == []
 
 
+@pytest.mark.parametrize("update_kind", ["status", "fill"])
+def test_pg_marker_commit_failure_uses_independent_pause_fallback(
+    migrated_postgres: str,
+    update_kind: str,
+) -> None:
+    from seven_lens.execution.trade_updates import (
+        OrderStatusUpdate,
+        TradeUpdateConsumer,
+        TradeUpdateError,
+        fill_update,
+    )
+
+    intent = _intent(705 if update_kind == "status" else 706)
+    broker_order_id = f"b-marker-commit-failure-{update_kind}"
+    with PostgresUnitOfWork(migrated_postgres) as uow:
+        uow.orders.add(intent)
+        for status in (
+            OrderStatus.RISK_APPROVED,
+            OrderStatus.OUTBOX_PENDING,
+            OrderStatus.SUBMITTING,
+            OrderStatus.ACKNOWLEDGED,
+        ):
+            uow.orders.transition_status(intent.client_order_id, status)
+        stored_mirror = uow.orders.record_broker_order(
+            BrokerOrder(
+                broker_order_id=broker_order_id,
+                client_order_id=intent.client_order_id,
+                symbol=intent.symbol,
+                side=intent.side,
+                quantity=intent.quantity,
+                filled_quantity=0,
+                limit_price=intent.limit_price,
+                status=BrokerOrderStatus.ACCEPTED,
+                submitted_at=_BASE,
+                updated_at=_BASE,
+            )
+        )
+        uow.commit()
+
+    with PostgresUnitOfWork(migrated_postgres) as uow:
+        real_commit = uow.commit
+
+        def fail_marker_commit() -> None:
+            current = uow.orders.get(intent.client_order_id)
+            if current is not None and current.status is OrderStatus.REVIEW_REQUIRED:
+                raise RuntimeError("injected unresolved-marker commit failure")
+            real_commit()
+
+        uow.commit = fail_marker_commit
+        if update_kind == "status":
+            update = OrderStatusUpdate(
+                client_order_id=intent.client_order_id,
+                broker_order_id=stored_mirror.broker_order_id,
+                status=BrokerOrderStatus.PARTIALLY_FILLED,
+                filled_quantity=4,
+                observed_at=stored_mirror.updated_at,
+            )
+        else:
+            update = fill_update(
+                execution_id="e-marker-commit-failure",
+                broker_order_id=stored_mirror.broker_order_id,
+                quantity=11,
+                price_cents=9_998,
+                occurred_at=stored_mirror.updated_at,
+            )
+        with pytest.raises(TradeUpdateError, match="bounded safety pause fallback"):
+            TradeUpdateConsumer().apply(uow, update)
+
+    with psycopg.connect(migrated_postgres) as conn:
+        intent_row = conn.execute(
+            "SELECT status FROM order_intents WHERE client_order_id=%s",
+            (intent.client_order_id.value,),
+        ).fetchone()
+        assert intent_row == ("ACKNOWLEDGED",)
+        control_row = conn.execute(
+            "SELECT entries_paused, paused_reason FROM control_state WHERE singleton"
+        ).fetchone()
+        assert control_row == (True, f"reconciliation required; conflicting {update_kind}")
+        command_row = conn.execute(
+            "SELECT command_id FROM control_commands WHERE reason=%s",
+            (f"automatic pause on conflicting {update_kind}",),
+        ).fetchone()
+        assert command_row is None
+        if update_kind == "fill":
+            fill_row = conn.execute(
+                "SELECT execution_id FROM fills WHERE execution_id=%s",
+                ("e-marker-commit-failure",),
+            ).fetchone()
+            assert fill_row is not None
+        mirror_row = conn.execute(
+            "SELECT filled_quantity, status FROM broker_orders WHERE broker_order_id=%s",
+            (broker_order_id,),
+        ).fetchone()
+        assert mirror_row == (0, "ACCEPTED")
+
+    second = _intent(707 if update_kind == "status" else 708)
+    with PostgresUnitOfWork(migrated_postgres) as uow:
+        _seed_outbox(uow, second)
+        broker = _CountingBroker()
+        with pytest.raises(ExecutionPausedError):
+            ExecutionEngine(
+                broker=broker, clock=lambda: _BASE, control=uow.control
+            ).submit_from_outbox(uow, second.client_order_id)
+        assert broker.calls == []
+
+
 # ---------------------------------------------------------------------------
 # Status-update conflicts converge on the real PostgreSQL guards
 # ---------------------------------------------------------------------------
