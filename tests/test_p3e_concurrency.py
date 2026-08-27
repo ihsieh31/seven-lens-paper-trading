@@ -118,6 +118,7 @@ def test_bounded_group_cancels_pending_work_and_ignores_cancelled_future() -> No
 def test_bounded_group_selects_simultaneous_failure_in_submission_order() -> None:
     def run_once(submitted_labels: tuple[str, str]) -> str:
         started = threading.Barrier(3)
+        pending_started = threading.Event()
 
         def failing(label: str) -> Callable[[], str]:
             def execute() -> str:
@@ -126,12 +127,16 @@ def test_bounded_group_selects_simultaneous_failure_in_submission_order() -> Non
 
             return execute
 
+        def pending() -> str:
+            pending_started.set()
+            return "cancelled"
+
         failures: list[BaseException] = []
 
         def invoke() -> None:
             try:
                 run_bounded_group(
-                    tuple(failing(label) for label in submitted_labels),
+                    (*tuple(failing(label) for label in submitted_labels), pending),
                     max_workers=2,
                 )
             except BaseException as error:
@@ -144,6 +149,7 @@ def test_bounded_group_selects_simultaneous_failure_in_submission_order() -> Non
         assert not runner.is_alive()
         assert len(failures) == 1
         assert type(failures[0]) is RuntimeError
+        assert not pending_started.is_set()
         return str(failures[0])
 
     for submitted_labels in (("A", "B"), ("B", "A")):
