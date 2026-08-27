@@ -6,7 +6,6 @@ from collections.abc import Callable
 
 import pytest
 
-import seven_lens.analysis.concurrency as concurrency_module
 from seven_lens.analysis.concurrency import run_bounded_group
 from seven_lens.analysis.pipeline import AnalysisPipeline, AnalysisPipelineError
 from seven_lens.analysis.ports import ProviderOutput, ProviderRequest, ScriptedAnalysisProvider
@@ -51,64 +50,105 @@ def test_bounded_group_is_parallel_bounded_and_joins_in_canonical_order() -> Non
     assert maximum == 3
 
 
-def test_bounded_group_selects_a_later_failure_after_a_fast_success() -> None:
+def test_bounded_group_drains_running_work_after_failure() -> None:
     def fast_success() -> str:
         time.sleep(0.01)
         return "success"
 
+    failure_ready = threading.Event()
+
     def delayed_failure() -> str:
         time.sleep(0.05)
+        failure_ready.set()
         raise RuntimeError("delayed group failure")
 
+    slow_started = threading.Event()
+    release_slow = threading.Event()
+
     def slow_success() -> str:
-        time.sleep(0.6)
+        slow_started.set()
+        assert release_slow.wait(timeout=2)
         return "slow"
 
-    started = time.monotonic()
-    with pytest.raises(RuntimeError, match="delayed group failure"):
-        run_bounded_group(
-            (fast_success, delayed_failure, slow_success),
-            max_workers=3,
-        )
-    elapsed = time.monotonic() - started
+    failures: list[BaseException] = []
+    returned = threading.Event()
 
-    assert elapsed < 0.35
+    def invoke() -> None:
+        try:
+            run_bounded_group(
+                (fast_success, delayed_failure, slow_success),
+                max_workers=3,
+            )
+        except BaseException as error:
+            failures.append(error)
+        finally:
+            returned.set()
+
+    runner = threading.Thread(target=invoke)
+    runner.start()
+    assert slow_started.wait(timeout=1)
+    assert failure_ready.wait(timeout=1)
+    # The caller remains in the barrier until the already-running task drains.
+    assert not returned.wait(timeout=0.1)
+    release_slow.set()
+    runner.join(timeout=2)
+
+    assert not runner.is_alive()
+    assert len(failures) == 1
+    assert type(failures[0]) is RuntimeError
+    assert str(failures[0]) == "delayed group failure"
 
 
-@pytest.mark.parametrize(
-    ("submitted_labels", "expected"),
-    [(("first", "second"), "first"), (("second", "first"), "second")],
-)
-def test_bounded_group_selects_simultaneous_failure_in_submission_order(
-    monkeypatch: pytest.MonkeyPatch,
-    submitted_labels: tuple[str, str],
-    expected: str,
-) -> None:
-    started = threading.Barrier(3)
+def test_bounded_group_cancels_pending_work_and_ignores_cancelled_future() -> None:
+    pending_started = threading.Event()
 
-    def failing(label: str) -> Callable[[], str]:
-        def execute() -> str:
-            started.wait(timeout=1)
-            raise RuntimeError(label)
+    def failure() -> str:
+        raise RuntimeError("first task failed")
 
-        return execute
+    def pending() -> str:
+        pending_started.set()
+        raise AssertionError("cancelled task must not run")
 
-    def controlled_wait(futures, *, return_when):  # type: ignore[no-untyped-def]
-        del return_when
-        # The caller is the third barrier party.  Both failures are released
-        # before the replacement wait reports the complete done set, making
-        # scheduler order irrelevant to this assertion.
+    with pytest.raises(RuntimeError, match="first task failed"):
+        run_bounded_group((failure, pending), max_workers=1)
+
+    assert not pending_started.is_set()
+
+
+def test_bounded_group_selects_simultaneous_failure_in_submission_order() -> None:
+    def run_once(submitted_labels: tuple[str, str]) -> str:
+        started = threading.Barrier(3)
+
+        def failing(label: str) -> Callable[[], str]:
+            def execute() -> str:
+                started.wait(timeout=1)
+                raise RuntimeError(label)
+
+            return execute
+
+        failures: list[BaseException] = []
+
+        def invoke() -> None:
+            try:
+                run_bounded_group(
+                    tuple(failing(label) for label in submitted_labels),
+                    max_workers=2,
+                )
+            except BaseException as error:
+                failures.append(error)
+
+        runner = threading.Thread(target=invoke)
+        runner.start()
         started.wait(timeout=1)
-        while not all(future.done() for future in futures):
-            time.sleep(0.001)
-        return set(futures), set()
+        runner.join(timeout=1)
+        assert not runner.is_alive()
+        assert len(failures) == 1
+        assert type(failures[0]) is RuntimeError
+        return str(failures[0])
 
-    monkeypatch.setattr(concurrency_module, "wait", controlled_wait)
-    with pytest.raises(RuntimeError, match=expected):
-        run_bounded_group(
-            tuple(failing(label) for label in submitted_labels),
-            max_workers=2,
-        )
+    for submitted_labels in (("A", "B"), ("B", "A")):
+        expected = submitted_labels[0]
+        assert [run_once(submitted_labels) for _ in range(100)] == [expected] * 100
 
 
 def test_analysis_round_barrier_and_late_success_never_persist_partial_stage() -> None:
