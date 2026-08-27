@@ -50,7 +50,7 @@ def test_bounded_group_is_parallel_bounded_and_joins_in_canonical_order() -> Non
     assert maximum == 3
 
 
-def test_bounded_group_drains_running_work_after_failure() -> None:
+def test_bounded_group_returns_fail_fast_before_running_slow_work_finishes() -> None:
     def fast_success() -> str:
         time.sleep(0.01)
         return "success"
@@ -63,12 +63,16 @@ def test_bounded_group_drains_running_work_after_failure() -> None:
         raise RuntimeError("delayed group failure")
 
     slow_started = threading.Event()
+    slow_finished = threading.Event()
     release_slow = threading.Event()
 
     def slow_success() -> str:
         slow_started.set()
-        assert release_slow.wait(timeout=2)
-        return "slow"
+        try:
+            assert release_slow.wait(timeout=2)
+            return "slow"
+        finally:
+            slow_finished.set()
 
     failures: list[BaseException] = []
     returned = threading.Event()
@@ -88,10 +92,15 @@ def test_bounded_group_drains_running_work_after_failure() -> None:
     runner.start()
     assert slow_started.wait(timeout=1)
     assert failure_ready.wait(timeout=1)
-    # The caller remains in the barrier until the already-running task drains.
-    assert not returned.wait(timeout=0.1)
+    # The caller must report the failure without waiting for later unrelated
+    # running work to finish.  The worker itself is released and joined below
+    # so this test also proves the non-waiting executor shutdown does not leak
+    # work.
+    assert returned.wait(timeout=0.1)
+    assert not release_slow.is_set()
     release_slow.set()
-    runner.join(timeout=2)
+    runner.join(timeout=1)
+    assert slow_finished.wait(timeout=1)
 
     assert not runner.is_alive()
     assert len(failures) == 1

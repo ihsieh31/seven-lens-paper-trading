@@ -19,6 +19,7 @@ import logging
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
+from uuid import UUID, uuid5
 
 from seven_lens.domain.value_objects import UtcTimestamp
 from seven_lens.execution.control import ControlCommand, ControlCommandRecord, ControlStateSnapshot
@@ -93,6 +94,15 @@ class FillUpdate:
 type TradeUpdate = OrderStatusUpdate | FillUpdate
 
 _LOGGER = logging.getLogger(__name__)
+_CONFLICT_PAUSE_COMMAND_NAMESPACE = UUID("2a4d9c4c-0bd2-4b7f-9f0a-5e4ef4e03b22")
+
+
+def _conflict_pause_command_id(client_order_id: ClientOrderId, conflict: str) -> UUID:
+    """Derive one audit identity for one unresolved order/conflict pair."""
+    return uuid5(
+        _CONFLICT_PAUSE_COMMAND_NAMESPACE,
+        f"{client_order_id.value}\x1f{conflict}",
+    )
 
 
 class _ConsumerOrders(Protocol):
@@ -212,12 +222,14 @@ class TradeUpdateConsumer:
                 unit_of_work.rollback()
             raise TradeUpdateError(f"failed to persist entries_paused after {conflict}") from exc
         try:
-            from uuid import uuid4
-
             now = unit_of_work.control.state().updated_at
             unit_of_work.control.add_command(
                 ControlCommandRecord(
-                    command_id=uuid4(),
+                    # The command is retried after an ambiguous final commit.
+                    # Its identity must therefore be stable across UoW/connection
+                    # boundaries; the repository treats a semantic replay as a
+                    # no-op instead of appending a second audit row.
+                    command_id=_conflict_pause_command_id(client_order_id, conflict),
                     command=ControlCommand.PAUSE_ENTRIES,
                     reason=f"automatic pause on {conflict}",
                     actor="trade_update_consumer",

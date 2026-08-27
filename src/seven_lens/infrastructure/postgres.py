@@ -889,6 +889,7 @@ class PostgresControlRepository:
                     command_id, command, reason, actor, run_id, requested_at, applied_at
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (command_id) DO NOTHING
                 RETURNING applied_at
                 """,
                 (
@@ -901,8 +902,33 @@ class PostgresControlRepository:
                     None if record.applied_at is None else record.applied_at.value,
                 ),
             )
-            row = _row(cursor.fetchone(), "control command insert")
-        self._unit_of_work._mark_write()
+            inserted = cursor.fetchone()
+            if inserted is not None:
+                row = _row(inserted, "control command insert")
+                self._unit_of_work._mark_write()
+            else:
+                cursor.execute(
+                    """
+                    SELECT command, reason, actor, run_id, requested_at, applied_at
+                    FROM control_commands
+                    WHERE command_id = %s
+                    """,
+                    (record.command_id,),
+                )
+                existing = _row(cursor.fetchone(), "control command idempotency lookup")
+                if len(existing) != 6 or (
+                    existing[0] != record.command.value
+                    or existing[1] != record.reason
+                    or existing[2] != record.actor
+                    or existing[3] != record.run_id
+                ):
+                    raise PersistenceInvariantError(
+                        "control command id is already bound to a different command"
+                    )
+                # requested_at/applied_at are authoritative metadata from the
+                # first attempt.  A retry may observe a later local timestamp,
+                # but must never rewrite the append-only row.
+                row = (existing[5],)
         if row[0] is None:
             return None
         return _timestamp(row[0], "applied_at")

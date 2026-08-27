@@ -1027,6 +1027,93 @@ def test_pg_marker_commit_failure_uses_independent_pause_fallback(
         assert broker.calls == []
 
 
+def test_pg_ambiguous_pause_audit_commit_is_idempotent_on_retry(
+    migrated_postgres: str,
+) -> None:
+    from seven_lens.execution.trade_updates import (
+        OrderStatusUpdate,
+        TradeUpdateConsumer,
+        TradeUpdateError,
+    )
+
+    intent = _intent(709)
+    broker_order_id = "b-ambiguous-pause-audit"
+    with PostgresUnitOfWork(migrated_postgres) as uow:
+        uow.orders.add(intent)
+        for status in (
+            OrderStatus.RISK_APPROVED,
+            OrderStatus.OUTBOX_PENDING,
+            OrderStatus.SUBMITTING,
+            OrderStatus.ACKNOWLEDGED,
+        ):
+            uow.orders.transition_status(intent.client_order_id, status)
+        uow.orders.record_broker_order(
+            BrokerOrder(
+                broker_order_id=broker_order_id,
+                client_order_id=intent.client_order_id,
+                symbol=intent.symbol,
+                side=intent.side,
+                quantity=intent.quantity,
+                filled_quantity=0,
+                limit_price=intent.limit_price,
+                status=BrokerOrderStatus.ACCEPTED,
+                submitted_at=_BASE,
+                updated_at=_BASE,
+            )
+        )
+        uow.commit()
+
+    conflict = OrderStatusUpdate(
+        client_order_id=intent.client_order_id,
+        broker_order_id=broker_order_id,
+        status=BrokerOrderStatus.FILLED,
+        filled_quantity=4,
+        observed_at=UtcTimestamp.from_isoformat("2026-08-17T13:35:05.000000Z"),
+    )
+    with PostgresUnitOfWork(migrated_postgres) as uow:
+        real_commit = uow.commit
+        commit_count = 0
+
+        def ambiguous_commit() -> None:
+            nonlocal commit_count
+            commit_count += 1
+            real_commit()
+            if commit_count == 3:
+                raise RuntimeError("injected ambiguous final audit commit")
+
+        uow.commit = ambiguous_commit
+        with pytest.raises(TradeUpdateError, match="pause audit"):
+            TradeUpdateConsumer().apply(uow, conflict)
+    assert commit_count == 3
+
+    with psycopg.connect(migrated_postgres, autocommit=True) as connection:
+        first_command = connection.execute(
+            """
+            SELECT command_id, command, actor
+            FROM public.control_commands
+            WHERE reason = 'automatic pause on conflicting status'
+            """
+        ).fetchone()
+    assert first_command is not None
+    assert first_command[1:] == ("PAUSE_ENTRIES", "trade_update_consumer")
+
+    # A new connection represents the caller retry after the commit outcome was
+    # ambiguous.  The stable command identity must make this a no-op audit replay.
+    with PostgresUnitOfWork(migrated_postgres) as uow:
+        with pytest.raises(TradeUpdateError):
+            TradeUpdateConsumer().apply(uow, conflict)
+
+    with psycopg.connect(migrated_postgres, autocommit=True) as connection:
+        commands = connection.execute(
+            """
+            SELECT command_id
+            FROM public.control_commands
+            WHERE reason = 'automatic pause on conflicting status'
+            """
+        ).fetchall()
+    assert commands == [first_command[:1]]
+
+
 # ---------------------------------------------------------------------------
 # Status-update conflicts converge on the real PostgreSQL guards
 # ---------------------------------------------------------------------------

@@ -317,6 +317,59 @@ def test_reconciliation_scope_upgrade_defaults_legacy_clean_to_partial(
         _drop_all_migrations(test_database_url)
 
 
+def test_account_hardening_down_removes_unrepresentable_mismatch_evidence(
+    test_database_url: str,
+) -> None:
+    """A disposable downgrade must handle P2-2 rows before narrowing checks."""
+    _drop_all_migrations(test_database_url)
+    run_id = "00000000-0000-0000-0000-000000000008"
+    try:
+        assert migrate(test_database_url) == 16
+        for expected_version in (15, 14, 13, 12, 11, 10, 9, 8):
+            assert rollback(test_database_url) == expected_version
+
+        with _connection(test_database_url) as connection:
+            connection.execute(
+                """
+                INSERT INTO public.reconciliation_runs (
+                    run_id, trading_date, status, mismatch_count, mismatch_kinds,
+                    checked_orders, checked_fills, observed_at
+                ) VALUES (
+                    %s, '2026-08-17', 'MISMATCH', 1,
+                    ARRAY['ACCOUNT_ID_MISMATCH']::TEXT[], 0, 0,
+                    '2026-08-17T13:35:00Z'
+                )
+                """,
+                (run_id,),
+            )
+            connection.execute(
+                """
+                INSERT INTO public.reconciliation_mismatches (
+                    run_id, ordinal, kind, detail
+                ) VALUES (%s, 1, 'ACCOUNT_ID_MISMATCH', 'sentinel account')
+                """,
+                (run_id,),
+            )
+            connection.commit()
+
+        assert rollback(test_database_url) == 7
+        with _connection(test_database_url) as connection:
+            assert connection.execute(
+                "SELECT COUNT(*) FROM public.reconciliation_runs WHERE run_id = %s",
+                (run_id,),
+            ).fetchone() == (0,)
+            assert connection.execute(
+                "SELECT COUNT(*) FROM public.reconciliation_mismatches WHERE run_id = %s",
+                (run_id,),
+            ).fetchone() == (0,)
+
+        # The downgraded database remains rebuildable from the migration set.
+        assert migrate(test_database_url) == 16
+        assert verify_schema(test_database_url) == 16
+    finally:
+        _drop_all_migrations(test_database_url)
+
+
 def test_privileged_schema_catalog_is_hardened(migrated_postgres: str) -> None:
     privileged_functions = (
         "acquire_job_lease",

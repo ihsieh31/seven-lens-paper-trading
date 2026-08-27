@@ -84,6 +84,18 @@ class _DoubleSafetyFailureUnitOfWork(_MarkerCommitFailureUnitOfWork):
         raise RuntimeError("injected independent safety pause failure")
 
 
+class _AmbiguousAuditCommitUnitOfWork(_UnitOfWork):
+    def __init__(self, orders: FakeOrderRepository) -> None:
+        super().__init__(orders)
+        self._raise_after_audit_commit = True
+
+    def commit(self) -> None:
+        self.commit_count += 1
+        if self.control.commands and self._raise_after_audit_commit:
+            self._raise_after_audit_commit = False
+            raise RuntimeError("injected ambiguous audit commit")
+
+
 def _setup() -> tuple[_UnitOfWork, OrderIntent, BrokerOrder]:
     intent = OrderIntent.create(
         strategy="seven-lens",
@@ -579,6 +591,23 @@ class TestStatusConflictConvergence:
         assert state.paused_reason == "reconciliation required; conflicting status"
         assert unit_of_work.commit_count == 2
         assert "trade_update_conflict_pause_audit_failed" in caplog.text
+
+    def test_ambiguous_audit_commit_retry_does_not_append_duplicate_pause(self) -> None:
+        base_uow, intent, _mirror = _setup()
+        unit_of_work = _AmbiguousAuditCommitUnitOfWork(base_uow.orders)
+        unit_of_work.control = base_uow.control
+        update = _status_update(intent, BrokerOrderStatus.FILLED, 4, _T2)
+
+        with pytest.raises(TradeUpdateError, match="pause audit"):
+            TradeUpdateConsumer().apply(unit_of_work, update)
+        assert len(unit_of_work.control.commands) == 1
+        command_id = unit_of_work.control.commands[0].command_id
+
+        with pytest.raises(TradeUpdateError):
+            TradeUpdateConsumer().apply(unit_of_work, update)
+
+        assert len(unit_of_work.control.commands) == 1
+        assert unit_of_work.control.commands[0].command_id == command_id
 
     def test_stale_unknown_and_monotonic_paths_never_pause(self) -> None:
         unit_of_work, intent = self._partially_filled_state()

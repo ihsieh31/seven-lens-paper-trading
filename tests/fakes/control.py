@@ -49,8 +49,19 @@ class FakeControlRepository:
         return self._state.flatten_generation
 
     def add_command(self, record: ControlCommandRecord) -> UtcTimestamp | None:
+        for existing in self.commands:
+            if existing.command_id != record.command_id:
+                continue
+            if (
+                existing.command is not record.command
+                or existing.reason != record.reason
+                or existing.actor != record.actor
+                or existing.run_id != record.run_id
+            ):
+                raise ValueError("control command id is already bound to a different command")
+            return existing.applied_at
         self.commands.append(record)
-        return record.requested_at
+        return record.applied_at
 
 
 class FakeReconciliationRepository:

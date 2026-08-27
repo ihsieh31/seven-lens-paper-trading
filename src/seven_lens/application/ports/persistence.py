@@ -168,7 +168,7 @@ class ControlRepository(Protocol):
         ...
 
     def add_command(self, record: ControlCommandRecord) -> UtcTimestamp | None:
-        """Append one operator command; UPDATE and DELETE are forbidden."""
+        """Append one command; an exact command-id replay is an idempotent no-op."""
         ...
 
 

@@ -16,6 +16,7 @@ from psycopg import sql
 
 from seven_lens.cli.p2e_readonly_verify import run_verification
 from seven_lens.config.broker import BrokerEnvironment
+from seven_lens.execution.reconciliation import ReconciliationStatus
 from seven_lens.infrastructure.postgres import PostgresUnitOfWork, RuntimeDsn
 from seven_lens.infrastructure.postgres_roles import provision_runtime_role, verify_runtime_role
 
@@ -128,6 +129,7 @@ def test_live_read_only_verification_persists_evidence(
     assert all(position.quantity >= 1 for position in report.positions)
     assert all(fill.quantity.value >= 1 for fill in report.fills)
     assert report.reconciliation.run_id is not None
+    assert report.reconciliation.status is ReconciliationStatus.CLEAN
     assert report.request_log
     with psycopg.connect(live_runtime_postgres.conninfo(), autocommit=True) as connection:
         identity = connection.execute("SELECT current_user").fetchone()
@@ -140,6 +142,7 @@ def test_live_read_only_verification_persists_evidence(
     assert parsed["read_only"] is True
     assert parsed["account"]["environment"] == "PAPER"
     assert parsed["reconciliation"]["run_id"] == str(report.reconciliation.run_id)
+    assert parsed["reconciliation"]["status"] == ReconciliationStatus.CLEAN.value
     expected_targets = {
         "/v2/account",
         "/v2/positions",
