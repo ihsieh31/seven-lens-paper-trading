@@ -235,6 +235,19 @@ def resolve_alpaca_credentials(provider: SecretProvider) -> AlpacaPaperCredentia
     return AlpacaPaperCredentials(key_id=key_id, secret_key=secret_key)
 
 
+def account_reconciliation_policy(
+    config: AccountReconciliationConfig,
+) -> AccountReconciliationPolicy:
+    """Convert the typed account config into the one shared reconciliation policy."""
+    if not isinstance(config, AccountReconciliationConfig):
+        raise CompositionError("account config must be an AccountReconciliationConfig")
+    return AccountReconciliationPolicy(
+        expected_account_id=config.expected_account_id,
+        cash_tolerance_cents=config.cash_tolerance_cents,
+        nav_tolerance_cents=config.nav_tolerance_cents,
+    )
+
+
 def build_execution_stack(
     config: ExecutionStackConfig,
     *,
@@ -247,11 +260,7 @@ def build_execution_stack(
     validate_paper_startup(config.paper)
     if not hasattr(price_provider, "current_price"):
         raise CompositionError("price_provider must implement current_price")
-    account_policy = AccountReconciliationPolicy(
-        expected_account_id=config.account.expected_account_id,
-        cash_tolerance_cents=config.account.cash_tolerance_cents,
-        nav_tolerance_cents=config.account.nav_tolerance_cents,
-    )
+    account_policy = account_reconciliation_policy(config.account)
     return ExecutionStack(
         engine=ExecutionEngine(broker=broker, clock=clock, control=control),
         reconciler=Reconciler(

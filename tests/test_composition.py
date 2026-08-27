@@ -11,6 +11,7 @@ from seven_lens.application.composition import (
     CompositionError,
     ExecutionStackConfig,
     RuntimeDatabaseConfig,
+    account_reconciliation_policy,
     build_execution_stack,
     execution_secret_refs,
     resolve_alpaca_credentials,
@@ -143,6 +144,15 @@ class TestRuntimeDsn:
 
 
 class TestStackBuilding:
+    def test_account_policy_conversion_preserves_operator_identity_and_tolerances(self) -> None:
+        config = ExecutionStackConfig.from_mapping(_stack_mapping())
+
+        policy = account_reconciliation_policy(config.account)
+
+        assert policy.expected_account_id == "fake-paper-primary"
+        assert policy.cash_tolerance_cents == 100
+        assert policy.nav_tolerance_cents == 100
+
     def test_stack_wires_engine_reconciler_and_control_plane(self) -> None:
         from seven_lens.execution.fake_broker import FakePaperBroker
 

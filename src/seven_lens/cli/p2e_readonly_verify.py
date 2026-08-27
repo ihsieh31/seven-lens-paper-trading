@@ -31,6 +31,7 @@ from urllib.parse import urlsplit
 from seven_lens.application.composition import (
     CompositionError,
     ExecutionStackConfig,
+    account_reconciliation_policy,
     execution_secret_refs,
     resolve_alpaca_credentials,
 )
@@ -39,7 +40,10 @@ from seven_lens.application.ports.broker import (
     PaperAccount,
     PaperPosition,
 )
-from seven_lens.application.reconciliation_service import Reconciler
+from seven_lens.application.reconciliation_service import (
+    AccountReconciliationPolicy,
+    Reconciler,
+)
 from seven_lens.application.secret_service import ScopedSecretProvider
 from seven_lens.config.broker import PAPER_API_BASE_URL
 from seven_lens.domain.session import session_trading_date
@@ -334,7 +338,12 @@ def run_verification(config: Path) -> ReadOnlyVerificationReport:
     fills: list[Fill] = []
     for order in open_orders:
         fills.extend(adapter.list_fills(order.broker_order_id))
-    reconciliation = _record_reconciliation(runtime_dsn, adapter, observed_at)
+    reconciliation = _record_reconciliation(
+        runtime_dsn,
+        adapter,
+        observed_at,
+        account_policy=account_reconciliation_policy(stack_config.account),
+    )
     return ReadOnlyVerificationReport(
         observed_at=observed_at,
         account=account,
@@ -350,8 +359,14 @@ def _record_reconciliation(
     runtime_dsn: RuntimeDsn,
     adapter: AlpacaPaperAdapter,
     observed_at: UtcTimestamp,
+    *,
+    account_policy: AccountReconciliationPolicy,
 ) -> ReconciliationResult:
-    reconciler = Reconciler(broker=adapter, clock=lambda: observed_at)
+    reconciler = Reconciler(
+        broker=adapter,
+        clock=lambda: observed_at,
+        account_policy=account_policy,
+    )
     trading_date = session_trading_date(observed_at)
     with PostgresUnitOfWork(runtime_dsn.conninfo()) as unit_of_work:
         return reconciler.run(unit_of_work, trading_date)

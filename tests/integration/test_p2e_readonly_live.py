@@ -22,6 +22,7 @@ from seven_lens.infrastructure.postgres_roles import provision_runtime_role, ver
 pytestmark = [pytest.mark.integration, pytest.mark.live]
 
 _LIVE_ENV: Final = "SEVEN_LENS_P2E_LIVE"
+_LIVE_EXPECTED_ACCOUNT_ID_ENV: Final = "SEVEN_LENS_P2E_EXPECTED_ACCOUNT_ID"
 _LIVE_RUNTIME_ROLE: Final = "seven_lens_p2e_live"
 _LIVE_RUNTIME_PASSWORD: Final = "p2e-disposable-runtime-only"
 
@@ -31,10 +32,22 @@ def _require_live() -> None:
         pytest.skip("P2-E live verification requires SEVEN_LENS_P2E_LIVE=1")
 
 
+def _require_expected_account_id() -> str:
+    expected = os.environ.get(_LIVE_EXPECTED_ACCOUNT_ID_ENV, "").strip()
+    if not expected:
+        pytest.skip(
+            "P2-E live verification requires "
+            f"{_LIVE_EXPECTED_ACCOUNT_ID_ENV}; it is operator input and is never "
+            "learned from Alpaca"
+        )
+    return expected
+
+
 def _live_config(test_database_url: str, runtime_role: str, directory: Path) -> Path:
     parsed = urlsplit(test_database_url)
     assert parsed.hostname is not None
     assert parsed.username is not None
+    expected_account_id = _require_expected_account_id()
     config = {
         "paper": {
             "environment": "PAPER",
@@ -47,6 +60,11 @@ def _live_config(test_database_url: str, runtime_role: str, directory: Path) -> 
             "user": runtime_role,
             "sslmode": "require",
             "password_account": "primary",
+        },
+        "account": {
+            "expected_account_id": expected_account_id,
+            "cash_tolerance_cents": 100,
+            "nav_tolerance_cents": 100,
         },
         "alpaca_key_account": "primary",
         "alpaca_secret_account": "primary",
@@ -110,6 +128,7 @@ def test_live_read_only_verification_persists_evidence(
     assert all(position.quantity >= 1 for position in report.positions)
     assert all(fill.quantity.value >= 1 for fill in report.fills)
     assert report.reconciliation.run_id is not None
+    assert report.request_log
     with psycopg.connect(live_runtime_postgres.conninfo(), autocommit=True) as connection:
         identity = connection.execute("SELECT current_user").fetchone()
     assert identity == (_LIVE_RUNTIME_ROLE,)
@@ -125,7 +144,9 @@ def test_live_read_only_verification_persists_evidence(
         "/v2/account",
         "/v2/positions",
     }
-    assert expected_targets.issubset({path.split("?")[0] for _, path in report.request_log})
+    request_paths = {path.split("?")[0] for _, path in report.request_log}
+    assert expected_targets.issubset(request_paths)
+    assert any(method == "GET" and path == "/v2/account" for method, path in report.request_log)
     with PostgresUnitOfWork(migrated_postgres) as unit_of_work:
         latest = unit_of_work.reconciliations.latest()
         assert latest is not None
