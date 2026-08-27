@@ -16,6 +16,7 @@ from psycopg import sql
 
 from seven_lens.cli.p2e_readonly_verify import run_verification
 from seven_lens.config.broker import BrokerEnvironment
+from seven_lens.domain.value_objects import UtcTimestamp
 from seven_lens.execution.reconciliation import ReconciliationStatus
 from seven_lens.infrastructure.postgres import PostgresUnitOfWork, RuntimeDsn
 from seven_lens.infrastructure.postgres_roles import provision_runtime_role, verify_runtime_role
@@ -24,6 +25,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.live]
 
 _LIVE_ENV: Final = "SEVEN_LENS_P2E_LIVE"
 _LIVE_EXPECTED_ACCOUNT_ID_ENV: Final = "SEVEN_LENS_P2E_EXPECTED_ACCOUNT_ID"
+_LIVE_BASELINE_CASH_CENTS_ENV: Final = "SEVEN_LENS_P2E_BASELINE_CASH_CENTS"
 _LIVE_RUNTIME_ROLE: Final = "seven_lens_p2e_live"
 _LIVE_RUNTIME_PASSWORD: Final = "p2e-disposable-runtime-only"
 
@@ -42,6 +44,31 @@ def _require_expected_account_id() -> str:
             "learned from Alpaca"
         )
     return expected
+
+
+def _require_baseline_cash_cents() -> int:
+    raw = os.environ.get(_LIVE_BASELINE_CASH_CENTS_ENV, "").strip()
+    if not raw or not raw.isascii() or not raw.isdecimal():
+        raise RuntimeError(
+            "P2-E live verification requires an explicit ASCII decimal "
+            f"{_LIVE_BASELINE_CASH_CENTS_ENV}; it is owner setup and is never "
+            "learned from Alpaca"
+        )
+    opening_cash_cents = int(raw, 10)
+    if opening_cash_cents > 100_000_000_000:
+        raise RuntimeError(f"{_LIVE_BASELINE_CASH_CENTS_ENV} exceeds the schema bound")
+    return opening_cash_cents
+
+
+def _seed_live_baseline(owner_database_url: str, account_id: str, opening_cash_cents: int) -> None:
+    """Seed only the disposable owner fixture; runtime must remain read-only."""
+    with PostgresUnitOfWork(owner_database_url) as unit_of_work:
+        unit_of_work.account_baselines.set_baseline(
+            account_id,
+            opening_cash_cents,
+            UtcTimestamp.now(),
+        )
+        unit_of_work.commit()
 
 
 def _live_config(test_database_url: str, runtime_role: str, directory: Path) -> Path:
@@ -118,6 +145,11 @@ def test_live_read_only_verification_persists_evidence(
 ) -> None:
     _require_live()
     config_path = _live_config(migrated_postgres, _LIVE_RUNTIME_ROLE, tmp_path)
+    _seed_live_baseline(
+        migrated_postgres,
+        _require_expected_account_id(),
+        _require_baseline_cash_cents(),
+    )
     monkeypatch.setattr(
         "seven_lens.cli.p2e_readonly_verify.compose_runtime_dsn",
         lambda _config, _provider: live_runtime_postgres,
