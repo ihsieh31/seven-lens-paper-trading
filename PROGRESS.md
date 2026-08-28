@@ -1,10 +1,11 @@
 # Progress
 
-最後更新：2026-08-27（P1–P3 full remediation independent acceptance 後）
+最後更新：2026-08-28（P1–P3 Closed；P4-A／P4-B Accepted、Closed；P4-C～F未開始）
 
 ## 目前 Gate
 
-**P0／P1／P2／P3 全部 Closed；P4～P8 Not started。**
+**P0／P1／P2／P3全部Closed；P4-A與P4-B均已完成fresh independent acceptance，verdict為Accepted、Gate
+狀態為Closed；P4-C～P8未開始。P4 overall仍為In progress。**
 
 P3 於 2026-08-26 完成最後子閘的獨立重新驗收後一次性關門，並以 commit `b59e466` 發布工作樹、
 `d51e9a9` 修復 CI postgres service tmpfs、`660e062` 完成治理同步；exact-SHA run `32962320231`
@@ -36,7 +37,7 @@ P3 於 2026-08-26 完成最後子閘的獨立重新驗收後一次性關門，�
 | P1 專案骨架與權威狀態 | Closed | Python/uv、typed config、PostgreSQL、Keychain、telemetry、CI |
 | P2 Alpaca Paper 執行安全 | Closed | order/fill/reconciliation/control/NAV/runtime authority；真實下單仍未授權 |
 | **P3 研究／提案／記憶** | **Closed** | upstream contracts、evidence/event、研究管線、Risk Debate／提案、provider isolation、reflection lineage、bounded memory 與 eval 治理；A～F 子閘及 cleanup Batch A～G 均已獨立驗收 |
-| P4 deterministic Risk | Not started | hard limits、target-to-quantity、`OrderIntent` boundary |
+| P4 多來源／候選／deterministic Risk | In progress | P4-A／P4-B已獨立驗收，均為Accepted／Closed；P4-C～F未開始；P4 overall仍In progress |
 | P5 validation | Not started | point-in-time walk-forward、attribution、economic fills |
 | P6 Shadow | Not started | 至少20交易日，零送單 |
 | P7 Supervised Paper | Not started | 至少20交易日；此階段前不得送單 |
@@ -65,9 +66,58 @@ P3 於 2026-08-26 完成最後子閘的獨立重新驗收後一次性關門，�
 
 - Provider Transport rolling reliability evidence：V12 批次 snapshot 為 GREEN，但 P6 前仍需另行
   授權的 synthetic canary 在 rolling 7 日且 ≥200 logical calls 重驗，跌破即重開。
-- P4 production universe、deterministic Risk approval、quantity 與 `OrderIntent` boundary。
+- P4-C～F的production universe、deterministic Risk approval、quantity與zero-submit `OrderIntent` boundary
+  尚未實作／驗收；P4-A／P4-B已各自fresh independent acceptance並Closed。
+- Confirmed forward/reverse split的持倉退出尚未實作：P4只規劃intent，P5 replay、P6 shadow，P7首次Paper
+  submit需fresh acceptance與使用者exact授權；short BUY-to-cover目前不在auto authority。
 - P5～P8 回測、Shadow、Supervised Paper 與 Unattended Paper。
 - Tavily 七帳號 pool；沒有外部授權證據時固定 `SINGLE_ACCOUNT_UNVERIFIED`。
+
+## 2026-08-27～28 P4規劃、實作與歷史狀態紀錄
+
+- ADR-036：來源分為`AUTHORITY/CONFIRMATION/DISCOVERY/RESEARCH_SUPPLEMENT`，涵蓋Alpaca、yfinance、
+  FRED/ALFRED、Treasury/BLS/BEA/EIA、SEC/IR、Corporate Actions、Nasdaq/NYSE、Tavily/GDELT；禁止silent
+  fallback升權，要求point-in-time時間、security identity、rights與hash lineage。
+- ADR-037：forward/reverse split候選在analysis前、Risk與submit前quarantine；既有long正式確認後不經LLM，
+  未來走獨立`CORPORATE_ACTION_EXIT`。退出需cancel/resolve、FULL reconciliation、regular-hours、price collar、
+  idempotency；fill後記錄拆／合股原因、realized P&L、通知與`OPERATIONAL_EXIT_NOT_THESIS_FAILURE`記憶。
+- 2026-08-27先完成docs/prompt packaging；其後另一實作輪完成P4-A初版source/tests。沒有migration、source/model/broker
+  call、Keychain讀取、commit或push；不得標為P4-A Accepted。
+- ADR-038與`P4_PROGRAM_PLAN.md`固定單一Paper帳戶、long-only、保守hard limits、整股quantity／價格保護及
+  零付費來源profile；P4拆為A～F，每個Gate各有獨立implementation／acceptance prompt，共12檔。這是
+  prompt packaging complete，不是code-bearing implementation授權或Gate證據。12檔已擴寫為弱模型專用規格，逐檔
+  包含可動／禁動範圍、逐步算法、停止條件、Definition of Done、獨立PoC／PG審查與verdict matrix。
+- 2026-08-28使用者核准ADR-039：`p4-factor-v1`、`sec-sic-division-v1`、
+  `p4-correlation-cluster-v1`、`p4-gross-turnover-v1`。四項已完整寫入P4-C／D實作與驗收prompts，不再是待決設定。
+- 2026-08-28完成P4-A prompt第0C節ADR-039 delta：SEC manifest移除任意concept URL（只留submissions與
+  companyfacts兩個exact endpoint）、submissions新增top-level四位數SIC point-in-time observation（僅
+  zero-pad、不guess mapping）、companyfacts只接受五個exact (taxonomy,concept) XBRL concepts並以
+  submission acceptance closure決定available time（accn未join即typed failure，不猜時間）；capex保留
+  provider原值與sign convention（無abs）。P4-A僅normalization，無TTM/factor/market cap/SIC Division/Risk。
+  全部offline fixtures（network=0）；focused P4-A＋invariants 361 passed、non-integration 1738 passed、
+  Ruff format/check與mypy全綠。以上為實作當時證據；其後fresh independent acceptance closure見下節。
+- 2026-08-28依`P4B_IMPLEMENTATION_PROMPT.md`完成P4-B：新增point-in-time security identity resolver、
+  append-only source／event／quarantine contracts與in-memory／PostgreSQL authority；公開入口固定為
+  `SecurityMasterService`，流程為validate→identity resolve→durable block→confirmation→CAS transition→
+  readback→bounded telemetry。涵蓋forward/reverse split、source correction與withdrawal、三層quarantine、
+  identity／ratio／effective-date／source-lineage fail-closed規則；沒有P4-C、Risk／portfolio／quantity／
+  broker或model authority。
+- P4-B implementation evidence：focused P4-B＋source invariants `131 passed`；真實PostgreSQL 16 P4-B suite `7 passed`，
+  含up/down/up、兩連線CAS、confirm-vs-withdraw race、telemetry failure與runtime ACL。先前完整PG套件長跑的
+  `oom_killed=true`已定位為WAL churn寫入tmpfs的本機資源問題；本機整合腳本改用disk-backed anonymous volume
+  後，fresh `verify_p1.sh --postgres`為`254 passed, 2 deselected`。以上為實作當時證據；其後P4-B已完成fresh
+  independent acceptance並Closed。
+
+## 2026-08-28 P4-A／P4-B independent acceptance closure
+
+- P4-A verdict：`Accepted`、Gate：`Closed`。focused P4-A＋secret／Paper-only invariants `372 passed`。
+- P4-B verdict：`Accepted`、Gate：`Closed`。focused P4-B＋Paper-only invariants `132 passed`；fresh PostgreSQL
+  16 integration `256 passed, 2 deselected, 0 skipped`；同輪non-integration `1878 passed, 256 deselected`。
+- 修復後公開入口與對抗重驗：blocked head維持`entry_blocked`；direct `ELIGIBLE`與未知payload均以SQLSTATE
+  `23514`拒絕；owner-safe state為`entry_blocked`，eligible與extra-payload rows均為`0`；source transport／SEC／
+  FRED adversarial PoC均按預期通過。
+- 驗收結論：`no actionable findings`。本輪未讀Keychain、未呼叫provider／model／broker；P4仍Paper-only、
+  zero-submit，P4-C～F未開始，完整P4尚未Closed。
 
 ## 文件與歸檔
 

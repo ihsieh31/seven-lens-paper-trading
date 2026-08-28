@@ -15,7 +15,7 @@ _AUTHORITATIVE_VIEW_NAMES: Final[frozenset[str]] = frozenset(
 )
 
 # The exact table inventory of the authoritative public schema after migrations
-# 0001-0019.  Any extra or missing table is privilege-surface drift.
+# 0001-0021.  Any extra or missing table is privilege-surface drift.
 _AUTHORITATIVE_TABLE_NAMES: Final[frozenset[str]] = frozenset(
     {
         "account_baseline_revisions",
@@ -26,6 +26,9 @@ _AUTHORITATIVE_TABLE_NAMES: Final[frozenset[str]] = frozenset(
         "broker_orders",
         "control_commands",
         "control_state",
+        "corporate_action_event_head",
+        "corporate_action_event_sources",
+        "corporate_action_events",
         "domain_events",
         "evidence_packets",
         "fills",
@@ -40,6 +43,7 @@ _AUTHORITATIVE_TABLE_NAMES: Final[frozenset[str]] = frozenset(
         "memory_curation_audits",
         "memory_promotion_history",
         "order_intents",
+        "p4_source_records",
         "portfolio_proposals",
         "proposal_contexts",
         "proposal_runs",
@@ -55,12 +59,17 @@ _AUTHORITATIVE_TABLE_NAMES: Final[frozenset[str]] = frozenset(
         "reflection_sources",
         "schema_metadata",
         "schema_migrations",
+        "security_identities",
+        "security_identity_heads",
+        "security_identity_sources",
+        "security_quarantine_decision_sources",
+        "security_quarantine_decisions",
         "source_objects",
         "source_records",
     }
 )
 
-# The exact non-internal trigger inventory after migrations 0001-0019.  Trigger
+# The exact non-internal trigger inventory after migrations 0001-0021.  Trigger
 # names and their target tables are safety authority, not incidental metadata.
 _AUTHORITATIVE_TRIGGER_TABLES: Final[frozenset[tuple[str, str]]] = frozenset(
     {
@@ -108,19 +117,46 @@ _AUTHORITATIVE_TRIGGER_TABLES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("memory_promotion_history_guard_truncate", "memory_promotion_history"),
         ("memory_curation_audits_guard_write", "memory_curation_audits"),
         ("memory_curation_audits_guard_truncate", "memory_curation_audits"),
+        ("p4_source_records_guard_write", "p4_source_records"),
+        ("p4_source_records_guard_truncate", "p4_source_records"),
+        ("security_identities_guard_write", "security_identities"),
+        ("security_identities_guard_truncate", "security_identities"),
+        ("security_identity_sources_guard_write", "security_identity_sources"),
+        ("security_identity_sources_guard_truncate", "security_identity_sources"),
+        ("corporate_action_events_guard_write", "corporate_action_events"),
+        ("corporate_action_events_guard_truncate", "corporate_action_events"),
+        ("corporate_action_confirmed_owner_guard", "corporate_action_events"),
+        ("corporate_action_event_sources_guard_write", "corporate_action_event_sources"),
+        ("corporate_action_event_sources_guard_truncate", "corporate_action_event_sources"),
+        ("security_quarantine_decisions_guard_write", "security_quarantine_decisions"),
+        ("security_quarantine_decisions_guard_truncate", "security_quarantine_decisions"),
+        (
+            "security_quarantine_decision_sources_guard_write",
+            "security_quarantine_decision_sources",
+        ),
+        (
+            "security_quarantine_decision_sources_guard_truncate",
+            "security_quarantine_decision_sources",
+        ),
     }
 )
 
-# The exact function inventory of the public schema after migrations 0001-0019,
+# The exact function inventory of the public schema after migrations 0001-0021,
 # each entry being the function name plus its identity argument types rendered by
 # array_to_string(proargtypes::regtype[], ',').  This includes the 36 pgcrypto
 # extension functions installed by migration 0009.  Any extra function, overload
 # or removal is drift, so a rogue SECURITY DEFINER function can never hide here.
+# Migration 0020 installs btree_gist into pg_catalog precisely so its support
+# functions never enter this public-schema inventory.
 _AUTHORITATIVE_FUNCTIONS: Final[frozenset[tuple[str, str]]] = frozenset(
     {
         ("acquire_job_lease", "text,text,interval"),
         ("advance_analysis_stage", "uuid,text,text,text,text"),
         ("advance_proposal_stage", "uuid,text,text,text,text"),
+        ("append_corporate_action_event", "text,text,jsonb"),
+        ("append_p4_source_record", "text,text,text,jsonb"),
+        ("append_security_identity", "text,jsonb"),
+        ("guard_confirmed_corporate_action_event", ""),
         ("armor", "bytea"),
         ("armor", "bytea,text[],text[]"),
         ("audit_event_payload_is_valid", "text,jsonb"),
@@ -219,6 +255,7 @@ _AUTHORITATIVE_FUNCTIONS: Final[frozenset[tuple[str, str]]] = frozenset(
         ("pgp_sym_encrypt_bytea", "bytea,text,text"),
         ("prevent_append_only_mutation", ""),
         ("publish_source_object", "text"),
+        ("record_quarantine_decision", "text,jsonb"),
         ("register_evidence_packet", "uuid,text,timestamp with time zone,text,text,text"),
         (
             "register_proposal_context",
@@ -349,6 +386,18 @@ _CONTROL_FUNCTION_SIGNATURES: Final[frozenset[str]] = frozenset(
     }
 )
 
+# P4-B security-master authorities: the only write path for the append-only
+# record/identity/event/decision tables.  The runtime role may execute exactly
+# these four and must reach every P4-B table only through them or plain SELECT.
+_P4B_FUNCTION_SIGNATURES: Final[frozenset[str]] = frozenset(
+    {
+        "public.append_p4_source_record(text,text,text,jsonb)",
+        "public.append_security_identity(text,jsonb)",
+        "public.append_corporate_action_event(text,text,jsonb)",
+        "public.record_quarantine_decision(text,jsonb)",
+    }
+)
+
 _CURATOR_EXECUTE_SIGNATURES: Final[frozenset[str]] = frozenset(
     {
         "public.register_memory_candidate(text,text,timestamp with time zone,"
@@ -377,6 +426,7 @@ _RUNTIME_EXECUTE_SIGNATURES: Final[frozenset[str]] = frozenset(
         "public.resume_entries()",
         "public.bump_flatten_generation()",
         *(signature for signature, expected in _P3_FUNCTION_SIGNATURES if expected),
+        *_P4B_FUNCTION_SIGNATURES,
     }
 )
 
@@ -418,6 +468,7 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
         _assert_authoritative_object_owner(cursor, owner_role)
         _assert_p3_function_security(cursor)
         _assert_control_function_security(cursor)
+        _assert_p4b_function_security(cursor)
 
         role = sql.Identifier(runtime_role)
         database = sql.Identifier(database_name)
@@ -456,6 +507,17 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
             sql.SQL(
                 "GRANT SELECT ON TABLE public.approved_reflection_records, "
                 "public.approved_reflection_sources TO {}"
+            ).format(role)
+        )
+        cursor.execute(
+            sql.SQL(
+                "GRANT SELECT ON TABLE public.p4_source_records, "
+                "public.security_identities, public.security_identity_sources, "
+                "public.security_identity_heads, public.corporate_action_events, "
+                "public.corporate_action_event_sources, "
+                "public.corporate_action_event_head, "
+                "public.security_quarantine_decisions, "
+                "public.security_quarantine_decision_sources TO {}"
             ).format(role)
         )
         cursor.execute(
@@ -504,6 +566,10 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
             "public.pause_entries(TEXT)",
             "public.resume_entries()",
             "public.bump_flatten_generation()",
+            "public.append_p4_source_record(TEXT, TEXT, TEXT, JSONB)",
+            "public.append_security_identity(TEXT, JSONB)",
+            "public.append_corporate_action_event(TEXT, TEXT, JSONB)",
+            "public.record_quarantine_decision(TEXT, JSONB)",
         ):
             cursor.execute(
                 sql.SQL("GRANT EXECUTE ON FUNCTION {} TO {}").format(
@@ -513,6 +579,7 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
             )
         _assert_runtime_privileges(cursor, runtime_role, database_name)
         _assert_p3_runtime_privileges(cursor, runtime_role)
+        _assert_p4b_runtime_privileges(cursor, runtime_role)
         _assert_runtime_function_privileges(cursor, runtime_role)
         _assert_no_public_privileges(cursor)
         _assert_public_schema_inventory(cursor)
@@ -535,9 +602,11 @@ def verify_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvidenc
         _assert_runtime_is_not_object_owner(cursor, runtime_role)
         _assert_runtime_privileges(cursor, runtime_role, database_name)
         _assert_p3_runtime_privileges(cursor, runtime_role)
+        _assert_p4b_runtime_privileges(cursor, runtime_role)
         _assert_runtime_function_privileges(cursor, runtime_role)
         _assert_p3_function_security(cursor)
         _assert_control_function_security(cursor)
+        _assert_p4b_function_security(cursor)
         _assert_no_public_privileges(cursor)
         _assert_public_schema_inventory(cursor)
     return RuntimeRoleEvidence(owner_role, runtime_role, database_name)
@@ -558,6 +627,7 @@ def provision_memory_curator_role(owner_dsn: str, curator_role: str) -> MemoryCu
         _assert_authoritative_object_owner(cursor, owner_role)
         _assert_p3_function_security(cursor)
         _assert_control_function_security(cursor)
+        _assert_p4b_function_security(cursor)
 
         role = sql.Identifier(curator_role)
         database = sql.Identifier(database_name)
@@ -602,6 +672,7 @@ def verify_memory_curator_role(owner_dsn: str, curator_role: str) -> MemoryCurat
         _assert_curator_privileges(cursor, curator_role, database_name)
         _assert_p3_function_security(cursor)
         _assert_control_function_security(cursor)
+        _assert_p4b_function_security(cursor)
         _assert_no_public_privileges(cursor)
         _assert_public_schema_inventory(cursor)
     return MemoryCuratorRoleEvidence(owner_role, curator_role, database_name)
@@ -704,7 +775,13 @@ def _assert_authoritative_object_owner(cursor: psycopg.Cursor[object], owner_rol
                   'approved_reflection_sources', 'memory_artifacts',
                   'memory_artifact_sources', 'memory_artifact_state_events',
                   'memory_promotion_history', 'memory_current_pointer',
-                  'memory_curation_audits'
+                  'memory_curation_audits',
+                  'p4_source_records', 'security_identities',
+                  'security_identity_sources', 'security_identity_heads',
+                  'corporate_action_events', 'corporate_action_event_sources',
+                  'corporate_action_event_head',
+                  'security_quarantine_decisions',
+                  'security_quarantine_decision_sources'
               )
             UNION ALL
             SELECT pg_catalog.pg_get_userbyid(p.proowner) AS owner_name
@@ -736,7 +813,10 @@ def _assert_authoritative_object_owner(cursor: psycopg.Cursor[object], owner_rol
                   'promote_memory_artifact', 'current_memory_artifact',
                   'current_memory_pointer_artifact',
                   'p3f_text_is_safe', 'p3f_instruction_text_is_safe',
-                  'p3f_fact_text_is_closed'
+                  'p3f_fact_text_is_closed',
+                  'append_p4_source_record', 'append_security_identity',
+                  'append_corporate_action_event', 'record_quarantine_decision',
+                  'guard_confirmed_corporate_action_event'
               )
         ) AS owners
         """
@@ -970,6 +1050,67 @@ def _assert_p3_function_security(cursor: psycopg.Cursor[object]) -> None:
         if row != (True, expected_path):
             raise PostgresRoleError(
                 "P3 function security configuration does not match the approved set"
+            )
+
+
+def _assert_p4b_runtime_privileges(cursor: psycopg.Cursor[object], runtime_role: str) -> None:
+    """P4-B tables are read-only for the runtime; writes flow only through the four functions."""
+
+    tables = (
+        "p4_source_records",
+        "security_identities",
+        "security_identity_sources",
+        "security_identity_heads",
+        "corporate_action_events",
+        "corporate_action_event_sources",
+        "corporate_action_event_head",
+        "security_quarantine_decisions",
+        "security_quarantine_decision_sources",
+    )
+    for table in tables:
+        cursor.execute(
+            "SELECT "
+            "has_table_privilege(%s, %s, 'SELECT'), "
+            "has_table_privilege(%s, %s, 'INSERT'), "
+            "has_table_privilege(%s, %s, 'UPDATE'), "
+            "has_table_privilege(%s, %s, 'DELETE'), "
+            "has_table_privilege(%s, %s, 'TRUNCATE'), "
+            "has_table_privilege(%s, %s, 'REFERENCES'), "
+            "has_table_privilege(%s, %s, 'TRIGGER')",
+            tuple(value for _ in range(7) for value in (runtime_role, f"public.{table}")),
+        )
+        if cursor.fetchone() != (True, False, False, False, False, False, False):
+            raise PostgresRoleError(
+                "runtime role P4-B table privileges do not match the approved set"
+            )
+
+    for signature in _P4B_FUNCTION_SIGNATURES:
+        cursor.execute(
+            "SELECT has_function_privilege(%s, %s, 'EXECUTE')",
+            (runtime_role, signature),
+        )
+        if cursor.fetchone() != (True,):
+            raise PostgresRoleError(
+                "runtime role P4-B function privileges do not match the approved set"
+            )
+
+
+def _assert_p4b_function_security(cursor: psycopg.Cursor[object]) -> None:
+    """Every P4-B authority function must retain definer rights and a fixed path."""
+
+    for signature in _P4B_FUNCTION_SIGNATURES:
+        cursor.execute(
+            """
+            SELECT p.prosecdef, p.proconfig
+            FROM pg_catalog.pg_proc AS p
+            WHERE p.oid = pg_catalog.to_regprocedure(%s)
+            """,
+            (signature,),
+        )
+        if cursor.fetchone() != (True, ["search_path=pg_catalog, public, pg_temp"]):
+            raise PostgresRoleError(
+                "P4-B security-master function security configuration does not match "
+                "the approved set"
             )
 
 

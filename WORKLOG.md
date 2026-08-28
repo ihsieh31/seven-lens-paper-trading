@@ -3,6 +3,128 @@
 本檔只保留可影響目前決策的里程碑。逐輪缺陷、命令輸出與已被取代的敘述保留於 Git history；
 目前狀態以 `PROJECT_HANDOFF.md` 與 `PROGRESS.md` 為準。
 
+## 2026-08-28 — PostgreSQL integration OOM remediation
+
+- 排查P3-F首個`mark_validated`錯誤後確認SQL不是根因：單一P3-F測試與整個P3-F PostgreSQL檔案均可通過；
+  PostgreSQL server log顯示`checkpointer process ... terminated by signal 9: Killed`，容器狀態為
+  `OOMKilled=true`，並在recovery期間造成後續connection errors。WAL約640–650 MB且資料目錄位於tmpfs，
+  與本機Docker VM資源壓力一致。
+- `scripts/run_postgres_integration.sh`改用Docker disk-backed anonymous volume；保留random localhost port、
+  fake credentials、exact container identity cleanup。`tests/test_p1_c3_ci.py`同步改為檢查該storage contract。
+- 驗證：受影響static/cleanup tests `17 passed`；P4-A acceptance tests `372 passed`；P4-B acceptance tests
+  `132 passed`；`./scripts/verify_p1.sh`為`1878 passed, 256 deselected`；fresh
+  `./scripts/verify_p1.sh --postgres`為`1878 passed, 256 deselected`加`254 passed, 2 deselected`，未再出現OOM。
+- 本輪沒有credential／Keychain讀取、外部source／model／broker呼叫、stage、commit或push。
+
+## 2026-08-28 — P4-A／P4-B fresh independent acceptance closure
+
+- P4-A依`P4A_ACCEPTANCE_PROMPT.md`完成fresh independent acceptance，verdict為`Accepted`、Gate狀態為`Closed`；
+  focused P4-A＋secret／Paper-only invariants為`372 passed`。
+- P4-B依`P4B_ACCEPTANCE_PROMPT.md`完成fresh independent acceptance，verdict為`Accepted`、Gate狀態為`Closed`；
+  focused P4-B＋Paper-only invariants為`132 passed`；fresh PostgreSQL 16 integration為`256 passed, 2 deselected,
+  0 skipped`，同輪non-integration為`1878 passed, 256 deselected`。
+- 修復後的公開入口／對抗重驗確認：blocked head維持`entry_blocked`；direct `ELIGIBLE`與未知payload均以SQLSTATE
+  `23514`拒絕；owner-safe readback為`entry_blocked`，eligible與extra-payload rows均為`0`。source transport、SEC與
+  FRED adversarial PoC均按預期通過；結論為`no actionable findings`。
+- 本輪未讀Keychain、未呼叫provider／model／broker；P4仍Paper-only、zero-submit，P4-C～F未開始，完整P4仍為
+  `In progress`。未commit、未push。
+
+## 2026-08-28 — P4-B implementation completed（pending independent acceptance）
+
+- 依`P4B_IMPLEMENTATION_PROMPT.md`完成bounded P4-B implementation：point-in-time security identity resolver、
+  append-only source／corporate-action／quarantine contracts、source version／supersession lineage，以及
+  in-memory與PostgreSQL authority。公開入口為`SecurityMasterService`；validate、identity resolve、durable
+  block、confirmation、CAS transition、readback與bounded telemetry的失敗順序固定且不暴露raw payload。
+- 完成forward/reverse split的DETECTED／CONFIRMED／REVIEW_REQUIRED狀態、ratio／effective-date／identity／
+  source-ref一致性、source correction／withdrawal與三層quarantine；historical replay以decision cutoff重建
+  source heads，禁止以當前修正版污染過去決策。沒有P4-C、Risk／portfolio／quantity／OrderIntent、broker或
+  model authority，也沒有關閉OPEN-037。
+- PostgreSQL migration `0020`加入append-only tables、security-definer append／CAS functions、exact
+  canonical wire key／producer版本、source advisory lock、current-at decision cutoff與runtime ACL。新增
+  P4-B專用integration tests涵蓋up/down/up、兩連線CAS、confirm-vs-withdraw race、source correction、
+  telemetry failure與runtime role。
+- 證據：focused P4-B＋source invariants `131 passed`；真實PostgreSQL 16 P4-B suite `7 passed`。完整PG套件
+  長跑時本機Docker container出現`oom_killed=true`，所以aggregate PG zero-skip evidence仍是環境缺口；
+  最終non-integration `./scripts/verify_p1.sh`為`1870 passed, 252 deselected`，Ruff format/check、mypy與
+  `git diff --check`全綠。P4-B仍為implementation completed、pending independent acceptance，且需先有P4-A
+  fresh Accepted。
+- 本輪沒有credential／Keychain讀取、外部source／model／broker呼叫、stage、commit或push；HEAD仍為
+  `10995737c32b82b8bf9bc9c0704a46e09fed8628`。
+
+## 2026-08-28 — P4-A第0C節ADR-039 SEC delta實作完成（pending independent acceptance）
+
+- 依`P4A_IMPLEMENTATION_PROMPT.md`第0C節完成SEC EDGAR adapter補充實作：`roles.py`移除可傳任意
+  concept URL的`companyconcept` endpoint，SEC manifest只保留`submissions`與`companyfacts`兩個
+  exact-host GET endpoint；`sec_edgar.py`全面改寫。
+- `parse_submissions`新增top-level四位數SIC point-in-time observation：僅接受1～4位數字文字、
+  zero-pad至四位（不做任何mapping/guess），missing時仍輸出filings、invalid/conflict為typed
+  `SourceSchemaDriftError`；SIC record payload只含`cik_padded`與`sic`，絕不稱作sector/GICS。
+- `parse_companyfacts`只接受五個exact `(taxonomy,concept)` allowlist（us-gaap NetIncomeLoss／
+  NetCashProvidedByUsedInOperatingActivities／Assets／PaymentsToAcquirePropertyPlantAndEquipment、
+  dei EntityCommonStockSharesOutstanding），不做suffix/case-fold/extension/first-match；unknown／
+  extension／case-variant concept回傳空tuple。每筆fact保存CIK、taxonomy、concept、unit、exact
+  Decimal value、start?/end、fy、fp、form、accession、filed、matched-submission acceptance、
+  retrieved_at與hashes；`available_at`只能來自caller提供的`submission_acceptance` accession
+  closure，未join即typed failure，不猜available time。
+- Fail-closed：bool/float/NaN value、重複`(start,end)` context、unit欄位與group衝突、future
+  acceptance、period end/filed晚於retrieval、反轉period、oversize byte budget、unbounded unit
+  array、非整數CIK與unknown top-level keys全數拒絕。capex concept保留provider原值與sign
+  convention（無`abs()`），payload多一個`sign_convention`欄位。P4-A僅normalization，無
+  TTM/factor/market cap/SIC Division/Risk計算。
+- 新增約26條offline adversarial tests於`tests/test_p4a_adapter_sec_edgar.py`（SIC 0100/1000/
+  missing/non-numeric/length、五concept valid、unknown/extension/case concept、duplicate
+  unit/context、bool/float/NaN、YTD vs quarter、accession missing/conflict、future acceptance、
+  oversize、canonical replay byte-identical）；全部offline fixtures，network call=0。
+- 驗證：focused P4-A＋source invariants `361 passed`；non-integration full suite `1738 passed,
+  245 deselected`；`./scripts/verify_p1.sh` `1738 passed`；Ruff format/check、mypy（117 files）、
+  `git diff --check`全綠。沒有migration、PostgreSQL變更、credential/Keychain讀取、外部
+  API/model/broker呼叫，也未commit/push。
+- 狀態：P4-A implementation completed、pending independent acceptance；下一步由fresh session
+  依`P4A_ACCEPTANCE_PROMPT.md`驗收，驗收前不得開始P4-B。
+
+## 2026-08-28 — ADR-039四項P4設定核准與prompt封閉（docs-only）
+
+- 使用者明確核准保守exact版本：九項`p4-factor-v1`、ordinary-common-stock-only的
+  `sec-sic-division-v1`、126-session connected-components `p4-correlation-cluster-v1`，以及以前一
+  regular-session close FULL+CLEAN NAV為分母、不除以2／不淨額抵銷的`p4-gross-turnover-v1`。
+- 新增ADR-039並把exact formulas、taxonomy、unknown/future/edge semantics、golden vectors、禁止事項與驗收oracle寫入
+  P4 program plan及P4-C／D implementation/acceptance prompts；P4-F Final Gate同步要求四個immutable manifest hashes。
+- Read-only source audit確認現有P4-A SEC adapter只解析submissions CIK/accession/form metadata，缺ADR-039必需的top-level
+  SIC與五個Company Facts concepts。因此已在P4-A implementation／acceptance prompts加入0C補充delta；P4-A目前不能
+  直接驗收，下一步只允許完成該delta，之後fresh驗收，不能先做P4-B。
+- 本輪未修改P4 runtime source/tests，未呼叫source/model/broker、未讀Keychain、未commit／push。
+
+## 2026-08-27 — P4設定確認與program plan（docs-only）
+
+- 使用者核准單一Alpaca Paper帳戶、單一long-only策略、`short_enabled=false`與保守profile：long/total
+  gross 90%、cash 10%、15檔、單股5%、sector 25%、cluster 30%、normal turnover 20%、ADV 0.1%、
+  daily-loss 1%停止新增曝險、drawdown 8% freeze。
+- 核准整股向零取整、`max(USD100,NAV*0.25%)`minimum adjustment、0.5% rebalance band、5秒quote、
+  30bps spread與25bps初始collar；這些門檻留P5 walk-forward校準。
+- 資料固定零付費：Alpaca delayed historical SIP／IEX limited、SEC、FRED/ALFRED、Treasury/BLS/BEA/EIA、
+  exchange/IR、Tavily/GDELT與yfinance supplement依封閉source role使用。免費key仍需typed SecretRef；
+  本輪未申請／讀寫credential、未呼叫source/model/broker。
+- 新增`P4_PROGRAM_PLAN.md`與ADR-038；其後按使用者要求把P4收斂為A～F六個Gate，為每個Gate各建立一份
+  implementation prompt與fresh acceptance prompt（共12檔），並同步handoff/progress、master plan、architecture、
+  roadmap、sources、risk與issues。只修改文件；P4 implementation仍Not started。
+- 依使用者要求將12份P4 prompts擴寫為弱模型專用規格：逐檔新增明確可動／禁動範圍、先紅後綠小步、停止條件、
+  Definition of Done、獨立PoC／真實PG16審查順序、finding分級與mandatory evidence matrix。交叉審查發現P4-C前仍缺
+  exact factor、zero-cost sector taxonomy、correlation cluster與turnover公式；已明列為使用者決策，不允許模型自行猜。
+
+## 2026-08-27 — 多來源與拆／合股保護 docs-only 規劃
+
+- 使用者在P1–P3 remediation Accepted後核准兩項future-phase需求：把Alpaca＋Tavily擴為多來源資訊層；
+  買入前排除confirmed forward/reverse split，持有long確認後跳過分析委員自動退出，並記錄明確原因、收益與
+  下一輪可見記憶。
+- ADR-036固定source roles與point-in-time邊界：Alpaca行情authority；yfinance supplement；FRED/ALFRED＋
+  Treasury/BLS/BEA/EIA；SEC/IR；Alpaca Corporate Actions＋SEC/issuer/exchange；Tavily/GDELT discovery。
+- ADR-037固定拆／合股狀態與authority：發現先entry block；正式來源確認才auto-exit；cancel/resolve、
+  FULL reconciliation、regular-hours、price collar、idempotency均不可跳過。P&L只由fills＋FULL reconciliation
+  計算；memory標`OPERATIONAL_EXIT_NOT_THESIS_FAILURE`。第一版short BUY-to-cover不自動執行。
+- 同步README、handoff/progress、master plan、architecture、sources、operations、security、roadmap、
+  decisions/issues/risk與memory spec。只修改規劃文件；未改runtime/migration/tests，未讀credential、未呼叫
+  source/model/broker，未commit／push。P4～P8仍Not started。
+
 ## 2026-08-27 — P1–P3 full remediation independent acceptance
 
 - 依使用者授權，針對當前 local worktree 完成只涵蓋 P1–P3 的 read-only independent acceptance；未修改、
@@ -562,3 +684,47 @@
   `1386 passed, 238 deselected`。Ruff format/check、mypy、`git diff --check` 全綠。
 - 狀態（實作驗證當下）：Batch E/F/G implementation verification completed；當時仍待 A–G independent
   acceptance。其後本檔最上方的 2026-08-27 acceptance 已完成；未 commit、未 push、未呼叫 provider/model/broker。
+
+## 2026-08-27 — P4-A implementation completed pending independent acceptance
+
+- 依`P4A_IMPLEMENTATION_PROMPT.md`完成P4-A全部8步；起點`1099573`（P1～P3 Closed），工作樹既有
+  dirty/untracked文件與P4 prompts全數保留未動。狀態僅為implementation；未commit、未push、
+  外部呼叫0（broker/model/POST/live GET均為0）。
+- A2 `config/p4.py`：`P4PolicyConfig` frozen/slots，14個fixed-scale Decimal＋4 int＋6 bool全欄位
+  釘死approved profile；domain-separated SHA-256（`seven-lens.p4.policy-config.v1`）；wire canonical
+  parse拒絕bool-as-int、subclass、NaN/Inf、negative zero、未知欄位、±最小單位漂移與hash tamper。
+- A3 `sources/roles.py`：封閉4種SourceRole＋15個P4SourceFamily完整manifest（exact host/path
+  template/endpoint regex/query allowlist/byte/timeout/rate/pagination/MIME/rights/storage/producer）；
+  role/coverage/auth per-family pinned，DISCOVERY→AUTHORITY等升權在建構期即拒絕；IEX以
+  `AUTHORITY`＋`LIMITED_MARKET_COVERAGE`標記；Tavily NON_GET_UPSTREAM、yfinance RIGHTS_UNVERIFIED、
+  FRED/BLS/BEA/EIA CREDENTIAL_QUERY_NOT_PERMITTED（query-key上游在「secret不進URL」邊界下不可執行）。
+  `security/secret_values.py`僅新增FRED/BLS/BEA/EIA四個`SecretKind`（零付費註冊key需typed SecretRef），
+  wire/服務映射additive。
+- A4 `sources/adapters/transport.py`：policy-bound GET-only transport；無任意URL/method/header入口，
+  redirect拒絕（final_url比對＋3xx）、408/429/5xx→typed class、timeout、MIME、decompressed byte
+  budget、重試=0、bounded typed failures；audit只含family/sanitized endpoint id/status class/latency/
+  bytes/content hash；`PreparedRequest`/`FetchResult` repr不含URL、query或secret。
+- A5 records＋15個family adapter：`NormalizedSourceRecord`（role/coverage/rights由registry推導，
+  DISCOVERY/RESEARCH_SUPPLEMENT強制material=false，IEX強制coverage warning；未知時間一律None，
+  provider時間戳僅接受bounded canonical變體）；Alpaca assets/bars（feed entitlement錯誤禁止靜默退IEX）/
+  IEX quote/corporate actions（split detection-only、永不確認）；SEC submissions（CIK/accession/平行陣列）；
+  issuer IR/exchange notice（註冊host、HTTPS、發布時間必填）；FRED/ALFRED（缺explicit realtime
+  window即`VintageSemanticsError`）；Treasury/BLS/BEA/EIA各自獨立parser（observation period與release
+  time分離、error envelope fail closed）；Tavily/GDELT discovery-only；yfinance supplement-only。
+- A6 persistence範圍決策：本gate無DB變更、無migration（下一個可用編號0020未動）。P3 evidence表
+  family CHECK無法表達macro/Alpaca family且不得改0010；預建P4表會搶佔P4-B/C schema設計。交付
+  `application/ports/p4_source_records.py`（append-only契約）＋`sources/adapters/in_memory_p4_records.py`
+  （same-hash idempotent、different-hash需explicit supersession、無update/delete）；真實PG持久化、ACL與
+  concurrency證據留給P4-B security master gate。
+- A7 capability closure：AST掃描＋constructor測試證明P4模組（config/p4、sources/roles、adapters全部）
+  無HTTP backend/socket/psycopg/Keychain/execution/broker/model import、無environ/getenv、無
+  submit/cancel字串；transport與parser failure皆零record persist；role軸恰好4種。
+- 驗證：focused `tests/test_p4a_*.py`＋secret/paper-only invariants `327 passed`；`verify_p1.sh`
+  完整non-integration `1704 passed, 245 deselected`；真實PG16 `242 passed, 2 deselected (live gate),
+  1 error`——該error為`test_runtime_role_verification_rejects_a_missing_guard_trigger`伺服器連線
+  crash，已在乾淨HEAD（P4-A檔案全數移出）重跑兩次同樣重現（1～2 errors），屬既存環境flake與本輪
+  變更無關；Ruff format/check、mypy（217檔）、`git diff --check`全綠。
+- 已知邊界：query-string-key macro family（FRED/BLS/BEA/EIA）在現行「credential不進URL」transport
+  邊界下標記不可執行，live probe需另案授權credential-injection設計；SEC User-Agent身分常數需在
+  live授權時替換為真實聯絡資訊；上述連同全部live evidence（NOT AUTHORIZED）留待fresh P4-A
+  independent acceptance按`P4A_ACCEPTANCE_PROMPT.md`判定。

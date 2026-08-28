@@ -6,9 +6,14 @@
 
 ```mermaid
 flowchart LR
-    S["Public / free sources"] --> I["Ingestion & source manifest"]
-    A["Alpaca market data / calendar"] --> I
+    S["SEC / IR / exchanges / government"] --> I["Ingestion & source manifest"]
+    A["Alpaca market data / corporate actions"] --> I
+    D["Tavily / GDELT discovery"] --> I
+    Y["yfinance research supplement"] --> I
     I --> E["Immutable evidence store"]
+    I --> C["Corporate-action confirmation & quarantine"]
+    C --> Q
+    C -. "confirmed held long; no LLM" .-> R
     E --> Q["Quant & evidence screening"]
     Q --> A4["Technical / Fundamentals / News / Sentiment"]
     A4 --> DB["Bull / Bear debate"]
@@ -36,9 +41,9 @@ flowchart LR
 
 | 區域 | 可讀 | 可寫 | 明確禁止 |
 |---|---|---|---|
-| Source ingestion | 公開網頁、API、cache | raw store、source metadata | broker credentials、orders |
+| Source ingestion | exact-host GET-only公開網頁／API、cache、per-source scoped secret | raw store、source metadata、security-master candidates | broker credentials、orders、source-role自動升權 |
 | LLM analysis workers | sanitized `AnalysisInput`／EvidencePacket、固定 graph/prompt/model versions、去識別化完整 portfolio snapshot | analyst reports、兩種 debate state、Trader plan、`PortfolioProposal` | shell、任意網路、portfolio/order/ledger DB write、broker calls／credentials |
-| Risk engine | proposal、權威 ledger/account/market state、limits | RiskDecision、一次 rejection feedback、核准 TargetPortfolio／OrderIntent | 讓 LLM 放寬 runtime limits、接受自由文字 action |
+| Risk engine | proposal、權威 ledger/account/market state、immutable P4 policy | RiskDecision、一次 rejection feedback、核准long-only TargetPortfolio／zero-submit intent plan | 讓 LLM 放寬runtime limits、short authority、接受自由文字action |
 | Execution worker | approved OrderIntent、Paper credential | outbox/broker order mapping | 研究內容、live endpoint |
 | Reconciler | broker account/orders/positions/fills | authoritative broker mirror | 新增策略委託 |
 | Control plane | system state | pause/cancel/paper-flatten commands | live account operations |
@@ -53,8 +58,9 @@ flowchart LR
 src/seven_lens/
   config/          typed settings, endpoint allowlist, feature flags
   clock/           NYSE calendar, deadlines, job instances, leases
-  sources/         Tavily, SEC, IR, web capture, manifests
-  market_data/     bars, quotes, corporate actions, quality checks
+  sources/         Tavily/GDELT discovery, SEC/IR/government/exchange adapters, manifests
+  market_data/     Alpaca bars/quotes/corporate actions, yfinance supplement, quality checks
+  securities/      point-in-time identity/symbol lineage and corporate-action quarantine
   universe/        point-in-time universe and filters
   screening/       quant factors and evidence prioritization
   analysis/        TradingAgents analysts, two debates, managers, trader, reflection
@@ -82,14 +88,18 @@ src/seven_lens/
 ### 4.1 SourceFragment
 
 ```text
-source_id, canonical_url, author, publisher
-published_at, discovered_at, retrieved_at, available_at
+source_id, canonical_url, author, publisher, source_role
+provider_record_id, security_identity_refs
+observation_period, published_at, discovered_at, retrieved_at, available_at
+effective_at?, vintage_date?
 content_hash, excerpt, content_type, language
 license_status, access_method, primary_source, robots_status
 claim_tags, ticker_tags, supersedes, tombstone
 ```
 
 `available_at` 是歷史模擬可讀取的最早時間；不能只用文章自稱的 `published_at`。
+`source_role` 僅允許 `AUTHORITY|CONFIRMATION|DISCOVERY|RESEARCH_SUPPLEMENT`；adapter 或 fallback 不得在
+runtime 自動改變角色。FRED/ALFRED observation period、vintage 與 retrieval time 必須分開。
 
 ### 4.2 EvidencePacket
 
@@ -136,17 +146,31 @@ PortfolioProposal: proposal_id, portfolio_snapshot_hash, window,
 
 `PortfolioProposal` 是要求，不是已核准委託。它不含 share quantity、order type、broker endpoint、credential 或長篇建議文字；只有 `VALID` 可交給 deterministic Risk Engine。每個 target weight 的絕對值上限 15%，但 schema 通過不代表風控通過。
 
+P3 schema維持可表達±15%以保留既有immutable contract；P4第一版policy另行收緊為long-only、單股5%、
+long/total gross 90%、現金至少10%、15檔、SEC SIC Division sector 25%、126-session correlation cluster 30%、
+gross normal turnover 20%。short request會以
+`SHORT_DISABLED`拒絕，不能形成target或intent。
+
+上述分類與計算固定由ADR-039四個immutable manifests執行：`p4-factor-v1`、
+`sec-sic-division-v1`、`p4-correlation-cluster-v1`、`p4-gross-turnover-v1`。runtime/env/model不得
+override；manifest hash不符即fail closed。Sector只從point-in-time SEC SIC映射，不使用GICS名稱或推測分類。
+
 ### 4.5 TargetPortfolio → OrderIntent
 
 ```text
 RiskDecision: review_round: 1|2, status: APPROVED|REJECTED|NO_TRADE,
               accepted_targets, rejected_targets, reason_codes,
               remaining_limits, constraints_snapshot
-TargetPortfolio: nav_ref, signed_target_weights, constraints_snapshot,
+TargetPortfolio: nav_ref, long_target_weights, constraints_snapshot,
                  approved_risk_decision_id
-OrderIntent: symbol, side, quantity, intent_type, price_collar,
-             earliest_submit_at, cancel_at, target_version, idempotency_key
+IntentPlan: symbol, side, whole_share_quantity, intent_type, price_collar,
+            earliest_submit_at, cancel_at, target_version, idempotency_key,
+            status: APPROVED_NO_SUBMIT
 ```
+
+P4只產生zero-submit `IntentPlan`；轉為可進P2 outbox的`OrderIntent`屬後續Gate。Quantity使用FULL+CLEAN
+reconciliation後的NAV／projected positions，向零取整，並套用minimum adjustment、rebalance band、quote age、
+spread與collar。P4 composition不得持有broker submit port。
 
 ### 4.6 Broker objects
 
@@ -156,6 +180,26 @@ Fill: execution_id, broker_order_id, qty, price, occurred_at
 ReconciliationResult: broker_snapshot_hash, ledger_snapshot_hash,
                       mismatches, repair_actions, status
 ```
+
+### 4.7 CorporateActionRecord／ExitOutcome（P4-B record/quarantine已驗收Closed；exit仍為P4-E～P7 planned）
+
+```text
+CorporateActionRecord:
+  event_id, security_id, symbol_lineage, event_type: FORWARD_SPLIT|REVERSE_SPLIT
+  ratio, declaration_at, effective_at, ex_date
+  source_record_ids[], confirmation_status, confirmed_at
+  state: DETECTED|ENTRY_BLOCKED|CONFIRMED|EXIT_PENDING|EXITED|POST_EVENT_RECONCILED|REVIEW_REQUIRED
+
+CorporateActionExitOutcome:
+  event_id, intent_id, order_ids[], fill_ids[], reconciliation_id
+  quantity, cost_basis, average_exit_price
+  realized_gross_pnl, fees, realized_net_pnl, return_rate, holding_period
+  reason_code: CONFIRMED_FORWARD_SPLIT|CONFIRMED_REVERSE_SPLIT
+```
+
+只有 SEC／issuer／listing exchange 正式公告閉合 identity、ratio、日期與 point-in-time visibility 後才是
+`CONFIRMED`。只有 Alpaca 或 discovery/supplement 記錄時可 `ENTRY_BLOCKED`，不可自動退出。最終 P&L 只從
+權威 fills＋FULL reconciliation 計算，不相信 intent 或 broker UI 預估。
 
 ## 5. 狀態機
 
@@ -181,6 +225,22 @@ CREATED -> RISK_APPROVED -> OUTBOX_PENDING -> SUBMITTING
 
 另有 `REJECTED`、`EXPIRED`、`UNKNOWN`。timeout 後先進 `UNKNOWN` 並用 `client_order_id` 查詢；禁止直接重送。
 
+### 5.3 拆股／合股保護
+
+```text
+DETECTED -> ENTRY_BLOCKED -> CONFIRMED -> EXIT_PENDING -> EXITED
+                                        -> REVIEW_REQUIRED
+EXITED -> POST_EVENT_RECONCILED -> ENTRY_ELIGIBLE
+```
+
+- 候選建立、P4核准與broker submit前三次重驗；`ENTRY_BLOCKED` 不能建立新的 analysis authority或新增曝險。
+- 已持有 long 且事件 `CONFIRMED` 時跳過LLM，但不跳過 symbol orders解析／取消、FULL+CLEAN reconciliation、
+  tradability、regular-hours window、price collar、idempotent outbox與submit-time recheck。
+- 新 authority 使用 `CORPORATE_ACTION_EXIT`，不能冒充一般 Risk approval或人工全帳戶 `flatten_paper`。
+- effective date 已過、停牌、identity／quantity失真、來源撤回／衝突或未能安全平倉時進
+  `REVIEW_REQUIRED`，pause entries並告警；不得用舊quantity盲目下單。
+- 第一版不自動 BUY-to-cover short；任何 short corporate-action exit 需新的authority與驗收。
+
 ## 6. 排程與併發
 
 - 本機 `launchd` 保持一個 supervisor 常駐，程式自行根據 Alpaca calendar 建立當日 job instances。
@@ -194,9 +254,10 @@ CREATED -> RISK_APPROVED -> OUTBOX_PENDING -> SUBMITTING
 
 ### PostgreSQL（權威）
 
-- run/job 狀態、設定 snapshot、universe metadata；
+- run/job 狀態、設定 snapshot、point-in-time security master／universe metadata；
 - analyst reports/debate states/investment decisions/target/risk decisions；
-- immutable daily reflection、open-position observations、Risk rejection history 與 memory-curation versions；
+- immutable daily reflection、open-position observations、Risk rejection、corporate-action confirmation／exit
+  outcome／P&L lineage 與 memory-curation versions；
 - intents/outbox/orders/fills；
 - broker account/position mirrors、lots、NAV；
 - audit events、control commands、alerts、model calls。
@@ -227,6 +288,8 @@ serialized byte budgets。大型raw evidence只能進未來另行驗收的conten
 - 每日即使部位未平倉也寫入 bounded reflection；權威原始 decisions/outcomes/rejections 只追加，不刪除。
 - 每週六以獨立 memory-curation skill 產生濃縮版本，最多 4,000 行；只保留反覆錯誤、Risk rejection、有效／失敗模式、forecast calibration、position lesson 與 regime。
 - 濃縮 memory 是衍生資料，可重建且有 source record ids；不得回寫或取代 immutable audit，也不得讓未來 outcome 進入歷史 `as_of` run。
+- Corporate-action記憶必須標成Paper operational-risk exit，不得被整理器改寫為thesis failure；只有成交且
+  FULL reconciliation後的收益可進realized outcome。
 
 ### LLM provider adapters
 
@@ -247,7 +310,7 @@ serialized byte budgets。大型raw evidence只能進未來另行驗收的conten
 
 - `SecretProvider` application port 只接受 typed、exact `SecretRef`，不提供 list/search/write/update/delete/export；domain/application 不依賴 PyObjC、Keychain、環境變數或資料庫。
 - macOS production adapter 只以 Security.framework `SecItemCopyMatching` 查 generic password，固定 service/account mapping、`match all` 與禁止 authentication UI；零筆、多筆、拒絕、locked、timeout、malformed 或 backend failure 全部 fail closed，沒有 env／argv／DB／第二 provider fallback。
-- `ScopedSecretProvider` 在 backend call 前強制 exact-reference allowlist。execution scope 才可取得 Alpaca Paper refs；research/LLM scope 只可取得 Agnes／OpenCode／未來經核准的 OpenAI／Tavily refs。這是 application capability boundary，不是 OS sandbox。
+- `ScopedSecretProvider` 在 backend call 前強制 exact-reference allowlist。execution scope 才可取得 Alpaca Paper refs；research/LLM scope 只可取得 Agnes／OpenCode／未來經核准的 OpenAI／Tavily refs。未來 FRED／BLS／BEA／EIA 等 key 必須各有新的 typed `SecretRef` 與 exact-host GET-only adapter；公開 SEC／IR／exchange／GDELT 也不能因此取得任意網路能力。這是 application capability boundary，不是 OS sandbox。
 - P3-E只啟用exact ref `seven-lens.paper-trading.agnes.api-key/primary`；OpenCode與其他provider refs不在
   research composition scope，未來需新決策及gate才能新增。
 - Alpaca/OpenAI account 固定為 `primary`；Tavily account 使用既有規則驗證的非秘密 `account_id`。Tavily 每個 key 只有 account metadata、compliance、quota、usage、reset/cooldown 狀態可進 DB，只有 `AUTHORIZED_ACCOUNT_POOL` 才能啟用多 key router。
@@ -264,15 +327,22 @@ serialized byte budgets。大型raw evidence只能進未來另行驗收的conten
 6. WebSocket `trade_updates` 低延遲更新；REST 是最終 reconciliation 依據。
 7. 到 `cancel_at` 取消未成交；partial fill 更新實際部位，不為達 target 盲目追價。
 8. 每次 window 後比較 broker cash/orders/positions/fills 與本地 ledger。
+9. `CORPORATE_ACTION_EXIT` submit 前重做事件 authority、identity、effective date與position quantity closure；
+   成交後以FULL reconciliation封閉結果並計算已實現收益。
 
 ## 9. 正常窗口、同日交易與緊急分析
 
 - 第一窗口在開盤後 60 分鐘開始，處理全部持倉與最多 12 個候選；第二窗口在收盤前 90 分鐘開始，處理全部持倉與最多 5 個候選。
 - 完整 graph deadline 15 分鐘；時間不足、provider failover 仍失敗或 Risk 第二次拒絕都 `NO_TRADE`。
-- 正常日 turnover 上限 NAV 40%。同日獲利退出可用；同日虧損退出需結構化 reason code 與 evidence，不能只因為虧損。
+- P4 long-only profile的normal daily gross turnover上限NAV 20%；以前一regular-session close的FULL+CLEAN
+  reconciled NAV為分母，normal fills、working remainder與proposal使用absolute notional相加，不除以2且不得net。
+  同日獲利退出可用；同日虧損退出需結構化
+  reason code與evidence，不能只因為虧損。
 - 同日退出後可在正常窗口重新進場；不得藉此繞過 turnover、gross/net/name 或 borrow limits。
 - event monitor 只把經二次確認的事件送入緊急 graph：價格需雙來源且連續三個 fresh samples；官方 primary announcement 可單源確認新聞。衝突或延遲為 `DATA_CONFLICT`。
 - 緊急 graph 只分析受影響與高度相關持倉，只允許 `HOLD/REDUCE/CLOSE`，deadline 3 分鐘。未驗證事件不交給 LLM；deterministic hard-risk 仍可獨立產生 `RISK_EXIT`。
+- 確認的 forward/reverse split 不進緊急 graph：候選直接 quarantine；已持有 long 走 deterministic
+  `CORPORATE_ACTION_EXIT`。通知與日報必須明示事件類型、標的、來源、ratio、日期、成交與收益。
 - 半日市的各 cutoff 由 close time 相對計算。
 
 ## 10. Control plane

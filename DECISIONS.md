@@ -94,6 +94,7 @@
   conflict/stale/unverified不啟動緊急LLM。
 - memory：immutable raw records；P3-F才實作每日reflection與每週≤4,000行LLM-visible curation。
 - Future Analyst Plugin維持disabled，不進critical path。
+- 此ADR的P4 portfolio limits已由使用者後續ADR-038收緊；P3 proposal schema與歷史驗收不回寫。
 
 ### ADR-029 — P3-B與P3-C合併實作、獨立驗收
 
@@ -227,6 +228,87 @@
   command/audit persistence。
 - migration 0019 的 up/down pair、runtime ACL verifier、runtime direct-update PoC 與完整 PostgreSQL 16
   integration 是此 authority decision 的驗收證據。任何 privilege drift 必須使 provisioning／startup fail closed。
+
+### ADR-036 — 多來源角色不可因 fallback 自動升權
+
+- 日期：2026-08-27
+- 狀態：Accepted（架構決策；P4-A／P4-B相關source與security-master implementation已完成並獨立驗收Accepted／Closed，完整P4仍未完成）
+- 未來資料來源固定為 `AUTHORITY`、`CONFIRMATION`、`DISCOVERY`、`RESEARCH_SUPPLEMENT` 四種封閉角色；
+  adapter、設定或 outage fallback 不得在 runtime 自動改變角色。
+- 行情以 Alpaca 為 authority，yfinance 只作研究補充／異常比對；宏觀使用 FRED／ALFRED 並保留
+  Treasury／BLS／BEA／EIA 正式發布與 vintage；基本面以 SEC 為 authority、IR補充；Tavily／GDELT只作
+  discovery；交易所與 security-master authority 必須 point-in-time。
+- 每筆資料保存 observation/published/discovered/available/retrieved/effective/vintage 時間中適用者、
+  provider record ID、穩定security identity、content hash、rights與supersession lineage。衝突或material
+  authority缺失時禁止新增曝險，不以supplement靜默補值。
+- 每個新source family需新的exact-host GET-only adapter、redirect/schema/rate-limit/rights/as-of/failure gate；
+  API key使用typed scoped `SecretRef`。本ADR不授權真實下載、credential、付費feed或production使用。
+
+### ADR-037 — 拆股／合股 deterministic quarantine 與退出 authority
+
+- 日期：2026-08-27
+- 狀態：Accepted（架構規劃；P4-B quarantine已獨立驗收Accepted／Closed；P4-E/P7 exit authority仍未實作）
+- 第一版只涵蓋 `FORWARD_SPLIT`／`REVERSE_SPLIT`。候選、P4核准與submit前都重驗：事件一經發現先
+  `ENTRY_BLOCKED`；正式確認後候選不建立analysis run，不能交由LLM覆寫或重新納入。
+- 自動 `CONFIRMED` 需要穩定security identity、ratio、effective／ex-date、point-in-time可見性，以及至少一個
+  SEC／issuer IR／listing exchange正式公告且來源無衝突。只有Alpaca或discovery/supplement資料可禁止買入並
+  告警，但不足以自動平倉。
+- 已持有long確認事件後跳過LLM，走獨立 `CORPORATE_ACTION_EXIT`：先解析／取消該symbol working orders、
+  FULL+CLEAN reconciliation與position closure，再檢查tradability、regular-hours、price collar、deadline與
+  idempotency。它不是一般Risk approval，也不是現有人工全帳戶`flatten_paper`的隱性擴權。
+- effective date已過、停牌、identity／quantity失真、來源撤回／衝突或無法安全成交時不得盲目送單；進
+  `REVIEW_REQUIRED`、pause entries並告警。第一版不自動BUY-to-cover short，需新authority與獨立review。
+- 只有broker fills＋FULL reconciliation封閉後才標`EXITED`並計算realized gross/net P&L、return與holding
+  period。typed audit與通知須明示拆股／合股；衍生memory標示Paper operational-risk exit而非thesis failure。
+- P4只可產生no-submit intent；P5完成point-in-time replay；P6只shadow；P7首次真實Paper submit需exact使用者
+  授權與fresh independent acceptance。本ADR本身不授權任何order或broker call。
+
+### ADR-038 — P4單帳戶long-only保守風控與零付費資料profile
+
+- 日期：2026-08-27
+- 狀態：Accepted（使用者設定決策；P4-A／P4-B設定與boundary已獨立驗收Accepted／Closed，P4整體仍In progress）
+- deployment固定單一Alpaca Paper帳戶、單一`seven_lens_long`策略；`short_enabled=false`。P3仍可保存
+  short proposal語意，但P4只能typed拒絕，不能產生short target、SELL-to-open或BUY-to-cover intent。
+- hard limits固定long/total gross≤90%、short gross=0、最低現金10%、最多15檔、單股≤5%、sector≤25%、
+  cluster≤30%、normal daily turnover≤20%、單筆預期部位≤20日ADV 0.1%。不設最低曝險，沒有合格機會時
+  持有現金；Paper NAV單日跌1%停止新增曝險，高水位回撤8%只允許降風險。
+- 只用整股且delta向零取整；低於`max(USD 100, NAV*0.25%)`或target drift<NAV 0.5%的調整不建立intent。
+  quote age≤5秒、spread≤30bps、初始collar=25bps；任一缺失／衝突固定`NO_TRADE`。數值只可由P5
+  walk-forward＋新ADR調整，不能runtime override。
+- 資料固定零付費。P4可使用Alpaca delayed historical SIP與IEX latest quote，但IEX必須標記
+  `LIMITED_MARKET_COVERAGE`；yfinance只作supplement，不能補成交易authority。若P7前沒有可獨立驗收的完整
+  報價authority，Paper submit Gate維持Blocked。
+- 免費但需註冊的FRED/BEA/EIA等key仍是credential，使用typed `SecretRef`；申請、Keychain寫入、真實GET或
+  source下載都需要當次明確授權。完整模組、工作包與Gate見`P4_PROGRAM_PLAN.md`。
+
+### ADR-039 — P4 Factor V1、SEC SIC sector、correlation cluster與gross turnover
+
+- 日期：2026-08-28
+- 狀態：Accepted（使用者明確核准；四個manifest依P4-C／D分段，P4-A SEC source delta已隨P4-A獨立驗收Accepted／Closed）
+- manifests固定為`p4-factor-v1`、`sec-sic-division-v1`、`p4-correlation-cluster-v1`與
+  `p4-gross-turnover-v1`；runtime/env/model/source不得改公式、權重、threshold或taxonomy。
+- Universe第一版只接受ordinary common stock。ETF、preferred、warrant、unit、CEF、ETN、OTC、crypto、options與
+  leveraged/inverse products排除；未來納入ETF需另行核准免費classification/holdings authority。
+- Factor V1只用cutoff前可見資料。Trend 35%＝126→21與252→21 session price return percentile平均；Quality
+  25%＝TTM ROA、CFO/assets、`(CFO-net income)/assets` percentile平均；Value 15%＝TTM earnings yield與FCF yield
+  percentile平均；Low Risk 25%＝63-session annualized volatility及252-session max drawdown的反向percentile平均。
+  Event不計directional alpha，只作typed material-evidence／quarantine hard gate。
+- 所有subfactor必須完整；negative fundamental value是合法低值，missing/conflict/future/denominator<=0則排除。Raw
+  subfactor在完整eligible cross-section以nearest-rank 5%/95% winsorize，再以midrank percentile轉為[0,1]；tie依
+  composite→Trend→Quality→Value→Low Risk降序，最後stable security ID升序。
+- Sector固定`SEC_SIC_DIVISION_V1`，使用cutoff前最新無衝突EDGAR SIC。Major groups 01–09=A、10–14=B、15–17=C、
+  20–39=D、40–49=E、50–51=F、52–59=G、60–67=H、70–89=I、91–97=J；gap、98、99、missing/conflict為
+  `SECTOR_UNKNOWN`並禁止新增曝險。ADR-038的25% sector cap由此taxonomy執行，不得稱為GICS。
+- Cluster universe固定daily quant top100＋全部current long holdings。使用截至前一完整regular session的126個
+  point-in-time split-aware simple close returns；每pair至少100個共同觀測值。Pearson rho>=0.75建立無向edge，
+  connected components為cluster，singleton合法；資料不足／非有限／zero variance／pairwise coverage不足的security
+  為`CLUSTER_UNKNOWN`並禁止新增曝險。Cluster snapshot每日產生；30% cap不變。
+- Normal turnover固定gross traded notional，不除以2：分母為前一regular session close的FULL+CLEAN reconciled NAV；
+  分子為same-day normal fills absolute notional＋acknowledged working normal order remaining worst-case notional＋本次
+  proposal相對projected position的absolute proposed trade notional。等於20%可通過，超過即拒絕；missing/zero NAV、
+  UNKNOWN order/fill或分類不閉合即`NO_TRADE`。Confirmed corporate-action/hard-risk exits不受20% cap，但需獨立typed
+  path、數值上確實降風險並完整audit；不得以label繞過normal turnover。
+- 這些值只可由P5 point-in-time walk-forward與新ADR提案調整；不得回寫歷史manifests、policy snapshots或P4 evidence。
 
 ## Superseded／historical index
 

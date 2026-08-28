@@ -26,6 +26,8 @@ revocation outside this repository before investigation continues.
 - Logs, metrics, traces, audit payloads, exceptions, argv, environment, and committed files do
   not carry credentials or database DSNs.
 - Telemetry failure cannot change business state, transaction outcome, retry behavior, or audit.
+- A data-source outage cannot promote a discovery or research-supplement source into trading
+  authority. Source roles, hosts, redirects, rights, timestamps, and identities fail closed.
 
 ## Trust boundaries
 
@@ -37,12 +39,25 @@ raw mappings may exist only at the parsing edge; validated typed values are pass
 there is no generic `dict[str, object]` bag, attribute fallback, or permissive default at the
 execution boundary. A new setting requires its own type, validation, tests, and decision record.
 
+Future multi-source adapters follow the same boundary. Alpaca, FRED/ALFRED, BLS, BEA, EIA, SEC,
+issuer IR, GDELT, Nasdaq/NYSE, Tavily, and yfinance may not share a generic URL/client/config bag.
+Each source family requires an exact HTTPS host/path policy, redirect decision, response budget,
+pagination/rate-limit/schema parser, data role, rights record, and failure contract. yfinance is a
+research supplement only; Tavily/GDELT are discovery only. No outage or config value may promote
+them to market, filing, exchange, or corporate-action authority.
+
 ### Secrets and Keychain
 
 Production application code can request only fixed, typed `SecretRef` values through a scoped
 provider. The macOS adapter performs an exact read-only generic-password query with UI disabled;
 zero or multiple results, denial, timeout, malformed data, and backend failure are fatal. It has
 no environment, argv, database, shell, fake, or second-provider fallback.
+
+Any future FRED/BEA/BLS/EIA or other source API key requires its own exact typed `SecretRef`, scoped
+allowlist, bounded reveal point, redaction tests, and explicit authorization before a real lookup.
+This planning change does not authorize Keychain reads, source downloads, paid feeds, or account
+creation. Public endpoints without keys remain untrusted network inputs and do not receive arbitrary
+egress capability.
 
 The native query uses exact service/account matching with `kSecMatchLimitOne` (exact hit) and a hard 2-second spawned-worker timeout with UI disabled; the prior `kSecMatchLimitAll` was replaced after the P2-E live verification exposed `errSecParam` on `ReturnData+MatchAll`. `NSData` normalization handles PyObjC bridging. The fake contract suite does not constitute native Keychain smoke evidence; real Keychain happy-path has been exercised via live P2-E read-only verification, but formal disposable adversarial smoke (locked/denied/malformed/timeout) remains deferred and requires a dedicated namespace and separate authorization before execution.
 
@@ -88,6 +103,15 @@ the same control repository used by reconciliation, and `submit_from_outbox` che
 `ExecutionPausedError` with zero side effects when paused (except emergency RISK_EXIT
 flows). This guarantees a paused system cannot create new exposure even if outbox workers
 run; see ADR-021 and `tests/test_execution_pause_remediation.py`.
+
+The planned `CORPORATE_ACTION_EXIT` is a separate authority, not an alias for ordinary Risk approval
+or operator-confirmed full-account `flatten_paper`. It may be composed only after ADR-037's official
+source/identity/ratio/date confirmation, symbol-order cancellation and resolution, FULL+CLEAN
+reconciliation, tradability, regular-hours, price-collar, and idempotency checks are independently
+accepted. Effective/past events, halts, identity/quantity drift, withdrawn/conflicting sources, or
+short BUY-to-cover requirements fail to `REVIEW_REQUIRED` with entries paused; they do not permit a
+blind order. P4/P5/P6 remain no-submit, and the first P7 Paper submit requires exact current-session
+user authorization.
 
 ### SECURITY DEFINER functions
 

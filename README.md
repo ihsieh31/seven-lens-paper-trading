@@ -15,7 +15,8 @@ execution 只能處理已核准的 Paper `OrderIntent`。本專案沒有 Alpaca 
 | P1 基礎／權威狀態 | Closed | typed config、Keychain、PostgreSQL、telemetry、CI |
 | P2 Paper 執行安全 | Closed | order/fill/reconciliation/control；真實下單仍未授權 |
 | **P3 研究／提案／記憶** | **Closed** | A～F 與 cleanup Batch A～G 均已驗收；詳見下節與 `WORKLOG.md` |
-| P4～P8 | Not started | deterministic Risk → 驗證 → Shadow → Supervised → Unattended |
+| P4 | In progress | P4-A／P4-B已獨立驗收並Accepted／Closed；P4-C～F未開始 |
+| P5～P8 | Not started | 驗證 → Shadow → Supervised → Unattended |
 
 ## P3 Close
 
@@ -49,14 +50,22 @@ P3-21 維持 FALSE POSITIVE。
 - Runtime PostgreSQL role 不能直接修改 P3 tables 或執行 CAS publication；secret 只經固定
   `SecretRef` 與 macOS Keychain boundary，不從 `.env` 讀取真實秘密。
 - Tavily 多帳號固定 fail closed，直到存在可獨立驗證的外部授權證據。
+- 已核准且正分Gate實作的多來源規劃採封閉角色：Alpaca行情authority；FRED/ALFRED＋官方宏觀；SEC/IR；
+  Alpaca Corporate Actions＋SEC/issuer/exchange確認；Tavily/GDELT discovery；yfinance只作研究補充。
+- P4-B已實作且獨立驗收confirmed forward/reverse split的point-in-time identity、source lineage與三層entry quarantine；
+  既有long未來仍走獨立deterministic `CORPORATE_ACTION_EXIT`，並在fills＋FULL reconciliation後記錄拆／合股原因、
+  收益與衍生記憶。B Gate已Closed，仍沒有授權送單。
 
 ## 存續義務與下一步
 
 - Provider Transport GREEN 僅為 V12 批次 snapshot。P6 Shadow 開始前，需另行授權的 synthetic
   canary 在 rolling 7 日且 ≥200 logical calls 達 first-attempt≥95%／eventual≤3 attempts≥99%；
   跌破即重開（OPEN-027）。
-- 下一個階段是 **P4 deterministic Risk**（Not started），需使用者明確授權後由 fresh session
-  規劃執行。任何 walk-forward/profitability 主張屬 P5；任何送單能力屬 P7 之後。
+- 下一個階段仍是 **P4 multi-source／candidate／deterministic Risk**。`P4_PROGRAM_PLAN.md`與ADR-038已完成
+  使用者設定確認；ADR-039亦已固定Factor V1、SEC SIC Division、correlation cluster與gross turnover。P4-A與P4-B
+  均已fresh independent acceptance並Accepted／Closed；P4-C～F未開始。P4-A focused `372 passed`、P4-B focused
+  `132 passed`，fresh PG16 integration `256 passed, 2 deselected, 0 skipped`；完整P4仍未Closed。
+  P4只可建立no-submit intent；任何真實Paper送單能力屬P7且需再次明確授權。
 
 ## 文件入口
 
@@ -65,6 +74,7 @@ P3-21 維持 FALSE POSITIVE。
 1. [PROJECT_HANDOFF.md](PROJECT_HANDOFF.md)：目前唯一交接、邊界與下一步。
 2. [PROGRESS.md](PROGRESS.md)：phase/gate 狀態與最新證據。
 3. [docs/ROADMAP_AND_ACCEPTANCE.md](docs/ROADMAP_AND_ACCEPTANCE.md)：剩餘階段與完成條件。
+4. [P4_PROGRAM_PLAN.md](P4_PROGRAM_PLAN.md)：已核准P4設定、模組邊界、工作包與Final Gate。
 
 設計與治理：
 
@@ -100,9 +110,8 @@ git diff --check
 ```
 
 第一個命令執行 locked sync、lock、format、lint、mypy 與 non-integration tests。第二個命令使用
-digest-pinned PostgreSQL 16、fake credentials、random localhost port 與 tmpfs，執行 zero-skip
-integration tests並清理 disposable container。手動 `TEST_DATABASE_URL` 只能指向專用 disposable
-database。本機 Docker VM 記憶體有限時，請勿與其他容器並行跑整合套件（OOM 會殺掉 service
-container）。
+digest-pinned PostgreSQL 16、fake credentials、random localhost port 與 disk-backed anonymous volume，執行
+zero-skip integration tests並清理 disposable container。手動 `TEST_DATABASE_URL` 只能指向專用 disposable
+database。本機 Docker VM 記憶體有限時，仍請勿與其他高記憶體容器並行跑整合套件。
 
 需要格式化時：`uv run ruff format .`。

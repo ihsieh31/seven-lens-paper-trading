@@ -73,6 +73,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# WAL-heavy integration runs must not consume the Docker VM's RAM via tmpfs.
 container_id="$(docker run --detach \
     --name "$container_name" \
     --label "$owner_label=$owner_token" \
@@ -80,7 +81,7 @@ container_id="$(docker run --detach \
     --env "POSTGRES_PASSWORD=$postgres_password" \
     --env "POSTGRES_DB=$postgres_database" \
     --publish 127.0.0.1::5432 \
-    --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=1g \
+    --mount type=volume,destination=/var/lib/postgresql/data \
     "$postgres_image")"
 
 if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]; then

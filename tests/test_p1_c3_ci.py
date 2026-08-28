@@ -327,7 +327,7 @@ def test_scripts_exclude_unsafe_sources_and_destructive_commands() -> None:
     ):
         assert forbidden not in combined
     assert "--publish 127.0.0.1::5432" in combined
-    assert "--tmpfs /var/lib/postgresql/data" in combined
+    assert "--mount type=volume,destination=/var/lib/postgresql/data" in combined
     assert 'docker rm --force --volumes "$candidate_id"' in combined
 
 

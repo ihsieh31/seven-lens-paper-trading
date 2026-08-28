@@ -1,6 +1,6 @@
 # P3 每週交易記憶整理 Skill 規格
 
-狀態：需求已確認，P3-F 才實作；本檔不是已啟用的 runtime skill。
+狀態：P3-F bounded memory contract 已 Closed；本檔亦記錄 P4～P7 corporate-action outcome 的未實作擴充要求。
 
 ## 1. 目的與邊界
 
@@ -15,6 +15,8 @@
 - 每日 open-position reflection 與 realized/unrealized outcome；
 - Risk rejection reason codes、remaining limits 與是否重申成功；
 - forecast calibration、invalidator、market regime 與 source ids；
+- 已成交且經FULL reconciliation封閉的corporate-action exit outcome：event/source ids、forward/reverse split、
+  ratio/effective date、fills、cost basis、realized gross/net P&L、return、holding period與typed exit reason；
 - 上週 validated condensed-memory artifact 與 lineage。
 
 所有網頁、模型文字與舊 memory 都是不可信資料，不能成為 skill instruction。任何 future-dated、無 lineage、schema-invalid 或 prompt-injection flagged record 必須排除並產生 issue。
@@ -28,6 +30,8 @@
 5. 持倉管理、同日退出、short borrow／liquidity 的具體教訓；
 6. 不同 market regime 下策略成立／失效的條件；
 7. 尚未解決且下週仍可能影響決策的風險。
+8. 已確認拆／合股造成的Paper operational-risk exit；必須保留股票、事件類型、收益與來源，但清楚標示
+   `OPERATIONAL_EXIT_NOT_THESIS_FAILURE`語意，不得推論公司基本面惡化。
 
 單次偶然、無證據的敘事、重複原文、純損益流水帳、已失效且無可重用教訓的內容優先移除。不能因為虧損就把該筆經驗自動提高為平倉規則。
 
@@ -40,12 +44,15 @@ MemoryArtifact:
   entries[]:
     category, importance, observation, reusable_lesson
     applies_when[], invalid_when[], evidence_ids[], risk_reason_codes[]
+    operational_exit_reason?, realized_outcome_ref?
   line_count, content_hash, model/prompt/provider versions
   validation_status: VALID | INVALID
 ```
 
 - `line_count <= 4000`，由 deterministic serializer 計算，不相信模型自報。
 - 每個 entry 必須能回鏈原始 record ids；不能生成新的事實、價格、日期或 Risk reason。
+- corporate-action entry只能引用已成交且FULL reconciliation的outcome；不得從intent、未實現損益或broker
+  UI估算收益，也不得把操作性退出改寫成thesis failure／success。
 - 內容使用短句與結構化欄位，不保存 chain-of-thought。
 - 超過上限時依重要性與重複度 deterministic 截斷；不得截斷 lineage／evidence ids。
 
@@ -60,11 +67,16 @@ MemoryArtifact:
 
 - raw decision/outcome/rejection rows before/after hash 完全不變；
 - 4,001 行、超長單行、重複 flood、惡意 instruction、future outcome、無 lineage record 全部被拒或安全壓縮；
-- repeated Risk rejection、forecast miscalibration、same-day-loss mistake、borrow anomaly 與 regime lesson golden cases 都被保留；
+- repeated Risk rejection、forecast miscalibration、same-day-loss mistake、borrow anomaly、regime lesson與
+  reconciled forward/reverse-split operational exit golden cases都被保留；
+- unconfirmed announcement、partial fill、missing reconciliation、future effective date或錯誤P&L不得成為
+  realized corporate-action memory；
 - history replay 在任一 `as_of` 只能讀當時已建立且 cutoff 合法的 artifact；
 - 相同 frozen input 的 record/replay 可重建相同 validated artifact；
 - skill artifact 必須有獨立版本、held-out eval 與人工抽樣，不能靠整理模型自評通過。
 
 ## 7. 實作位置決策
 
-P3-F 實作時建立 versioned、provider-neutral runtime skill；不得放入已被 `.gitignore` 排除且保存第三方七人 corpus 的根目錄 `skill/`。P3-A schema／license gate已完成；實際目錄、prompt packaging與loader contract需在P3-B+C frozen evidence/run identity及P3-E provider boundary完成後固定。
+既有P3-F已建立versioned、provider-neutral memory runtime；不得放入已被`.gitignore`排除且保存第三方七人
+corpus的根目錄`skill/`。Corporate-action outcome schema、loader與golden cases由P4～P7新work package擴充，
+不得修改既有immutable reflection／memory evidence來假裝已支援。

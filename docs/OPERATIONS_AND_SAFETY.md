@@ -12,7 +12,8 @@
 6. stale/invalid/missing data 不會被預設值轉成可交易信號。
 7. 過期 research/target 不可在下一窗口重用。
 8. hard limits 只能由版本化設定和明確控制流程變更，不能由 LLM 變更。
-9. 同日交易只能通過 normal-window turnover limits 或 verified `RISK_EXIT`；同日虧損退出不能只因帳面虧損。
+9. 同日交易只能通過normal-window gross turnover limit或verified typed `RISK_EXIT`；normal turnover以absolute
+   notional相加、不除以2／不淨額抵銷，同日虧損退出不能只因帳面虧損。
 10. 告警失敗不會讓 fail-closed 狀態自動恢復。
 11. Telemetry 不是權威 audit；recorder、diagnostic 或 exporter 故障不得改變 business result、transaction、rollback、retry 或 fail-closed 狀態。
 12. LLM Portfolio Manager的第一個 proposal 被拒後最多重申一次；第二次拒絕必為 `NO_TRADE`。
@@ -54,6 +55,13 @@
 | P3-F synthetic eval `TIMEOUT`／`TRANSIENT`／`RATE_LIMIT` | 同一logical case最多兩次有界retry（2s、4s backoff＋deterministic jitter）；三個連續cases各自耗盡三attempt即開circuit；不換split掩蓋transport失敗 | 本批authorization仍有效且未達780 attempt cap；其他錯誤不重試 |
 | Risk 第一次拒絕 proposal | 回傳 reason codes + remaining limits；只重申一次 | 第二份 proposal通過，否則 `NO_TRADE` |
 | 行情／新聞事件來源衝突或延遲 | 三次重抓、核對 timestamp／第二來源；仍衝突記 `DATA_CONFLICT`，不啟動 LLM | 新事件重新通過驗證；hard-risk 仍可獨立減倉 |
+| Alpaca 行情 authority 缺失但 yfinance 有值 | 禁止該 symbol 新增曝險；yfinance 只供診斷，不靜默補值 | Alpaca authority 恢復且 freshness／identity gate 通過 |
+| FRED／ALFRED vintage 缺失或與官方 release 衝突 | 該 macro claim 不成立；歷史 run 不使用今日修訂值 | point-in-time vintage 與官方發布重新閉合 |
+| SEC／IR／交易所 identity 或公司事件衝突 | `DATA_CONFLICT`、該 symbol `ENTRY_BLOCKED`，不交分析委員／不新增曝險 | CIK/CUSIP/symbol lineage、ratio、日期與正式來源一致 |
+| Tavily／GDELT 發現事件但找不到原始 publisher | 保留 discovery metadata，不建立 material claim | 原始來源取得、hash 與 `available_at` 驗證完成 |
+| 已確認 forward/reverse split（候選） | `ENTRY_BLOCKED`，分析、P4核准與submit三處拒絕新增曝險 | 生效後 security master 與 authority 完成乾淨對帳 |
+| 已確認 forward/reverse split（既有 long） | 不經LLM；解析／取消該symbol orders、FULL reconcile、建立有界 `CORPORATE_ACTION_EXIT` | 部位歸零、fills與FULL reconciliation封閉，P&L/audit/memory完成 |
+| 拆／合股已生效、停牌或position quantity可能失真 | pause entries、凍結symbol、CRITICAL告警；禁止用舊quantity盲目送單 | 人工事件對帳、broker/local identity與quantity一致 |
 | LLM-visible memory 超過 4,000 行 | 不送入交易 graph；保留 immutable raw records，排入週六 compaction | bounded memory artifact 通過 lineage/future-leakage validation |
 | Primary source 無法讀 | 降低 coverage；material claim 不成立 | 來源恢復或替代 primary source |
 | Quote stale/spread 超限 | 該 symbol 不送單 | 新 quote 通過門檻且仍在窗口 |
@@ -82,6 +90,7 @@ synthetic canary驗證first-attempt≥95%與三attempt內eventual≥99%；跌破
 - account id、Paper endpoint、buying power、cash；
 - broker position/open orders 與 ledger 對齊；
 - symbol active/tradable、非 halt；
+- corporate-action authority：非 `ENTRY_BLOCKED`；submit前重查尚無已確認 forward/reverse split；
 - 市場為 regular session 且在本窗口內；
 - quote age、spread、price collar；
 - shortable／borrow status；同日虧損退出 reason/evidence gate；
@@ -134,6 +143,21 @@ synthetic canary驗證first-attempt≥95%與三attempt內eventual≥99%；跌破
 4. 已確認事件只重跑受影響與高度相關持倉，deadline 3 分鐘，Portfolio Manager只能要求 `HOLD/REDUCE/CLOSE`。
 5. proposal 仍經 deterministic Risk Engine；第一次拒絕可重申一次。LLM failure 時只有已驗證 hard-risk rule 可產生 turnover-exempt `RISK_EXIT`。
 
+### 7.2 拆股／合股 deterministic 保護（P4-B quarantine已驗收Closed；P4-E～P7 exit planned）
+
+1. 監控只接受 `forward_split`／`reverse_split` 封閉 enum；其他 corporate action 另立 work package。
+2. 任一訊息命中即先 `ENTRY_BLOCKED`；只有 Alpaca／Tavily／GDELT／yfinance 時不自動平倉。
+3. SEC、issuer IR 或 listing exchange 正式公告閉合 identity、ratio、effective／ex-date，且無來源衝突後標記
+   `CONFIRMED`。
+4. 候選不建立 analysis run；已完成 proposal 在 P4 與 submit-time recheck 被拒絕。
+5. 既有 long 不呼叫分析委員：解析／取消該 symbol 未成交單，完成 FULL+CLEAN reconciliation、tradability、
+   regular-hours／price-collar preflight，才建立 deterministic、idempotent `CORPORATE_ACTION_EXIT`。
+6. 只在生效日前安全 regular-hours 窗口送單；不做盤前／盤後，也不使用無保護 market order。第一版 short
+   BUY-to-cover 不自動執行，改為 pause＋CRITICAL incident，等待另行 authority review。
+7. partial fill 保持 pending；只有 broker position 歸零且 FULL reconciliation 通過才標 `EXITED`，計算 realized
+   gross/net P&L、return、holding period，並產生 typed audit、通知與 memory source record。
+8. 生效後完成 security-master／broker/local 乾淨對帳才解除 entry block；不得因日期經過自動解禁。
+
 ## 8. 告警
 
 免費通道採可插拔 AlertPort（Telegram bot、Discord webhook 或 email 擇一）。
@@ -146,13 +170,16 @@ synthetic canary驗證first-attempt≥95%與三attempt內eventual≥99%；跌破
 - 硬風控 breach；
 - ledger write/audit failure；
 - Paper account 出現本系統無法解釋的委託。
+- 拆／合股已生效或停牌，但本地／broker identity、quantity、orders 無法閉合；
+- `CORPORATE_ACTION_EXIT` 超過生效前安全 cutoff、進入 `UNKNOWN/REVIEW_REQUIRED` 或無法證明部位歸零。
 
 動作：`pause_entries`，持續重送告警，不等使用者回覆才生效。
 
 ### HIGH
 
 - broker/data outage 超過窗口容忍；
-- source injection、Tavily global/per-account budget exhaustion 或 account compliance 異常；
+- source injection、source-role drift、Tavily global/per-account budget exhaustion 或 account compliance 異常；
+- 新拆／合股事件進入 `ENTRY_BLOCKED`／`CONFIRMED`，以及自動退出成交與最終收益通知；
 - daily drawdown stop；
 - supervisor/heartbeat 中斷。
 
@@ -186,6 +213,19 @@ synthetic canary驗證first-attempt≥95%與三attempt內eventual≥99%；跌破
 3. reconciliation。
 4. 若仍在下一正式窗口且資料與 target 是該窗口新產物，才執行；不可使用過期 target。
 
+### 拆股／合股事件
+
+1. 顯示 symbol/security identity、事件類型、ratio、正式來源與 effective／ex-date；不得只顯示搜尋摘要。
+2. 確認 entry block 已在候選、Risk 與 submit 三層生效，並列出該 symbol 全部 working orders／position。
+3. 若尚未生效且為 long，依 7.2 的 reconcile／cancel／preflight 流程建立一次 idempotent exit；不要手改 broker
+   或 DB quantity。
+4. 若已生效、停牌、symbol/CUSIP 已變或 quantity mismatch，停止自動退出，建立 CRITICAL incident 並做完整
+   corporate-action reconciliation。
+5. 全部 fills 與 FULL reconciliation 後發布通知：明示「拆股」或「合股」、股票、成交、gross/net P&L、
+   return、holding period 與 incident/event ID。
+6. 驗證 immutable outcome 已成為下一個合法 cutoff 後的 memory source，且摘要標示 operational exit、不是
+   investment thesis failure。
+
 ## 10. 備份與恢復
 
 - PostgreSQL 每日加密 logical backup，重要交易事件後 WAL/等價增量保護。
@@ -217,7 +257,7 @@ Codex automations 只能在獨立 worktree 或只讀模式執行測試、報告�
 - PostgreSQL job 與本機腳本只使用 digest-pinned official PostgreSQL 16 Alpine image、明顯 fake
   credentials 與 disposable data。required mode 會在 collection 前驗證 psycopg、URL、連線與 server
   major，並把任何 integration skip 轉成 session failure。
-- 本機 container 使用 random localhost port 與 tmpfs；success、test failure、readiness failure 或
+- 本機 container 使用 random localhost port 與 disk-backed anonymous volume；success、test failure、readiness failure 或
   interrupt 都只在 container ID、exact name 與 ownership label 相符後清理該 container。禁止
   `docker prune` 或停止其他 container。
 - `uv` 是 clean-machine 唯一 bootstrap prerequisite；verification script 不讀 `.env`、Keychain 或

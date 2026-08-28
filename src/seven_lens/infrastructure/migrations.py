@@ -208,7 +208,16 @@ def verify_schema(dsn: str) -> int:
                to_regclass('public.memory_artifact_state_events'),
                to_regclass('public.memory_promotion_history'),
                to_regclass('public.memory_current_pointer'),
-               to_regclass('public.memory_curation_audits')
+               to_regclass('public.memory_curation_audits'),
+               to_regclass('public.p4_source_records'),
+               to_regclass('public.security_identities'),
+               to_regclass('public.security_identity_sources'),
+               to_regclass('public.security_identity_heads'),
+               to_regclass('public.corporate_action_events'),
+               to_regclass('public.corporate_action_event_sources'),
+               to_regclass('public.corporate_action_event_head'),
+               to_regclass('public.security_quarantine_decisions'),
+               to_regclass('public.security_quarantine_decision_sources')
             """
         )
         tables = cast(tuple[object, ...] | None, cursor.fetchone())

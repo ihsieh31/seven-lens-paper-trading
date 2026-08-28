@@ -1,6 +1,6 @@
 # 外部依據與來源策略
 
-此檔分成「P3 分析／資料架構依據」與「停用的 Future Analyst Plugin 候選來源」。候選不等於已驗證、已授權或已納入；每次實作須固定版本與保存 SourceManifest。
+此檔分成「現行分析／資料架構依據」、「已核准且正分Gate實作的多來源規劃」與「停用的 Future Analyst Plugin 候選來源」。規劃、初版adapter或候選不等於已驗證、已授權或已納入；每次實作須固定版本、host、rights、rate limit 與 SourceManifest，並經對應 phase 的獨立驗收。
 
 ## 1. TradingAgents
 
@@ -115,7 +115,7 @@
 
 ## 7. 免費資料候選優先序
 
-實作 P3 時逐一驗證 API 條款、rate limit 和 point-in-time 能力：
+未來實作production source adapter時逐一驗證 API 條款、rate limit 和 point-in-time 能力：
 
 1. SEC EDGAR submissions/companyfacts/filings；
 2. 公司 IR 和官方 press release；
@@ -134,3 +134,72 @@
 - 摘要用自己的文字；保存必要短摘錄供 entailment，不大量重製原文。
 - source URL 失效時保存 tombstone、hash 和既有 metadata；若無法驗證，降低 confidence。
 - 每次 `PortfolioProposal`、backtest 和 daily run 都固定 portfolio/source/data snapshot ids；Future Analyst Plugin 若啟用，另固定 plugin/doctrine version。
+
+## 9. 已核准的多來源資訊規劃（P4-A／P4-B Accepted／Closed；完整P4尚未完成）
+
+來源不是可互換的普通 fallback。每個 adapter 與每筆資料都必須標記下列封閉角色之一：
+
+- `AUTHORITY`：可支撐對應類別的 deterministic 判定；
+- `CONFIRMATION`：只確認、否定或指出 authority 衝突；
+- `DISCOVERY`：只發現候選事件／原始來源，不能直接支撐 material claim；
+- `RESEARCH_SUPPLEMENT`：只增加研究背景，不能靜默填補 authority 缺口。
+
+| 類別 | 主要來源與角色 | 備援／補充與角色 | 用途與 fail-closed 邊界 |
+|---|---|---|---|
+| 行情／K 線 | Alpaca delayed historical SIP `AUTHORITY`；IEX latest在P4 zero-submit範圍為`AUTHORITY` | yfinance `RESEARCH_SUPPLEMENT`／異常比對 | IEX snapshot另標`LIMITED_MARKET_COVERAGE`，不能推導P7完整市場authority；yfinance不得補權 |
+| 宏觀 | FRED（現行標準化查詢）／ALFRED（歷史 vintage `AUTHORITY`） | Treasury、BLS、BEA、EIA 官方發布 `AUTHORITY/CONFIRMATION` | 利率、通膨、GDP、就業、能源；歷史 replay 必須使用當時可見 vintage，不得使用今日修訂值 |
+| 基本面 | SEC submissions、filings、XBRL companyfacts `AUTHORITY` | 公司 IR／官方新聞稿 `AUTHORITY/CONFIRMATION` | 10-K、10-Q、8-K、財務數據與管理層資訊；身份以 CIK／accession 為主，不只靠 ticker |
+| 公司事件 | Alpaca Corporate Actions 結構化 feed `DISCOVERY/CONFIRMATION` | SEC、公司 IR、Nasdaq／NYSE 正式公告 `AUTHORITY` | 拆股、合股、股息、併購、改名、停牌等；Alpaca 延遲或缺漏不能被解讀成「沒有事件」 |
+| 新聞／事件搜尋 | Tavily `DISCOVERY` | GDELT `DISCOVERY` | 發現公司、產業、全球與宏觀事件；material claim 必須回到原始 publisher／官方來源 |
+| 交易所資料 | Nasdaq／NYSE 官方頁面或經核准 feed `AUTHORITY` | 無自動普通 fallback | corporate actions、上市狀態與公告；付費 feed、license 或不穩定 HTML 不得被默認為可用 |
+| Metadata | Alpaca current asset metadata `AUTHORITY` | yfinance 顯示性欄位 `RESEARCH_SUPPLEMENT` | 公司名、產業、ticker、exchange；歷史 replay 另用 event-sourced security master 防止 symbol/venue 前視 |
+
+P4固定零付費profile。SEC與部分政府bulk/公共端點可不使用key；FRED/ALFRED、BEA、EIA等免費服務可能
+要求註冊key，BLS未註冊／註冊方案有不同配額。免費key仍是credential，必須使用source-specific typed
+`SecretRef`；申請、Keychain寫入或真實GET前需當次授權。不得因免費而把rate limit視為無上限。
+
+P4的ADR-039 SEC authority固定為同一CIK的submissions top-level `sic`及Company Facts exact allowlist：
+`us-gaap/NetIncomeLoss`、`us-gaap/NetCashProvidedByUsedInOperatingActivities`、`us-gaap/Assets`、
+`us-gaap/PaymentsToAcquirePropertyPlantAndEquipment`、`dei/EntityCommonStockSharesOutstanding`。每筆保留taxonomy、
+concept、unit、period、FY/FP、form、accession、filed／accepted可用時間與content hash；不得以同義concept、今日值、
+ticker或模型推測補缺。Sector採point-in-time SEC SIC Division A～J；缺失、衝突、future或未映射值為
+`SECTOR_UNKNOWN`並禁止新增曝險，不使用GICS。
+
+規劃依據：
+
+- [FRED／ALFRED API](https://fred.stlouisfed.org/docs/api/fred/fred/)與
+  [real-time periods](https://fred.stlouisfed.org/docs/api/fred/realtime_period.html)；
+- [SEC EDGAR data APIs](https://www.sec.gov/search-filings/edgar-application-programming-interfaces)；
+- [Treasury Fiscal Data API](https://fiscaldata.treasury.gov/api-documentation/)、
+  [BLS Public Data API](https://www.bls.gov/developers/api_signature_v2.htm)、
+  [BEA API](https://apps.bea.gov/api/signup/)、[EIA API v2](https://www.eia.gov/opendata/documentation.php)；
+- [Alpaca Corporate Actions](https://docs.alpaca.markets/us/reference/corporateactions-1)；
+- [Nasdaq Symbol Directory](https://nasdaqtrader.com/Trader.aspx?id=SymbolDirDefs)與
+  [NYSE Corporate Actions](https://www.nyse.com/market-data/corporate-actions)；
+- [GDELT data](https://gdeltproject.org/data.html)；
+- [yfinance disclaimer](https://ranaroussi.github.io/yfinance/index.html)：非 Yahoo 官方產品，僅作個人研究補充，實作前仍須核對當時條款。
+
+## 10. Point-in-time 與衝突規則
+
+每筆 source record 依資料類別保存：`source_role`、`provider_record_id`、穩定 security identity、
+`observation_period`、`published_at`、`discovered_at`、`available_at`、`retrieved_at`、`effective_at`、
+`vintage_date`、`content_hash`、rights/licence 狀態及 supersession lineage。未知欄位不得以抓取時間或今日值猜補。
+
+- 同一類別不同 authority 矛盾時標記 `DATA_CONFLICT`，禁止新增曝險；
+- discovery／supplement 永遠不能升權成 authority；
+- 來源失效可以降級研究 coverage，但不能降級交易所需的價格、上市狀態或 corporate-action gate；
+- 新來源必須通過 exact-host/redirect、pagination、rate-limit、schema drift、rights、fixture、as-of 與 failure-injection gate；
+- 真實 API key、下載或 production 呼叫均需要另行授權；本規劃本身不授權網路使用。
+
+## 11. 拆股／合股確認來源政策
+
+第一版自動保護只涵蓋 `forward_split` 與 `reverse_split`，不把 stock dividend、unit split、spin-off、merger、
+name change 或其他 reorganization 偷偷納入同一 authority。自動退出的 `CONFIRMED` 必須同時具備：
+
+1. 精確 security identity closure（symbol lineage 加 CIK、CUSIP 或經核准的等價穩定 ID）；
+2. 明確事件類型、ratio 與 effective／ex-date；
+3. 至少一個 SEC、issuer IR 或 listing exchange 正式公告；
+4. 已讀來源彼此不矛盾，且每個來源的 `available_at <= decision_at`；
+5. 原始內容 hash、URL／record ID 與確認時間可稽核。
+
+只有 Alpaca、Tavily、GDELT、yfinance 或搜尋摘要時：立即禁止新買入並告警，但尚不足以自動平倉。正式來源確認後才可進 `CORPORATE_ACTION_CONFIRMED`；若來源撤回、ratio／日期改變或身份不閉合，維持禁止新增曝險並升級人工事件審查。

@@ -42,13 +42,13 @@ def test_clean_apply_repeat_verify_and_schema_contract(test_database_url: str) -
     try:
         assert current_version(test_database_url) == 0
 
-        assert migrate(test_database_url) == 19
-        assert current_version(test_database_url) == 19
-        assert verify_schema(test_database_url) == 19
+        assert migrate(test_database_url) == 21
+        assert current_version(test_database_url) == 21
+        assert verify_schema(test_database_url) == 21
 
         # Applying an already-applied migration is idempotent and checksum-checked.
-        assert migrate(test_database_url) == 19
-        assert verify_schema(test_database_url) == 19
+        assert migrate(test_database_url) == 21
+        assert verify_schema(test_database_url) == 21
 
         with _connection(test_database_url) as connection, connection.cursor() as cursor:
             cursor.execute(
@@ -61,13 +61,18 @@ def test_clean_apply_repeat_verify_and_schema_contract(test_database_url: str) -
                       'audit_events', 'job_instances', 'job_leases',
                       'order_intents', 'broker_orders', 'fills', 'reconciliation_runs',
                       'control_commands', 'control_state',
+                      'corporate_action_event_head', 'corporate_action_event_sources',
+                      'corporate_action_events',
                       'source_objects', 'source_records', 'evidence_packets', 'analysis_runs',
                       'analysis_stage_results',
                       'research_bundles', 'research_bundle_items',
                       'risk_rejection_feedback', 'proposal_contexts', 'proposal_runs',
                       'risk_debates', 'portfolio_proposals', 'proposal_stage_results',
                       'model_call_claims', 'model_call_audits',
-                      'orders', 'positions', 'broker_accounts'
+                      'orders', 'p4_source_records', 'positions', 'broker_accounts',
+                      'security_identities', 'security_identity_heads',
+                      'security_identity_sources', 'security_quarantine_decision_sources',
+                      'security_quarantine_decisions'
                   )
                 ORDER BY table_name
                 """
@@ -79,6 +84,9 @@ def test_clean_apply_repeat_verify_and_schema_contract(test_database_url: str) -
                 "broker_orders",
                 "control_commands",
                 "control_state",
+                "corporate_action_event_head",
+                "corporate_action_event_sources",
+                "corporate_action_events",
                 "domain_events",
                 "evidence_packets",
                 "fills",
@@ -87,6 +95,7 @@ def test_clean_apply_repeat_verify_and_schema_contract(test_database_url: str) -
                 "model_call_audits",
                 "model_call_claims",
                 "order_intents",
+                "p4_source_records",
                 "portfolio_proposals",
                 "proposal_contexts",
                 "proposal_runs",
@@ -98,6 +107,11 @@ def test_clean_apply_repeat_verify_and_schema_contract(test_database_url: str) -
                 "risk_rejection_feedback",
                 "schema_metadata",
                 "schema_migrations",
+                "security_identities",
+                "security_identity_heads",
+                "security_identity_sources",
+                "security_quarantine_decision_sources",
+                "security_quarantine_decisions",
                 "source_objects",
                 "source_records",
             ]
@@ -129,7 +143,7 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
     _drop_all_migrations(test_database_url)
     try:
         assert current_version(test_database_url) == 0
-        assert migrate(test_database_url) == 19
+        assert migrate(test_database_url) == 21
         with _connection(test_database_url) as connection:
             checksum_0010 = connection.execute(
                 "SELECT checksum FROM public.schema_migrations WHERE version = 10"
@@ -146,6 +160,8 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
                 is False
             )
 
+        assert rollback(test_database_url) == 20
+        assert rollback(test_database_url) == 19
         assert rollback(test_database_url) == 18
         assert rollback(test_database_url) == 17
         assert rollback(test_database_url) == 16
@@ -173,8 +189,10 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
         with pytest.raises(MigrationError, match="migration version does not match"):
             verify_schema(test_database_url)
 
-        assert migrate(test_database_url) == 19
-        assert verify_schema(test_database_url) == 19
+        assert migrate(test_database_url) == 21
+        assert verify_schema(test_database_url) == 21
+        assert rollback(test_database_url) == 20
+        assert rollback(test_database_url) == 19
         assert rollback(test_database_url) == 18
         assert rollback(test_database_url) == 17
         assert rollback(test_database_url) == 16
@@ -206,8 +224,8 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
         with pytest.raises(MigrationError, match="migration version does not match"):
             verify_schema(test_database_url)
 
-        assert migrate(test_database_url) == 19
-        assert verify_schema(test_database_url) == 19
+        assert migrate(test_database_url) == 21
+        assert verify_schema(test_database_url) == 21
         with _connection(test_database_url) as connection:
             assert (
                 connection.execute(
@@ -226,6 +244,8 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
                 ).fetchone()[0]
                 is False
             )
+        assert rollback(test_database_url) == 20
+        assert rollback(test_database_url) == 19
         assert rollback(test_database_url) == 18
         assert rollback(test_database_url) == 17
         assert rollback(test_database_url) == 16
@@ -287,8 +307,8 @@ def test_migration_up_down_restore_cycle_is_explicit(test_database_url: str) -> 
             verify_schema(test_database_url)
 
         # A restored/disposable database can be rebuilt exactly from the migration.
-        assert migrate(test_database_url) == 19
-        assert verify_schema(test_database_url) == 19
+        assert migrate(test_database_url) == 21
+        assert verify_schema(test_database_url) == 21
     finally:
         _drop_all_migrations(test_database_url)
 
@@ -299,7 +319,9 @@ def test_reconciliation_scope_upgrade_defaults_legacy_clean_to_partial(
     """Rows created before 0014 remain non-resumable after the upgrade."""
     _drop_all_migrations(test_database_url)
     try:
-        assert migrate(test_database_url) == 19
+        assert migrate(test_database_url) == 21
+        assert rollback(test_database_url) == 20
+        assert rollback(test_database_url) == 19
         assert rollback(test_database_url) == 18
         assert rollback(test_database_url) == 17
         assert rollback(test_database_url) == 16
@@ -319,7 +341,7 @@ def test_reconciliation_scope_upgrade_defaults_legacy_clean_to_partial(
                 """
             )
             connection.commit()
-        assert migrate(test_database_url) == 19
+        assert migrate(test_database_url) == 21
         with _connection(test_database_url) as connection:
             assert connection.execute(
                 "SELECT scope FROM public.reconciliation_runs "
@@ -336,8 +358,8 @@ def test_account_hardening_down_removes_unrepresentable_mismatch_evidence(
     _drop_all_migrations(test_database_url)
     run_id = "00000000-0000-0000-0000-000000000008"
     try:
-        assert migrate(test_database_url) == 19
-        for expected_version in (18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8):
+        assert migrate(test_database_url) == 21
+        for expected_version in (20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8):
             assert rollback(test_database_url) == expected_version
 
         with _connection(test_database_url) as connection:
@@ -376,8 +398,8 @@ def test_account_hardening_down_removes_unrepresentable_mismatch_evidence(
             ).fetchone() == (0,)
 
         # The downgraded database remains rebuildable from the migration set.
-        assert migrate(test_database_url) == 19
-        assert verify_schema(test_database_url) == 19
+        assert migrate(test_database_url) == 21
+        assert verify_schema(test_database_url) == 21
     finally:
         _drop_all_migrations(test_database_url)
 
