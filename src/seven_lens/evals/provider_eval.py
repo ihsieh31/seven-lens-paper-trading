@@ -95,6 +95,25 @@ def _route_policy_id(route: AnalysisProviderConfig | None) -> str:
     return route.route_policy_id if route is not None else _default_route().route_policy_id
 
 
+def _validated_live_route(
+    *, authorization: LiveEvalAuthorization, route: AnalysisProviderConfig | None
+) -> AnalysisProviderConfig:
+    """Validate the exact route/authorization binding before any production capability."""
+
+    bound_route = route if route is not None else _default_route()
+    if type(bound_route) is not AnalysisProviderConfig:
+        raise LiveEvalAuthorizationError("live route snapshot is invalid")
+    try:
+        bound_route.__post_init__()
+    except Exception:
+        raise LiveEvalAuthorizationError("live route snapshot is invalid") from None
+    if authorization.provider_policy_id != bound_route.route_policy_id:
+        raise LiveEvalAuthorizationError(
+            "live authorization provider policy does not match the bound route"
+        )
+    return bound_route
+
+
 _PRODUCTION_AUTHORIZED_CASES: Final = 390
 _PRODUCTION_POSTS: Final = 260
 _PRODUCTION_PRE_NETWORK_REJECTS: Final = 130
@@ -704,6 +723,14 @@ def execute_authorized_live_eval(
         )
     if type(executor) is AnalysisProviderLivePostExecutor and not executor._production_composed:
         raise LiveEvalAuthorizationError("live executor is not Keychain/stdlib production-composed")
+    bound_route = _validated_live_route(authorization=authorization, route=route)
+    if (
+        type(executor) is AnalysisProviderLivePostExecutor
+        or type(executor) is AgnesLivePostExecutor
+    ):
+        transport_route = getattr(getattr(executor, "_transport", None), "_config", None)
+        if executor._route != bound_route or transport_route != bound_route:
+            raise LiveEvalAuthorizationError("live executor route does not match the bound route")
     by_id = {case.case_id: case for case in cases}
     if set(authorization.case_ids) - set(by_id):
         raise LiveEvalAuthorizationError("authorization references unknown cases")
@@ -1011,11 +1038,12 @@ def run_production_live_eval(
     """Execute the one production route with all authority checks before Keychain/POST."""
 
     selected_now = datetime.now(UTC) if now is None else now
+    bound_route = _validated_live_route(authorization=authorization, route=route)
     plan = live_plan_summary(
         authorization,
         trusted_config_hash,
         corpus_root=corpus_root,
-        route=route,
+        route=bound_route,
     )
     corpus = load_eval_corpus(corpus_root)
     held_out = corpus.load_public_cases(EvalSplit.HELD_OUT).cases
@@ -1049,7 +1077,9 @@ def run_production_live_eval(
         )
     evidence_path = _prepare_local_evidence_path(repo_root, evidence_filename)
 
-    executor = AnalysisProviderLivePostExecutor.from_macos_keychain(clock=_utc_now, route=route)
+    executor = AnalysisProviderLivePostExecutor.from_macos_keychain(
+        clock=_utc_now, route=bound_route
+    )
     try:
         run = execute_authorized_live_eval(
             corpus_root=corpus_root,
@@ -1058,7 +1088,7 @@ def run_production_live_eval(
             supplied_grant=supplied_grant,
             executor=executor,
             now=selected_now,
-            route=route,
+            route=bound_route,
         )
     except LiveEvalExecutionError as error:
         evidence = build_sanitized_live_evidence(

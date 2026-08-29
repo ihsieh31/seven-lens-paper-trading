@@ -114,6 +114,8 @@ class _ConsumerOrders(Protocol):
 
     def add_fill(self, fill: Fill) -> bool: ...
 
+    def get_fill_by_execution_id(self, execution_id: str) -> Fill | None: ...
+
     def list_fills(self, broker_order_id: str) -> tuple[Fill, ...]: ...
 
     def update_broker_order_status(
@@ -261,6 +263,16 @@ class TradeUpdateConsumer:
             return TradeUpdateOutcome.UNKNOWN_ORDER
         inserted = unit_of_work.orders.add_fill(fill)
         if not inserted:
+            existing = unit_of_work.orders.get_fill_by_execution_id(fill.execution_id)
+            if existing != fill:
+                with contextlib.suppress(Exception):
+                    unit_of_work.rollback()
+                self._persist_conflict_pause(
+                    unit_of_work, mirror.client_order_id, "conflicting fill"
+                )
+                raise TradeUpdateError(
+                    "duplicate execution id has a conflicting fill; reconciliation required"
+                )
             unit_of_work.commit()
             return TradeUpdateOutcome.DUPLICATE
         # Make the execution fact durable before attempting derived state.

@@ -3,6 +3,20 @@
 本檔只保留可影響目前決策的里程碑。逐輪缺陷、命令輸出與已被取代的敘述保留於 Git history；
 目前狀態以 `PROJECT_HANDOFF.md` 與 `PROGRESS.md` 為準。
 
+## 2026-08-29 — P1～P4-B post-integration deep review
+
+- 以多輪Luna Max完成分區source review、adversarial reproducer、fresh acceptance、cross-phase review與真PG
+  authority驗收；只修可重現High/Medium與極小明確Low，未新增provider/broker/P4-C authority。
+- P1/P2修復DSN/Keychain bounds、asset/fill狀態與broker mirror/execution/broker-order immutable identity；
+  mismatch/collision先durable `REVIEW_REQUIRED`＋pause/audit，batch fill在mutation前預檢。真PG跨order/race
+  證明錯誤fill=0、原mirror不覆寫、單一identity binding。
+- P3把authorization/route/executor/transport exact binding移至Keychain、evidence path與POST之前；補URL、
+  generation與clock fail-closed。P4-A/B補深層JSON、endpoint family、timestamp、transaction rollback；新增
+  migration 0023收緊P4-B runtime authority，且不改0021 bytes。
+- 最終官方gate：non-integration `2117 passed, 282 deselected`；PostgreSQL16
+  `280 passed, 2 deselected, 0 skipped`；schema version 23；Ruff format/check、mypy、tracked JSON parse、
+  Python compile與`git diff --check`全綠。全程live/provider/source/broker/Keychain calls=0。
+
 ## 2026-08-29 — NVIDIA current-code P3-E／P3-F final live
 
 - 修正generic Keychain provisioning：ACL只信任locked Python 3.13 executable與其macOS Framework

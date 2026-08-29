@@ -217,6 +217,13 @@ class TestOrderParsing:
         with pytest.raises(BrokerTransportError, match="limit_price"):
             _adapter(transport).get_order(_intent().client_order_id)
 
+        broken = dict(_ORDER_PAYLOAD)
+        broken["status"] = "filled"
+        broken["filled_qty"] = "0"
+        transport = RecordingTransport(responder=lambda m, u: AlpacaResponse(200, broken))
+        with pytest.raises(BrokerTransportError, match="full order quantity"):
+            _adapter(transport).get_order(_intent().client_order_id)
+
     def test_timeout_status_codes_are_transport_errors(self) -> None:
         for status in (408, 429, 500, 503):
 

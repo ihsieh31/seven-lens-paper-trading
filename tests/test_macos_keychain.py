@@ -180,6 +180,9 @@ def test_uninitialized_exact_ref_fails_before_arbitrary_runner_arguments() -> No
         ([b"fake-one"], (b"fake-one",)),
         ([b"fake-one", b"fake-two"], (b"fake-one", b"fake-two")),
         ([bytearray(b"fake-data-compatible")], (b"fake-data-compatible",)),
+        (memoryview(b"fake-data-compatible"), (b"fake-data-compatible",)),
+        (b"x" * 4_097, None),
+        ([b"fake-one", b"fake-two", b"fake-three"], None),
         ([object()], None),
     ],
 )

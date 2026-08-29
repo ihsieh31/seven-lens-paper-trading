@@ -131,6 +131,16 @@ class TestRuntimeDsn:
         with pytest.raises(SecretProviderError):
             compose_runtime_dsn(database, provider)
 
+    def test_dsn_preserves_internal_password_spaces(self) -> None:
+        from psycopg.conninfo import conninfo_to_dict
+
+        database = RuntimeDatabaseConfig.from_mapping(_database_mapping())
+        provider = FakeSecretProvider(values={database.password_ref: SecretValue(b"fake password")})
+
+        parsed = conninfo_to_dict(compose_runtime_dsn(database, provider).conninfo())
+
+        assert parsed["password"] == "fake password"
+
     def test_foreign_password_reference_is_rejected(self) -> None:
         with pytest.raises(CompositionError, match="postgres runtime reference"):
             RuntimeDatabaseConfig(
@@ -141,6 +151,15 @@ class TestRuntimeDsn:
                 sslmode="require",
                 password_ref=SecretRef.primary(SecretKind.OPENAI_API_KEY),
             )
+
+    @pytest.mark.parametrize("field", ["host", "dbname"])
+    @pytest.mark.parametrize("value", ["db?sslmode=disable", "db#fragment", "db%2fother"])
+    def test_dsn_uri_delimiters_are_rejected(self, field: str, value: str) -> None:
+        values = _database_mapping()
+        values[field] = value
+
+        with pytest.raises(CompositionError, match="bounded safe text"):
+            RuntimeDatabaseConfig.from_mapping(values)
 
 
 class TestStackBuilding:

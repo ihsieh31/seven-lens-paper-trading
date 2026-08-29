@@ -2,6 +2,7 @@
 
 from seven_lens.application.ports.persistence import (
     AuditEventRepository,
+    BrokerOrderIdentityConflictError,
     DomainEventRepository,
     JobRepository,
     UnitOfWork,
@@ -22,6 +23,7 @@ from seven_lens.application.ports.telemetry import MetricRecorder, TraceRecorder
 
 __all__ = [
     "AuditEventRepository",
+    "BrokerOrderIdentityConflictError",
     "DomainEventRepository",
     "JobRepository",
     "KeychainLocked",

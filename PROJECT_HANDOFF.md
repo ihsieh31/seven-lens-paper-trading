@@ -9,7 +9,8 @@ generic analysis-provider 已整合，NVIDIA `openai/gpt-oss-120b` 為現行 rou
 **P1–P3 full remediation 已完成獨立驗收並 Accepted；P4-A與P4-B均已完成 fresh independent acceptance，
 verdict 為 Accepted、Gate 狀態為 Closed；P4-C～P8未開始。P4 overall 仍為 In progress。**
 本地 `main` 以 `origin/main` 的已發布 P4-A／P4-B checkpoint 為起點，整合 generic analysis-provider、
-NVIDIA V14 fixtures、migration 0022、測試與治理文件。沒有 broker/order authority；遠端尚未推送本輪整合。
+NVIDIA V14 fixtures、migration 0022、P1～P4-B深審修復與additive migration 0023、測試及治理文件。
+沒有新增broker/order authority；遠端尚未推送本輪整合。
 
 2026-08-27 獨立驗收證據：`./scripts/verify_p1.sh` 為 `1386 passed, 245 deselected`；targeted
 P1–P3 suites 為 `857 passed`；`./scripts/verify_p1.sh --postgres` 的 PostgreSQL 16 integration 為
@@ -121,10 +122,22 @@ Combined Final Gate。不得把 provider evidence 或 P4-A／P4-B 的 Accepted �
 - **Provider-drift調整**：NVIDIA/vLLM回應的非authority envelope metadata以明列allowlist＋bounded值驗證接受
   （未知欄位仍fail closed；content authority路徑不變）。
 - **回歸**：V14 offline `616/616` 且 regeneration byte-identical；non-integration
-  `2075 passed, 272 deselected`；PG16 `270 passed, 2 deselected, 0 skipped`；Ruff format/check、mypy、
-  `git diff --check`全綠。
+  `2117 passed, 282 deselected`；PG16 `280 passed, 2 deselected, 0 skipped`；Ruff format/check、mypy、
+  tracked JSON parse、Python compile與`git diff --check`全綠。
 
-## 7. 文件地圖
+## 7. P1～P4-B post-integration deep review（2026-08-29）
+
+- 多輪 Luna Max 以P1/P2、P3、P4-A/B分區後再fresh/cross-phase驗收；所有production修復均有先失敗後通過的
+  focused regression，最後由官方完整non-integration與PostgreSQL 16 gates統一驗證。
+- 主要authority修復：P2 broker mirror/execution/broker-order identity衝突durable review/pause、batch fill
+  preflight與immutable PG identity；P3 live route在Keychain/evidence/POST前exact preflight；P4-B migration 0023
+  收緊runtime SECURITY DEFINER的source closure、canonical arrays與payload scalar contract。
+- `0021_p4b_authority_hardening` up/down SHA-256仍為`e871c353…b19b9`／`759d3fc6…a00b`；0023 down後
+  function、owner、ACL、search_path與constraints精確還原0021，up/down/up通過。最新schema version=23。
+- 最終證據：`2117 passed, 282 deselected`；真PG16 `280 passed, 2 deselected, 0 skipped`；新增P2 identity
+  6 tests與P4-B adversarial 4 tests均由official collection執行。沒有live/provider/source/broker/Keychain call。
+
+## 8. 文件地圖
 
 - 現行治理：`PROGRESS.md`（gate 狀態）、`docs/ROADMAP_AND_ACCEPTANCE.md`（剩餘階段與完成條件）、
   `DECISIONS.md`、`ISSUES.md`、`RISK_REGISTER.md`、`WORKLOG.md`（逐輪歷史）、`P4_PROGRAM_PLAN.md`

@@ -8,6 +8,7 @@ from typing import Final
 from seven_lens.domain.value_objects import UtcTimestamp
 from seven_lens.sources.adapters.records import (
     NormalizedSourceRecord,
+    ProviderTimestampError,
     SourceSchemaDriftError,
     build_normalized_record,
     canonical_payload,
@@ -58,7 +59,10 @@ def parse_doc_articles(
         seendate = article["seendate"]
         if type(seendate) is not str or _SEEN_DATE.fullmatch(seendate) is None:
             raise SourceSchemaDriftError("seendate must use the GDELT compact format")
-        seen_at = parse_provider_timestamp(seendate)
+        try:
+            seen_at = parse_provider_timestamp(seendate)
+        except ProviderTimestampError as error:
+            raise SourceSchemaDriftError("seendate is not a valid provider timestamp") from error
         domain = article["domain"]
         if type(domain) is not str or _DOMAIN.fullmatch(domain) is None:
             raise SourceSchemaDriftError("article domain is not canonical")

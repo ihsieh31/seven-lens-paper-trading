@@ -218,13 +218,17 @@ class SecurityMasterService:
             raise ValueError("identity entry requires an exact SecurityIdentityRecord")
         record.verify_integrity()
         self._source_reader.validate_refs(record.source_refs, available_by=record.available_at)
-        outcome = self._repository.append_identity(record)
-        readback = self._repository.identity_records(security_id=record.security_id)
-        if not any(
-            candidate.identity_hash == record.identity_hash and candidate.wire() == record.wire()
-            for candidate in readback
-        ):
-            raise SecurityMasterServiceError("identity append readback did not match the request")
+        with self._repository_transaction():
+            outcome = self._repository.append_identity(record)
+            readback = self._repository.identity_records(security_id=record.security_id)
+            if not any(
+                candidate.identity_hash == record.identity_hash
+                and candidate.wire() == record.wire()
+                for candidate in readback
+            ):
+                raise SecurityMasterServiceError(
+                    "identity append readback did not match the request"
+                )
         self._emit(
             SecurityMasterTelemetry(
                 operation="identity_append",

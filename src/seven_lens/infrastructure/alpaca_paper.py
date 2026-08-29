@@ -363,6 +363,8 @@ def _broker_order_from_payload(payload: object) -> BrokerOrder:
     quantity = _positive_int(payload, "qty")
     if filled_qty > quantity:
         raise BrokerTransportError("Alpaca filled quantity exceeds the order quantity")
+    if status is BrokerOrderStatus.FILLED and filled_qty != quantity:
+        raise BrokerTransportError("Alpaca filled order must carry the full order quantity")
     order = BrokerOrder(
         broker_order_id=_required_text(payload, "id"),
         client_order_id=ClientOrderId(_required_text(payload, "client_order_id")),

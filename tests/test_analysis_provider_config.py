@@ -141,6 +141,7 @@ def test_base_url_canonicalization(raw: str, canonical: str) -> None:
         "https://integrate.api.nvidia.com:8443/v1",
         "https://127.0.0.1/v1",
         "https://[::1]/v1",
+        "https://[unterminated/v1",
         "https://10.0.0.1/v1",
         "https://localhost/v1",
         "https://box.local/v1",
@@ -385,6 +386,17 @@ def test_config_post_init_revalidates_and_rejects_drift() -> None:
     object.__setattr__(tampered, "route_config_hash", "0" * 64)
     with pytest.raises(ConfigurationError):
         tampered.__post_init__()
+
+
+@pytest.mark.parametrize("generation", [False, 0.0])
+def test_package_default_generation_requires_exact_integer_type(generation: object) -> None:
+    with pytest.raises(ConfigurationError):
+        AnalysisProviderConfig(
+            config_source=ConfigSource.PACKAGE_DEFAULT,
+            generation=generation,  # type: ignore[arg-type]
+            base_url=PACKAGE_DEFAULT_BASE_URL,
+            model_id=PACKAGE_DEFAULT_MODEL_ID,
+        )
 
 
 def test_runtime_config_is_frozen_and_slotted() -> None:

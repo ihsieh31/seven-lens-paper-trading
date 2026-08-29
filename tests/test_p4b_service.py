@@ -32,6 +32,7 @@ from seven_lens.securities.quarantine import (
 )
 from seven_lens.securities.service import (
     SecurityMasterService,
+    SecurityMasterServiceError,
     SourceLineageError,
 )
 from seven_lens.sources.adapters.in_memory_p4_records import InMemoryP4RecordLog
@@ -285,4 +286,37 @@ def test_unknown_source_reference_fails_closed_before_identity_append() -> None:
 
     with pytest.raises(SourceLineageError):
         service.register_identity(identity)
+    assert repository.identity_records(security_id=_SEC) == ()
+
+
+def test_identity_append_readback_failure_rolls_back_the_append() -> None:
+    source_log = InMemoryP4RecordLog()
+    source = _source("asset-readback", P4SourceFamily.ALPACA_ASSETS)
+    assert source_log.append(source) is AppendOutcome.APPENDED
+    identity = build_identity_record(
+        security_id=_SEC,
+        symbol=SecuritySymbol("ACME"),
+        exchange=ListingExchange.NYSE,
+        asset_class=AssetClass.US_EQUITY,
+        valid_from=_T0,
+        available_at=_T0,
+        status=SecurityStatus.ACTIVE,
+        source_refs=(SourceRef(source.record_id, source.family, source.record_hash),),
+        schema_version=_SCHEMA,
+    )
+
+    class ReadbackFailureRepository(InMemorySecurityMaster):
+        drop_once = True
+
+        def identity_records(self, **kwargs):  # type: ignore[no-untyped-def]
+            if self.drop_once:
+                self.drop_once = False
+                return ()
+            return super().identity_records(**kwargs)
+
+    repository = ReadbackFailureRepository()
+    service = SecurityMasterService(repository, source_log)
+    with pytest.raises(SecurityMasterServiceError, match="readback"):
+        service.register_identity(identity)
+
     assert repository.identity_records(security_id=_SEC) == ()

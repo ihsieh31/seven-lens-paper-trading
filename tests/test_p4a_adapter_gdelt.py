@@ -51,3 +51,9 @@ def test_parse_doc_articles_rejects_bad_seen_dates_or_urls() -> None:
             retrieved_at=_RETRIEVED,
             query="split filing",
         )
+    with pytest.raises(SourceSchemaDriftError):
+        parse_doc_articles(
+            _GDELT_JSON.replace(b'"20260827T120000Z"', b'"20261327T120000Z"'),
+            retrieved_at=_RETRIEVED,
+            query="split filing",
+        )

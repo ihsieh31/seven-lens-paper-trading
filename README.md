@@ -50,6 +50,9 @@ package default 為 legacy Agnes base/model）。憑證使用 macOS Keychain ser
 Current-code live evidence 已完成：P3-E 六案例 6/6 success、P3-F V14 260/260 strict、0 errors、
 0 retries、0 fallback，且 130/130 invalid/ambiguous cases 在送網路前拒絕；詳見
 `docs/P3E_LIVE_EVIDENCE_2026-08-29_NVIDIA.json` 與 current handoff。offline／PostgreSQL integration 亦已綠。
+整合後 P1～P4-B 多輪 Luna Max 深審與 adversarial remediation 亦已完成；最終完整 gate 為
+non-integration `2117 passed, 282 deselected`、PostgreSQL 16 `280 passed, 2 deselected, 0 skipped`，
+最新 schema version 為 23。修復摘要與邊界見 `PROJECT_HANDOFF.md`。
 每次更換 endpoint/model 都會產生新的 route hash，
 並必須重新取得 P3-E／P3-F live evidence；穩定性本身不能取代 strict response-contract 相容性。
 

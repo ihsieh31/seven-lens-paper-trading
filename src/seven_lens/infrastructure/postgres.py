@@ -13,13 +13,14 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from types import TracebackType
 from typing import Final, Self, cast
-from urllib.parse import quote_plus
+from urllib.parse import quote
 from uuid import UUID
 
 import psycopg
 from psycopg.types.json import Jsonb
 
 from seven_lens.application.composition import RuntimeDatabaseConfig
+from seven_lens.application.ports.persistence import BrokerOrderIdentityConflictError
 from seven_lens.application.ports.secrets import SecretProvider
 from seven_lens.domain.events import (
     AuditEvent,
@@ -99,7 +100,7 @@ def compose_runtime_dsn(config: RuntimeDatabaseConfig, provider: SecretProvider)
     password = provider.get_secret(config.password_ref)
     return RuntimeDsn(
         "postgresql://"
-        f"{quote_plus(config.user)}:{quote_plus(password.reveal_text())}"
+        f"{quote(config.user, safe='')}:{quote(password.reveal_text(), safe='')}"
         f"@{config.host}:{config.port}/{config.dbname}?sslmode={config.sslmode}"
     )
 
@@ -504,7 +505,15 @@ class PostgresOrderRepository:
         return _order_intent(_row(row, "order intent transition"))
 
     def record_broker_order(self, order: BrokerOrder) -> BrokerOrder:
-        """Insert or idempotently refresh the local mirror of a broker order."""
+        """Insert or idempotently refresh a broker mirror without rebinding identity.
+
+        Both ``broker_order_id`` and ``client_order_id`` are unique identities.
+        A conflict on either key is first read back and compared before mutable
+        status fields are refreshed.  This keeps a broker id already owned by a
+        different local order from being silently treated as an idempotent
+        replay.  ``ON CONFLICT DO NOTHING`` also lets PostgreSQL serialize two
+        concurrent first bindings without exposing a raw unique violation.
+        """
         with self._unit_of_work._require_connection().cursor() as cursor:
             cursor.execute(
                 f"""
@@ -513,10 +522,7 @@ class PostgresOrderRepository:
                     filled_quantity, limit_price, status, submitted_at, broker_updated_at
                 )
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (broker_order_id) DO UPDATE SET
-                    status = EXCLUDED.status,
-                    filled_quantity = EXCLUDED.filled_quantity,
-                    broker_updated_at = EXCLUDED.broker_updated_at
+                ON CONFLICT DO NOTHING
                 RETURNING {_BROKER_ORDER_COLUMNS}
                 """,
                 (
@@ -533,6 +539,66 @@ class PostgresOrderRepository:
                 ),
             )
             row = cursor.fetchone()
+            if row is None:
+                cursor.execute(
+                    f"""
+                    SELECT {_BROKER_ORDER_COLUMNS}
+                    FROM broker_orders
+                    WHERE broker_order_id = %s
+                    """,
+                    (order.broker_order_id,),
+                )
+                existing_by_broker_id = cursor.fetchone()
+                if existing_by_broker_id is None:
+                    cursor.execute(
+                        f"""
+                        SELECT {_BROKER_ORDER_COLUMNS}
+                        FROM broker_orders
+                        WHERE client_order_id = %s
+                        """,
+                        (order.client_order_id.value,),
+                    )
+                    existing_by_client_id = cursor.fetchone()
+                    if existing_by_client_id is not None:
+                        raise BrokerOrderIdentityConflictError(
+                            "client order id is already bound to a different broker order"
+                        )
+                    raise PersistenceInvariantError(
+                        "broker order insert conflicted but no existing identity was found"
+                    )
+
+                existing = _broker_order(
+                    _row(existing_by_broker_id, "broker order identity lookup")
+                )
+                if (
+                    existing.client_order_id != order.client_order_id
+                    or existing.symbol != order.symbol
+                    or existing.side != order.side
+                    or existing.quantity != order.quantity
+                    or existing.limit_price != order.limit_price
+                    or existing.submitted_at != order.submitted_at
+                ):
+                    raise BrokerOrderIdentityConflictError(
+                        "broker order id is already bound to a different local order"
+                    )
+
+                cursor.execute(
+                    f"""
+                    UPDATE broker_orders SET
+                        status = %s,
+                        filled_quantity = %s,
+                        broker_updated_at = %s
+                    WHERE broker_order_id = %s
+                    RETURNING {_BROKER_ORDER_COLUMNS}
+                    """,
+                    (
+                        order.status.value,
+                        order.filled_quantity,
+                        order.updated_at.value,
+                        order.broker_order_id,
+                    ),
+                )
+                row = cursor.fetchone()
         if row is None:
             raise PersistenceInvariantError("broker order upsert did not return a row")
         self._unit_of_work._mark_write()
@@ -624,6 +690,20 @@ class PostgresOrderRepository:
         if inserted:
             self._unit_of_work._mark_write()
         return inserted
+
+    def get_fill_by_execution_id(self, execution_id: str) -> Fill | None:
+        """Load the immutable fill bound to one globally unique execution id."""
+        with self._unit_of_work._require_connection().cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT execution_id, broker_order_id, quantity, price, occurred_at
+                FROM fills
+                WHERE execution_id = %s
+                """,
+                (execution_id,),
+            )
+            row = cursor.fetchone()
+        return None if row is None else _fill(_row(row, "fill lookup"))
 
     def list_fills(self, broker_order_id: str) -> tuple[Fill, ...]:
         """Load fills for one broker order in recorded order."""

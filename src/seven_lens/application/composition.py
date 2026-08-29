@@ -38,6 +38,7 @@ from seven_lens.security.secret_values import (
 _SSL_MODES: Final[frozenset[str]] = frozenset({"require", "verify-ca", "verify-full"})
 _HOST_PATTERN_MAX: Final = 253
 _DB_FIELD_MAX: Final = 63
+_UNSAFE_DSN_FIELD_CHARS: Final[frozenset[str]] = frozenset({"/", "@", ":", "?", "#", "%", "\\"})
 
 
 class CompositionError(ValueError):
@@ -66,9 +67,10 @@ class RuntimeDatabaseConfig:
                 or not value.strip()
                 or len(value) > _DB_FIELD_MAX
                 or "\x00" in value
-                or "/" in value
-                or "@" in value
-                or ":" in value
+                or any(
+                    char in _UNSAFE_DSN_FIELD_CHARS or ord(char) < 0x20 or ord(char) == 0x7F
+                    for char in value
+                )
             ):
                 raise CompositionError(f"database {field_name} must be bounded safe text")
         if len(self.host) > _HOST_PATTERN_MAX:

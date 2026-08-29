@@ -32,6 +32,14 @@ from seven_lens.execution.orders import (
 from seven_lens.execution.reconciliation import ReconciliationResult
 
 
+class BrokerOrderIdentityConflictError(RuntimeError):
+    """Raised when a broker-order id or client id is already bound elsewhere.
+
+    The repository must reject this before changing any mirror or fill.  The
+    application layer maps the conflict to its durable review/pause path.
+    """
+
+
 class DomainEventRepository(Protocol):
     def add(self, event: DomainEvent) -> RecordedDomainEvent:
         """Append an event and return its database-recorded time."""
@@ -106,6 +114,10 @@ class OrderRepository(Protocol):
 
     def add_fill(self, fill: Fill) -> bool:
         """Append one fill; return False when the execution id already exists."""
+        ...
+
+    def get_fill_by_execution_id(self, execution_id: str) -> Fill | None:
+        """Load the fill bound to one globally unique execution id, if present."""
         ...
 
     def list_fills(self, broker_order_id: str) -> tuple[Fill, ...]:

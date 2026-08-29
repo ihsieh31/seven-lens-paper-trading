@@ -159,6 +159,23 @@ def test_strict_json_rejects_duplicate_keys_and_nonfinite() -> None:
     assert strict_json_loads(b'{"a": 1}') == {"a": 1}
 
 
+def test_strict_json_maps_parser_recursion_to_bounded_schema_drift() -> None:
+    deeply_nested = b"[" * 10_000 + b"0" + b"]" * 10_000
+
+    with pytest.raises(SourceSchemaDriftError):
+        strict_json_loads(deeply_nested)
+
+
+def test_record_endpoint_must_belong_to_its_source_family() -> None:
+    with pytest.raises(ValueError, match="endpoint_id"):
+        build_normalized_record(
+            **_base_values(
+                endpoint_id="tavily_search",
+                record_id="sec-endpoint-mismatch-0001",
+            )
+        )
+
+
 def test_parse_provider_timestamp_accepts_bounded_canonical_variants() -> None:
     canonical = parse_provider_timestamp("2026-08-27T15:30:00.123456Z")
     assert canonical == UtcTimestamp(_RETRIEVED.value.replace(microsecond=123456))

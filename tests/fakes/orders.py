@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import timedelta
 
+from seven_lens.application.ports.persistence import BrokerOrderIdentityConflictError
 from seven_lens.domain.value_objects import UtcTimestamp
 from seven_lens.execution.orders import (
     TERMINAL_BROKER_ORDER_STATUSES,
@@ -96,7 +97,7 @@ class FakeOrderRepository:
                 or existing.limit_price != order.limit_price
                 or existing.submitted_at != order.submitted_at
             ):
-                raise ValueError("broker order identity fields are immutable")
+                raise BrokerOrderIdentityConflictError("broker order identity fields are immutable")
             if existing.status is not order.status:
                 assert_broker_order_transition(existing.status, order.status)
             if order.updated_at.value < existing.updated_at.value:
@@ -173,6 +174,9 @@ class FakeOrderRepository:
         self._execution_ids.add(fill.execution_id)
         self._fills.append(fill)
         return True
+
+    def get_fill_by_execution_id(self, execution_id: str) -> Fill | None:
+        return next((fill for fill in self._fills if fill.execution_id == execution_id), None)
 
     def list_fills(self, broker_order_id: str) -> tuple[Fill, ...]:
         return tuple(fill for fill in self._fills if fill.broker_order_id == broker_order_id)

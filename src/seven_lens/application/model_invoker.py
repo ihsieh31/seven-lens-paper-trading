@@ -539,7 +539,7 @@ class AuditedModelInvoker:
     def _timestamp(self) -> UtcTimestamp:
         try:
             return UtcTimestamp(self._clock())
-        except (StopIteration, TypeError, ValueError):
+        except Exception:
             raise ModelInvocationError(ModelTransportErrorCode.AUDIT) from None
 
     def _completed(self, started_at: UtcTimestamp) -> UtcTimestamp:

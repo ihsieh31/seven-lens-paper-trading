@@ -64,7 +64,7 @@ def strict_json_loads(payload: bytes) -> object:
             object_pairs_hook=_pairs,
             parse_constant=_reject_constant,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
         raise SourceSchemaDriftError("provider payload is not valid JSON") from error
     if not isinstance(decoded, (dict, list)):
         raise SourceSchemaDriftError("provider payload must decode to an object or array")
@@ -151,6 +151,8 @@ class NormalizedSourceRecord:
             raise ValueError("record_id is not a canonical record identifier")
         if type(self.endpoint_id) is not str or _ENDPOINT_ID.fullmatch(self.endpoint_id) is None:
             raise ValueError("endpoint_id is not a sanitized identifier")
+        if not any(endpoint.endpoint_id == self.endpoint_id for endpoint in self._policy.endpoints):
+            raise ValueError("endpoint_id is not registered for the source family")
         if type(self.schema_version) is not SchemaVersion:
             raise ValueError("schema_version requires an exact SchemaVersion")
         if type(self.content_hash) is not str or _HASH_TEXT.fullmatch(self.content_hash) is None:

@@ -227,6 +227,28 @@ class TestFillUpdates:
         assert consumer.apply(unit_of_work, orphan) is TradeUpdateOutcome.UNKNOWN_ORDER
         assert unit_of_work.orders.fill_count == 0
 
+    def test_execution_id_bound_to_another_order_is_not_a_duplicate(self) -> None:
+        unit_of_work, intent, _ = _setup()
+        from seven_lens.execution.orders import Fill
+
+        unit_of_work.orders.add_fill(
+            Fill(
+                execution_id="e-cross-order",
+                broker_order_id="b-other",
+                quantity=OrderQuantity(1),
+                price=Price.from_cents(9_998),
+                occurred_at=_T1,
+            )
+        )
+
+        with pytest.raises(TradeUpdateError, match="conflicting fill"):
+            TradeUpdateConsumer().apply(unit_of_work, _fill_update("e-cross-order", 1, _T1))
+
+        assert unit_of_work.orders.fill_count == 1
+        unresolved = unit_of_work.orders.get(intent.client_order_id)
+        assert unresolved is not None and unresolved.status is OrderStatus.REVIEW_REQUIRED
+        assert unit_of_work.control.state().entries_paused is True
+
 
 class TestStatusUpdates:
     def test_out_of_order_update_is_stale_and_changes_nothing(self) -> None:

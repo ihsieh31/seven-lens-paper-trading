@@ -209,6 +209,21 @@ def test_audit_failure_never_returns_output_or_retries_provider(failure_point: s
     assert "provider-raw-response" not in repr(excinfo.value)
 
 
+def test_unexpected_clock_failure_is_fixed_audit_error_before_provider_call() -> None:
+    audit = FakeAuditPort()
+    transport = FakeTransport(_response())
+
+    def broken_clock() -> datetime:
+        raise RuntimeError("clock unavailable")
+
+    with pytest.raises(ModelInvocationError) as excinfo:
+        _invoker(audit, transport, clock=broken_clock).invoke(
+            _envelope(), OutputContract.ANALYST_REPORT
+        )
+    assert excinfo.value.code is ModelTransportErrorCode.AUDIT
+    assert transport.requests == []
+
+
 def test_unclosed_claim_is_not_retried_and_different_envelope_collides() -> None:
     audit = FakeAuditPort()
     first = _invoker(audit, FakeTransport(_response()))

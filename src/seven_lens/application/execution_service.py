@@ -19,9 +19,11 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager, suppress
 from typing import Protocol
+from uuid import UUID, uuid5
 
 from seven_lens.application.ports.broker import (
     AssetClass,
+    AssetStatus,
     BrokerConflictError,
     BrokerTransportError,
     PaperAsset,
@@ -30,13 +32,17 @@ from seven_lens.application.ports.broker import (
     SubmitAccepted,
     SubmitResult,
 )
-from seven_lens.application.ports.persistence import OrderRepository
+from seven_lens.application.ports.persistence import (
+    BrokerOrderIdentityConflictError,
+    OrderRepository,
+)
 from seven_lens.domain.value_objects import UtcTimestamp
-from seven_lens.execution.control import ControlCommandRecord, ControlStateSnapshot
+from seven_lens.execution.control import ControlCommand, ControlCommandRecord, ControlStateSnapshot
 from seven_lens.execution.orders import (
     BrokerOrder,
     BrokerOrderStatus,
     ClientOrderId,
+    Fill,
     OrderIntent,
     OrderIntentType,
     OrderStatus,
@@ -76,6 +82,16 @@ _INTENT_STATUS_BY_BROKER_STATUS: dict[BrokerOrderStatus, OrderStatus] = {
     BrokerOrderStatus.SUSPENDED: OrderStatus.REVIEW_REQUIRED,
     BrokerOrderStatus.CALCULATED: OrderStatus.REVIEW_REQUIRED,
 }
+
+_EXECUTION_CONFLICT_COMMAND_NAMESPACE = UUID("a4f5d73e-85f1-4dbb-a9c9-3e06f078a10c")
+
+
+def _execution_conflict_command_id(client_order_id: ClientOrderId, conflict: str) -> UUID:
+    """Derive a stable audit identity for one execution conflict."""
+    return uuid5(
+        _EXECUTION_CONFLICT_COMMAND_NAMESPACE,
+        f"{client_order_id.value}\x1f{conflict}",
+    )
 
 
 class ExecutionStateError(RuntimeError):
@@ -164,7 +180,12 @@ class ExecutionEngine:
         OUTBOX_PENDING and every retry re-checks the gate for free.
         """
         asset = self._broker.get_asset(intent.symbol)
-        if asset is None or not asset.tradable or asset.asset_class is not AssetClass.US_EQUITY:
+        if (
+            asset is None
+            or asset.status is not AssetStatus.ACTIVE
+            or not asset.tradable
+            or asset.asset_class is not AssetClass.US_EQUITY
+        ):
             raise ExecutionStateError(
                 "asset gate: the broker does not trade symbol as a US equity "
                 f"{intent.symbol.value}; the intent was not submitted"
@@ -211,7 +232,7 @@ class ExecutionEngine:
                 unit_of_work.commit()
                 return unknown
             return self._complete_submission(unit_of_work, intent)
-        self._assert_mirror_matches(intent, order)
+        self._assert_mirror_matches(intent, order, unit_of_work=unit_of_work)
         return self._record_accepted(unit_of_work, intent, order)
 
     def apply_fills(
@@ -233,7 +254,7 @@ class ExecutionEngine:
             raise BrokerMirrorMismatchError(
                 "broker no longer knows an order we recorded as accepted"
             )
-        self._assert_mirror_matches(intent, order)
+        self._assert_mirror_matches(intent, order, unit_of_work=unit_of_work)
         return self._refresh_from_broker_order(unit_of_work, intent, order)
 
     def request_cancel(
@@ -261,7 +282,7 @@ class ExecutionEngine:
             raise BrokerMirrorMismatchError(
                 "broker no longer knows an order we recorded as accepted"
             )
-        self._assert_mirror_matches(intent, order)
+        self._assert_mirror_matches(intent, order, unit_of_work=unit_of_work)
         return self._refresh_from_broker_order(unit_of_work, intent, order)
 
     def expire_overdue(self, unit_of_work: _OrderUnitOfWork) -> tuple[OrderIntent, ...]:
@@ -417,7 +438,11 @@ class ExecutionEngine:
         return False
 
     def _pause_for_reconciliation_required(
-        self, intent: OrderIntent, unit_of_work: _OrderUnitOfWork | None = None
+        self,
+        intent: OrderIntent,
+        unit_of_work: _OrderUnitOfWork | None = None,
+        *,
+        conflict: str = "ambiguous broker outcome",
     ) -> None:
         """Durably block new entries after an ambiguous broker outcome.
 
@@ -438,7 +463,7 @@ class ExecutionEngine:
         if control is None:
             return
         try:
-            control.set_entries_paused(True, "reconciliation required; ambiguous broker outcome")
+            control.set_entries_paused(True, f"reconciliation required; {conflict}")
             if uow_for_commit is not None and hasattr(uow_for_commit, "commit"):
                 # UNKNOWN was committed before entering this helper.  Commit
                 # the global safety blocker before attempting non-essential audit.
@@ -449,16 +474,12 @@ class ExecutionEngine:
                     uow_for_commit.rollback()
             raise ControlPersistenceError("failed to persist entries_paused") from exc
         try:
-            from uuid import uuid4
-
-            from seven_lens.execution.control import ControlCommand, ControlCommandRecord
-
             now = self._clock()
             control.add_command(
                 ControlCommandRecord(
-                    command_id=uuid4(),
+                    command_id=_execution_conflict_command_id(intent.client_order_id, conflict),
                     command=ControlCommand.PAUSE_ENTRIES,
-                    reason="automatic pause on ambiguous broker outcome",
+                    reason=f"automatic pause on {conflict}",
                     actor="execution_engine",
                     run_id=None,
                     requested_at=now,
@@ -513,15 +534,70 @@ class ExecutionEngine:
     def _record_accepted(
         self, unit_of_work: _OrderUnitOfWork, intent: OrderIntent, order: BrokerOrder
     ) -> OrderIntent:
-        self._assert_mirror_matches(intent, order)
+        self._assert_mirror_matches(intent, order, unit_of_work=unit_of_work)
         return self._refresh_from_broker_order(unit_of_work, intent, order)
 
     def _refresh_from_broker_order(
         self, unit_of_work: _OrderUnitOfWork, intent: OrderIntent, order: BrokerOrder
     ) -> OrderIntent:
-        unit_of_work.orders.record_broker_order(order)
-        for fill in self._broker.list_fills(order.broker_order_id):
-            unit_of_work.orders.add_fill(fill)
+        fills = tuple(self._broker.list_fills(order.broker_order_id))
+        # Check the whole response before mutating the broker mirror.  An equal
+        # execution id is idempotent only when every immutable fill field,
+        # including broker_order_id, is identical.  Keep the payload in the
+        # bounded map: a set alone would hide a conflicting duplicate in this
+        # broker response.
+        seen_by_execution_id: dict[str, Fill] = {}
+        for fill in fills:
+            seen = seen_by_execution_id.get(fill.execution_id)
+            if seen is not None:
+                if seen != fill:
+                    self._persist_review_and_pause(unit_of_work, intent, "conflicting fill")
+                    raise BrokerMirrorMismatchError(
+                        "broker response contains conflicting fills for one execution id; "
+                        "reconciliation required"
+                    )
+                # Exact duplicate events in one broker response have the same
+                # idempotent meaning as an exact replay already in storage.
+                continue
+            seen_by_execution_id[fill.execution_id] = fill
+            if fill.broker_order_id != order.broker_order_id:
+                self._persist_review_and_pause(unit_of_work, intent, "conflicting fill")
+                raise BrokerMirrorMismatchError(
+                    "broker fill is bound to a different order; reconciliation required"
+                )
+            existing = unit_of_work.orders.get_fill_by_execution_id(fill.execution_id)
+            if existing is not None and existing != fill:
+                self._persist_review_and_pause(unit_of_work, intent, "conflicting fill")
+                raise BrokerMirrorMismatchError(
+                    "broker fill conflicts with an existing execution id; reconciliation required"
+                )
+        try:
+            unit_of_work.orders.record_broker_order(order)
+        except BrokerOrderIdentityConflictError as error:
+            # A concurrent process may bind this broker id after the preflight
+            # read.  Roll back any transaction-local work, then make the
+            # conflict durable before pausing new entries.
+            with suppress(Exception):
+                unit_of_work.rollback()
+            self._persist_review_and_pause(
+                unit_of_work,
+                intent,
+                "broker order identity conflict",
+            )
+            raise BrokerMirrorMismatchError(
+                "broker order identity is already bound to another local order; "
+                "reconciliation required"
+            ) from error
+        for fill in fills:
+            inserted = unit_of_work.orders.add_fill(fill)
+            if not inserted:
+                existing = unit_of_work.orders.get_fill_by_execution_id(fill.execution_id)
+                if existing != fill:
+                    self._persist_review_and_pause(unit_of_work, intent, "conflicting fill")
+                    raise BrokerMirrorMismatchError(
+                        "broker fill conflicts with an existing execution id; "
+                        "reconciliation required"
+                    )
         refreshed = intent
         target = _INTENT_STATUS_BY_BROKER_STATUS[order.status]
         if target is OrderStatus.ACKNOWLEDGED and intent.status in (
@@ -551,12 +627,75 @@ class ExecutionEngine:
             raise ExecutionStateError("client order id has no order intent")
         return intent
 
-    def _assert_mirror_matches(self, intent: OrderIntent, order: BrokerOrder) -> None:
-        if (
-            order.client_order_id != intent.client_order_id
-            or order.symbol != intent.symbol
-            or order.side != intent.side
-            or order.quantity != intent.quantity
-            or order.limit_price != intent.limit_price
-        ):
-            raise BrokerMirrorMismatchError("broker order parameters contradict the order intent")
+    def _persist_review_and_pause(
+        self, unit_of_work: _OrderUnitOfWork, intent: OrderIntent, conflict: str
+    ) -> OrderIntent:
+        """Persist an unresolved marker before the shared entry pause.
+
+        The marker is committed first so a pause or audit failure cannot leave
+        the intent in a submit-capable state.  The broker observation itself is
+        never overwritten; reconciliation remains the authority for resolving
+        the conflict.
+        """
+        current = unit_of_work.orders.get(intent.client_order_id)
+        if current is None:
+            raise ControlPersistenceError(
+                "cannot persist unresolved broker conflict: order intent is missing"
+            )
+        if current.status is not OrderStatus.REVIEW_REQUIRED:
+            try:
+                current = unit_of_work.orders.transition_status(
+                    intent.client_order_id, OrderStatus.REVIEW_REQUIRED
+                )
+                unit_of_work.commit()
+            except Exception as exc:
+                if hasattr(unit_of_work, "rollback"):
+                    with suppress(Exception):
+                        unit_of_work.rollback()
+                raise ControlPersistenceError(
+                    "failed to persist REVIEW_REQUIRED after broker conflict"
+                ) from exc
+        self._pause_for_reconciliation_required(
+            current,
+            unit_of_work,
+            conflict=conflict,
+        )
+        return current
+
+    def _assert_mirror_matches(
+        self,
+        intent: OrderIntent,
+        order: BrokerOrder,
+        *,
+        unit_of_work: _OrderUnitOfWork | None = None,
+    ) -> None:
+        mismatch_fields: list[str] = []
+        if order.client_order_id != intent.client_order_id:
+            mismatch_fields.append("client_order_id")
+        if order.symbol != intent.symbol:
+            mismatch_fields.append("symbol")
+        if order.side != intent.side:
+            mismatch_fields.append("side")
+        if order.quantity != intent.quantity:
+            mismatch_fields.append("quantity")
+        if order.limit_price != intent.limit_price:
+            mismatch_fields.append("limit_price")
+        if unit_of_work is not None:
+            local_mirror = unit_of_work.orders.get_broker_order(intent.client_order_id)
+            if local_mirror is not None and local_mirror.broker_order_id != order.broker_order_id:
+                mismatch_fields.append("broker_order_id")
+            local_by_broker_id = unit_of_work.orders.get_broker_order_by_id(order.broker_order_id)
+            if (
+                local_by_broker_id is not None
+                and local_by_broker_id.client_order_id != intent.client_order_id
+                and "broker_order_id" not in mismatch_fields
+            ):
+                mismatch_fields.append("broker_order_id")
+        if not mismatch_fields:
+            return
+        if unit_of_work is not None:
+            self._persist_review_and_pause(unit_of_work, intent, "broker mirror mismatch")
+        raise BrokerMirrorMismatchError(
+            "broker order parameters contradict the order intent; "
+            f"mismatch_fields={','.join(mismatch_fields)}"
+        )

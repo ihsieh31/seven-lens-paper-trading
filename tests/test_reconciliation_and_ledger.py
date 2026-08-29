@@ -188,6 +188,13 @@ class TestLedgerProjection:
         with pytest.raises(LedgerInvariantError, match="unknown broker order"):
             project_ledger((_fill("e-9", "missing", 1, 100),), {})
 
+    def test_fill_quantity_cannot_exceed_the_recorded_order_quantity(self) -> None:
+        intent = _intent(target_version=1)
+        mirror = _mirror("b-1", intent, BrokerOrderStatus.ACCEPTED, 0)
+
+        with pytest.raises(LedgerInvariantError, match="exceeds the recorded order quantity"):
+            project_ledger((_fill("e-1", "b-1", 11, 10_000),), {"b-1": mirror})
+
     def test_duplicate_execution_and_negative_cash_fail_closed(self) -> None:
         intent = _intent(target_version=1)
         mirror = _mirror("b-1", intent, BrokerOrderStatus.FILLED, 10)

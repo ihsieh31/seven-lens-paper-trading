@@ -136,7 +136,10 @@ def canonical_base_url(raw: object) -> str:
         raise ConfigurationError("analysis provider endpoint is invalid")
     if "\\" in raw or "%" in raw:
         raise ConfigurationError("analysis provider endpoint is invalid")
-    parts = urlsplit(raw)
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        raise ConfigurationError("analysis provider endpoint is invalid") from None
     if parts.scheme != "https" or parts.username is not None or parts.password is not None:
         raise ConfigurationError("analysis provider endpoint is invalid")
     if parts.query or parts.fragment:
@@ -309,7 +312,7 @@ class AnalysisProviderConfig:
         if type(self.config_source) is not ConfigSource:
             raise ConfigurationError("analysis provider configuration source is invalid")
         if self.config_source is ConfigSource.PACKAGE_DEFAULT:
-            if self.generation != _PACKAGE_DEFAULT_GENERATION:
+            if type(self.generation) is not int or self.generation != _PACKAGE_DEFAULT_GENERATION:
                 raise ConfigurationError("analysis provider generation is invalid")
         elif (
             type(self.generation) is not int

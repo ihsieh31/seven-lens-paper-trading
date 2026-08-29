@@ -59,6 +59,8 @@ _IPC_VERSION = "seven-lens-keychain-v1"
 _IPC_RESULT = "result"
 _IPC_BRIDGE_FAILURE = "bridge_failure"
 _CLEANUP_JOIN_SECONDS = 0.2
+_MAX_NATIVE_ITEM_BYTES = 4_096
+_MAX_NATIVE_ITEMS = 2
 
 
 class NativeKeychainBridge(Protocol):
@@ -296,24 +298,40 @@ def _normalize_native_items(status: int, raw_result: object) -> tuple[bytes, ...
         return ()
     if raw_result is None:
         return ()
-    if isinstance(raw_result, bytes):
-        return (bytes(raw_result),)
-    if not isinstance(raw_result, Sequence) or isinstance(raw_result, (str, bytes, bytearray)):
+    if isinstance(raw_result, (bytes, bytearray, memoryview)):
+        item = _bounded_bytes(raw_result)
+        return None if item is None else (item,)
+    if not isinstance(raw_result, Sequence) or isinstance(
+        raw_result, (str, bytes, bytearray, memoryview)
+    ):
         try:
-            converted = memoryview(cast(Any, raw_result)).tobytes()
+            converted = _bounded_bytes(raw_result)
         except (TypeError, ValueError):
             return None
-        return (converted,)
+        return None if converted is None else (converted,)
     normalized: list[bytes] = []
-    for item in raw_result:
-        if type(item) is bytes:
-            normalized.append(item)
-            continue
-        try:
-            normalized.append(memoryview(item).tobytes())
-        except (TypeError, ValueError):
+    for index, item in enumerate(raw_result):
+        if index >= _MAX_NATIVE_ITEMS:
             return None
+        converted = _bounded_bytes(item)
+        if converted is None:
+            return None
+        normalized.append(converted)
     return tuple(normalized)
+
+
+def _bounded_bytes(value: object) -> bytes | None:
+    """Copy at most one bounded Keychain item across the process boundary."""
+    try:
+        view = memoryview(cast(Any, value))
+    except (TypeError, ValueError):
+        return None
+    if view.nbytes > _MAX_NATIVE_ITEM_BYTES:
+        return None
+    try:
+        return view.tobytes()
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_worker_message(message: object) -> NativeLookupResult:
@@ -327,7 +345,9 @@ def _parse_worker_message(message: object) -> NativeLookupResult:
     if type(status) is not int:
         raise SecretBackendUnavailable
     if items is not None and (
-        type(items) is not tuple or any(type(item) is not bytes for item in items)
+        type(items) is not tuple
+        or len(items) > _MAX_NATIVE_ITEMS
+        or any(type(item) is not bytes or len(item) > _MAX_NATIVE_ITEM_BYTES for item in items)
     ):
         raise SecretBackendUnavailable
     return NativeLookupResult(status, items)
@@ -346,6 +366,12 @@ def _map_native_result(result: NativeLookupResult) -> SecretValue:
         raise SecretBackendUnavailable
     items = result.items
     if items is None:
+        raise MalformedSecret
+    if (
+        type(items) is not tuple
+        or len(items) > _MAX_NATIVE_ITEMS
+        or any(type(item) is not bytes or len(item) > _MAX_NATIVE_ITEM_BYTES for item in items)
+    ):
         raise MalformedSecret
     if not items:
         raise SecretNotFound

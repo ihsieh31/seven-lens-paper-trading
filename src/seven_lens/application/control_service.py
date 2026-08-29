@@ -15,7 +15,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from seven_lens.application.execution_service import ExecutionEngine
-from seven_lens.application.ports.broker import AssetClass
+from seven_lens.application.ports.broker import AssetClass, AssetStatus
 from seven_lens.application.ports.persistence import OrderRepository, ReconciliationRepository
 from seven_lens.domain.value_objects import RunId, TradingDate, UtcTimestamp
 from seven_lens.execution.control import (
@@ -467,7 +467,12 @@ class ControlPlane:
     ) -> None:
         for symbol in projection.positions:
             asset = engine.get_asset(symbol)
-            if asset is None or not asset.tradable or asset.asset_class is not AssetClass.US_EQUITY:
+            if (
+                asset is None
+                or asset.status is not AssetStatus.ACTIVE
+                or not asset.tradable
+                or asset.asset_class is not AssetClass.US_EQUITY
+            ):
                 raise ControlPlaneError(
                     "flatten aborted: the broker cannot trade a projected position as US equity "
                     f"{symbol.value}"

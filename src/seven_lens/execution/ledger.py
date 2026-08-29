@@ -132,6 +132,7 @@ def project_ledger(
     cash_cents = 0
     lots: list[OpenLot] = []
     seen_executions: set[str] = set()
+    filled_by_order: dict[str, int] = {}
     for fill in canonical_fills:
         if fill.execution_id in seen_executions:
             raise LedgerInvariantError("duplicate execution id in fill ledger")
@@ -139,6 +140,10 @@ def project_ledger(
         order = broker_orders.get(fill.broker_order_id)
         if order is None:
             raise LedgerInvariantError("fill references an unknown broker order")
+        cumulative = filled_by_order.get(fill.broker_order_id, 0) + fill.quantity.value
+        if cumulative > order.quantity.value:
+            raise LedgerInvariantError("fill quantity exceeds the recorded order quantity")
+        filled_by_order[fill.broker_order_id] = cumulative
         if order.side is OrderSide.BUY:
             cash_cents -= fill.quantity.value * fill.price.cents
             if abs(cash_cents) > _MAX_ABS_CENTS:

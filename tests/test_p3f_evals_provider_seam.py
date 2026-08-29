@@ -24,6 +24,7 @@ from seven_lens.config.analysis_provider import (
     AnalysisProviderConfig,
     ConfigSource,
     canonical_operator_bytes,
+    package_default_analysis_provider_config,
 )
 from seven_lens.config.provider import agnes_25_flash_config
 from seven_lens.domain.json_values import JsonValue
@@ -39,6 +40,7 @@ from seven_lens.evals.provider_eval import (
     MAX_RETRIES_PER_CASE,
     NO_FEE_CAP_APPROVED_SENTINEL,
     AgnesLivePostExecutor,
+    AnalysisProviderLivePostExecutor,
     LiveEvalAuthorization,
     LiveEvalAuthorizationError,
     LiveEvalEvidenceError,
@@ -63,6 +65,10 @@ from seven_lens.infrastructure.agnes_transport import (
     AgnesJsonModelTransport,
     StdlibAgnesHttpExecutor,
     build_agnes_request_body,
+)
+from seven_lens.infrastructure.chat_completions_transport import (
+    ChatCompletionsModelTransport,
+    StdlibChatCompletionsHttpExecutor,
 )
 from seven_lens.security.secret_values import SecretValue
 
@@ -170,7 +176,9 @@ def _response(case: EvalCase, decision: ExpectedDecision) -> bytes:
 def _execute(
     cases: tuple[EvalCase, ...],
     authorization: LiveEvalAuthorization,
-    executor: AgnesLivePostExecutor | ScriptedSingleAttemptExecutor,
+    executor: (
+        AnalysisProviderLivePostExecutor | AgnesLivePostExecutor | ScriptedSingleAttemptExecutor
+    ),
     **changes: object,
 ) -> LiveEvalRun:
     values: dict[str, Any] = {
@@ -237,6 +245,101 @@ def test_arbitrary_opaque_executor_is_rejected_before_it_can_post() -> None:
     with pytest.raises(LiveEvalAuthorizationError, match="package-owned"):
         _execute(cases, auth, cast(Any, opaque))
     assert opaque.attempts == []
+
+
+def test_mismatched_production_executor_route_is_rejected_before_post(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cases, answers = _selected()
+    case = next(case for case in cases if answers[case.case_id].validity.value == "valid")
+    auth = _authorization([case.case_id])
+    operator_route = AnalysisProviderConfig(
+        config_source=ConfigSource.OPERATOR_FILE,
+        generation=1,
+        base_url="https://integrate.api.nvidia.com/v1",
+        model_id="openai/gpt-oss-120b",
+    )
+    transport = ChatCompletionsModelTransport(
+        config=operator_route,
+        api_key=SecretValue.from_bytes(b"test-only-not-a-provider-key"),
+        executor=StdlibChatCompletionsHttpExecutor(),
+        clock=lambda: UtcTimestamp(datetime(2026, 8, 24, tzinfo=UTC)),
+    )
+    executor = AnalysisProviderLivePostExecutor(transport, route=operator_route)
+    executor._production_composed = True
+    posts = 0
+
+    def fake_execute(self: ChatCompletionsModelTransport, request: object) -> JsonModelResponse:
+        nonlocal posts
+        posts += 1
+        return JsonModelResponse(
+            provider_response_id="synthetic.response",
+            model_id=operator_route.model_id,
+            content=_response(case, ExpectedDecision.ACCEPT).decode(),
+            response_hash="a" * 64,
+            prompt_tokens=1,
+            completion_tokens=1,
+            total_tokens=2,
+        )
+
+    monkeypatch.setattr(ChatCompletionsModelTransport, "execute", fake_execute)
+    with pytest.raises(LiveEvalAuthorizationError, match="route"):
+        _execute(
+            (case,),
+            auth,
+            executor,
+            route=package_default_analysis_provider_config(),
+        )
+    assert posts == 0
+
+
+def test_production_route_policy_mismatch_is_zero_keychain_and_zero_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, route_cases, _ = _corpus_material()
+    authorization = _authorization(
+        [case.case_id for case in route_cases],
+        cost_cap_usd_cents=NO_FEE_CAP_APPROVED_SENTINEL,
+    )
+    operator_route = AnalysisProviderConfig(
+        config_source=ConfigSource.OPERATOR_FILE,
+        generation=1,
+        base_url="https://integrate.api.nvidia.com/v1",
+        model_id="openai/gpt-oss-120b",
+    )
+    plan = live_plan_summary(
+        authorization,
+        authorization.config_hash,
+        corpus_root=FIXTURES,
+        route=operator_route,
+    )
+    keychain_calls = 0
+
+    def forbidden_keychain(*args: object, **kwargs: object) -> object:
+        nonlocal keychain_calls
+        keychain_calls += 1
+        raise AssertionError("route mismatch must reject before Keychain")
+
+    monkeypatch.setattr(
+        AnalysisProviderLivePostExecutor,
+        "from_macos_keychain",
+        classmethod(forbidden_keychain),
+    )
+    (tmp_path / ".gitignore").write_text("/.seven-lens-local/\n", encoding="utf-8")
+    with pytest.raises(LiveEvalAuthorizationError, match="provider policy"):
+        run_production_live_eval(
+            repo_root=tmp_path,
+            corpus_root=FIXTURES,
+            authorization=authorization,
+            trusted_config_hash=authorization.config_hash,
+            trusted_grant_sha256=hashlib.sha256(str(plan["plan_hash"]).encode("utf-8")).hexdigest(),
+            supplied_grant=str(plan["plan_hash"]),
+            evidence_filename="must-not-exist.json",
+            now=datetime(2026, 8, 24, tzinfo=UTC),
+            route=operator_route,
+        )
+    assert keychain_calls == 0
+    assert not (tmp_path / ".seven-lens-local").exists()
 
 
 def test_single_attempt_accounting_and_blind_oracle_metrics() -> None:

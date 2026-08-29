@@ -51,10 +51,24 @@ P3 於 2026-08-26 完成最後子閘的獨立重新驗收後一次性關門，�
 - model id `openai/gpt-oss-120b` 含 `/`：envelope/producer version 以 derived
   `route_model_version`（`openai.gpt-oss-120b`）投影；route closure 仍以 exact model id 於
   claim/audit/wire 強制。live path（live-plan/live-run/execute）補上 route snapshot 綁定。
-- Offline／regression：V14 `616/616` 且 regeneration byte-identical；non-integration
-  `2075 passed, 272 deselected`；PG16 `270 passed, 2 deselected, 0 skipped`；static gates 全綠。
+- Offline／regression：V14 `616/616` 且 regeneration byte-identical；整合後完整 non-integration
+  `2117 passed, 282 deselected`；PG16 `280 passed, 2 deselected, 0 skipped`；Ruff format/check、mypy、
+  115份tracked JSON parse與243份Python compile全綠。
 - 狀態：**implementation integrated; current-code NVIDIA live evidence GREEN**（單批 snapshot，不能取代
   P6 前 rolling canary 義務）。
+
+## 2026-08-29 P1～P4-B 深度審查與修復
+
+- 多輪 Luna Max 分區審查、fresh acceptance、cross-phase review與真PG adversarial PoC已完成；只修復可重現
+  High/Medium與極小明確Low，沒有新增framework、provider特例、broker authority或P4-C能力。
+- P1/P2：收緊DSN escaping、Keychain native bounds、inactive asset、fill overrun與broker FILLED一致性；
+  execution/mirror/execution-id/broker-order-id衝突現在先durable `REVIEW_REQUIRED`＋pause/audit，整批fill在任何
+  mutation前預檢，真PG跨order/race保持單一immutable identity與零錯誤fill。
+- P3：production live route/authorization/executor/transport在Keychain、evidence path與POST前完成exact preflight；
+  config URL/generation與clock failure分類fail closed。V14 offline仍616/616且provider requests=0。
+- P4-A/B：深層JSON、endpoint-family、GDELT timestamp與identity append rollback收緊；additive migration
+  `0023_p4b_authority_adversarial_hardening`拒絕不完整identity source closure、非canonical reasons、重複event IDs
+  與typed payload drift。`0021` bytes不變；0023 up/down/up、owner/ACL/search_path/function restore已由真PG驗證。
 
 ## 2026-08-27 P1–P3 full remediation 狀態
 

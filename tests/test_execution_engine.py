@@ -425,7 +425,7 @@ class TestMismatchAndExpiry:
         with pytest.raises(BrokerMirrorMismatchError, match="contradict"):
             engine.resolve(unit_of_work, intent.client_order_id)
         parked = orders.get(intent.client_order_id)
-        assert parked is not None and parked.status is OrderStatus.SUBMITTING
+        assert parked is not None and parked.status is OrderStatus.REVIEW_REQUIRED
 
     def test_window_cutoff_cancels_broker_accepted_orders(
         self, caplog: pytest.LogCaptureFixture
@@ -663,6 +663,29 @@ class TestAssetGate:
         engine, unit_of_work, guard = _engine(orders, broker)
 
         with pytest.raises(ExecutionStateError, match="US equity"):
+            engine.submit_from_outbox(unit_of_work, intent.client_order_id)
+
+        assert guard.submit_calls == 0
+        assert (orders.get(intent.client_order_id) or intent).status is OrderStatus.OUTBOX_PENDING
+
+    def test_inactive_asset_fails_closed_even_when_marked_tradable(self) -> None:
+        orders = FakeOrderRepository()
+        intent = _outbox_intent(orders)
+        broker = FakePaperBroker(
+            clock=MutableClock(),
+            assets={
+                intent.symbol.value: PaperAsset(
+                    symbol=intent.symbol,
+                    asset_class=AssetClass.US_EQUITY,
+                    status=AssetStatus.INACTIVE,
+                    tradable=True,
+                    exchange="ARCA",
+                )
+            },
+        )
+        engine, unit_of_work, guard = _engine(orders, broker)
+
+        with pytest.raises(ExecutionStateError, match="does not trade symbol"):
             engine.submit_from_outbox(unit_of_work, intent.client_order_id)
 
         assert guard.submit_calls == 0
