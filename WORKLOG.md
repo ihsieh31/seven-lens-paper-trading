@@ -16,6 +16,8 @@
 - 最終官方gate：non-integration `2117 passed, 282 deselected`；PostgreSQL16
   `280 passed, 2 deselected, 0 skipped`；schema version 23；Ruff format/check、mypy、tracked JSON parse、
   Python compile與`git diff --check`全綠。全程live/provider/source/broker/Keychain calls=0。
+- 發布鏈：`74e1c23`（generic NVIDIA provider）→`eb6f214`（P1～P4-B hardening）→治理同步commit；
+  已發布至`origin/main`。
 
 ## 2026-08-29 — NVIDIA current-code P3-E／P3-F final live
 

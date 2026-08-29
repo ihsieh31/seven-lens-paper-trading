@@ -10,7 +10,7 @@ generic analysis-provider 已整合，NVIDIA `openai/gpt-oss-120b` 為現行 rou
 verdict 為 Accepted、Gate 狀態為 Closed；P4-C～P8未開始。P4 overall 仍為 In progress。**
 本地 `main` 以 `origin/main` 的已發布 P4-A／P4-B checkpoint 為起點，整合 generic analysis-provider、
 NVIDIA V14 fixtures、migration 0022、P1～P4-B深審修復與additive migration 0023、測試及治理文件。
-沒有新增broker/order authority；遠端尚未推送本輪整合。
+沒有新增broker/order authority；本輪整合與治理同步已提交並發布至`origin/main`。
 
 2026-08-27 獨立驗收證據：`./scripts/verify_p1.sh` 為 `1386 passed, 245 deselected`；targeted
 P1–P3 suites 為 `857 passed`；`./scripts/verify_p1.sh --postgres` 的 PostgreSQL 16 integration 為
@@ -136,6 +136,8 @@ Combined Final Gate。不得把 provider evidence 或 P4-A／P4-B 的 Accepted �
   function、owner、ACL、search_path與constraints精確還原0021，up/down/up通過。最新schema version=23。
 - 最終證據：`2117 passed, 282 deselected`；真PG16 `280 passed, 2 deselected, 0 skipped`；新增P2 identity
   6 tests與P4-B adversarial 4 tests均由official collection執行。沒有live/provider/source/broker/Keychain call。
+- 發布鏈：`74e1c23`（generic NVIDIA provider）→`eb6f214`（P1～P4-B hardening）→治理同步commit；
+  `main`與`origin/main`已同步。
 
 ## 8. 文件地圖
 

@@ -69,6 +69,8 @@ P3 於 2026-08-26 完成最後子閘的獨立重新驗收後一次性關門，�
 - P4-A/B：深層JSON、endpoint-family、GDELT timestamp與identity append rollback收緊；additive migration
   `0023_p4b_authority_adversarial_hardening`拒絕不完整identity source closure、非canonical reasons、重複event IDs
   與typed payload drift。`0021` bytes不變；0023 up/down/up、owner/ACL/search_path/function restore已由真PG驗證。
+- 發布：`74e1c23`整合generic NVIDIA provider、`eb6f214`登載P1～P4-B hardening；治理同步commit後
+  `main`與`origin/main`一致。
 
 ## 2026-08-27 P1–P3 full remediation 狀態
 

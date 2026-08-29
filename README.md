@@ -53,6 +53,8 @@ Current-code live evidence 已完成：P3-E 六案例 6/6 success、P3-F V14 260
 整合後 P1～P4-B 多輪 Luna Max 深審與 adversarial remediation 亦已完成；最終完整 gate 為
 non-integration `2117 passed, 282 deselected`、PostgreSQL 16 `280 passed, 2 deselected, 0 skipped`，
 最新 schema version 為 23。修復摘要與邊界見 `PROJECT_HANDOFF.md`。
+本輪發布鏈為 `74e1c23`（generic NVIDIA provider整合）→`eb6f214`（P1～P4-B深審修復）→
+其後的治理文件同步；三者均已納入並發布至`origin/main`。
 每次更換 endpoint/model 都會產生新的 route hash，
 並必須重新取得 P3-E／P3-F live evidence；穩定性本身不能取代 strict response-contract 相容性。
 
