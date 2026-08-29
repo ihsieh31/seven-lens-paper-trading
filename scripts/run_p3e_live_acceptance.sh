@@ -10,7 +10,7 @@ repo_root="$(cd "$script_dir/.." && pwd -P)"
 cd "$repo_root"
 
 if [[ "${SEVEN_LENS_P3E_LIVE:-}" != "1" ]]; then
-    echo "ERROR: set SEVEN_LENS_P3E_LIVE=1 only for the approved Agnes live gate." >&2
+    echo "ERROR: set SEVEN_LENS_P3E_LIVE=1 only for the approved current-route live gate." >&2
     exit 1
 fi
 if [[ "${SEVEN_LENS_P3E_KEY_ROTATED:-}" != "1" ]]; then

@@ -396,6 +396,8 @@ def _evaluate_case(case: EvalCase) -> ScriptedResult:
         "claim",
         "fact_variant",
     }
+    if "expected_route" in payload:
+        required = required | {"expected_route"}
     if set(payload) != required:
         raise ValueError("route payload is not exact")
     expected_round = _integer(payload["expected_round_number"], "expected_round_number", minimum=0)
@@ -413,6 +415,9 @@ def _evaluate_case(case: EvalCase) -> ScriptedResult:
     fact_variant = payload["fact_variant"]
     if type(fact_variant) is not str or not fact_variant:
         raise ValueError("route fact variant is invalid")
+    expected_route = payload.get("expected_route")
+    if expected_route is not None and type(expected_route) is not dict:
+        raise ValueError("route expected identity material is invalid")
     accepted, _ = probe_route_contract(
         stage=cast(str, case.stage),
         role=cast(str, case.role),
@@ -425,6 +430,7 @@ def _evaluate_case(case: EvalCase) -> ScriptedResult:
         ordinal=ordinal,
         fact_variant=fact_variant,
         claim_material=claim,
+        expected_route=cast(Mapping[str, JsonValue] | None, expected_route),
     )
     return ScriptedResult(
         case.case_id,

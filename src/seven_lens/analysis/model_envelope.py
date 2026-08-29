@@ -377,6 +377,7 @@ class SanitizedProviderEnvelope:
         versions: EnvelopeVersions,
         prompt_template_id: str,
         prompt_template_hash: str,
+        route_versions: tuple[str, str] | None = None,
     ) -> SanitizedProviderEnvelope:
         if type(portfolio_snapshot) is not PortfolioSnapshot:
             raise ValueError("envelope portfolio snapshot is invalid")
@@ -419,6 +420,7 @@ class SanitizedProviderEnvelope:
             citation_ids=citation_ids,
             versions=versions,
             feedback=feedback,
+            route_versions=route_versions,
         )
         validated_prior_outputs = _validate_prior_outputs(
             stage=stage,
@@ -1083,6 +1085,26 @@ def _typed_prior_outputs_from_wire(
     raise ValueError("envelope stage is invalid")
 
 
+#: Legacy package-default (Agnes) route identity for the P3-C projection
+#: check; the pipeline always passes the configured route explicitly.
+_LEGACY_P3C_ROUTE_VERSIONS: Final = ("agnes-2.5-flash", "agnes.1")
+
+
+def _p3c_expected_versions(
+    data_version: str,
+    route_versions: tuple[str, str],
+) -> EnvelopeVersions:
+    model_version, provider_version = route_versions
+    return EnvelopeVersions(
+        graph="tradingagents.1",
+        prompt="p3e.1",
+        model=model_version,
+        provider=provider_version,
+        data=data_version,
+        memory="none.1",
+    )
+
+
 def _validate_source_projection(
     *,
     stage: EnvelopeStage,
@@ -1113,6 +1135,7 @@ def _validate_source_projection(
     citation_ids: tuple[str, ...],
     versions: EnvelopeVersions,
     feedback: object | None,
+    route_versions: tuple[str, str] | None = None,
 ) -> None:
     """Bind provider-visible facts to one exact validated typed source object."""
 
@@ -1169,13 +1192,9 @@ def _validate_source_projection(
                 or bool(packet.contradiction_claim_ids)
                 or bool(packet.missing_evidence)
                 or versions
-                != EnvelopeVersions(
-                    graph="tradingagents.1",
-                    prompt="p3e.1",
-                    model="agnes-2.5-flash",
-                    provider="agnes.1",
-                    data=packet.producer_version,
-                    memory="none.1",
+                != _p3c_expected_versions(
+                    packet.producer_version,
+                    route_versions or _LEGACY_P3C_ROUTE_VERSIONS,
                 )
                 or evidence_packet_model_material(packet) != untrusted_data
             ):

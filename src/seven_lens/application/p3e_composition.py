@@ -1,4 +1,9 @@
-"""Capability-minimal P3-E research secret composition."""
+"""Deprecated legacy Agnes composition; the active stack lives in
+``seven_lens.application.analysis_provider_composition``.
+
+Kept only so historical tests and evidence tooling can still build the exact
+package-default Agnes stack.  This is not a second production route.
+"""
 
 from __future__ import annotations
 
@@ -67,6 +72,9 @@ def build_agnes_provider_stack(
     scoped_secrets = ScopedSecretProvider(secret_provider, research_provider_secret_refs())
     api_key = scoped_secrets.get_secret(SecretRef.primary(SecretKind.AGNES_API_KEY))
     config = agnes_25_flash_config()
+    from seven_lens.config.analysis_provider import package_default_analysis_provider_config
+
+    generic_config = package_default_analysis_provider_config()
     transport = AgnesJsonModelTransport(
         config=config,
         api_key=api_key,
@@ -74,7 +82,7 @@ def build_agnes_provider_stack(
         clock=selected_clock,
     )
     invoker = AuditedModelInvoker(
-        config=config,
+        config=generic_config,
         transport=transport,
         audit=audit,
         clock=lambda: _validated_now(selected_clock).value,

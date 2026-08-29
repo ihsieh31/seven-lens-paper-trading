@@ -25,6 +25,7 @@ class SecretKind(StrEnum):
     ALPACA_PAPER_KEY_ID = "ALPACA_PAPER_KEY_ID"
     ALPACA_PAPER_SECRET_KEY = "ALPACA_PAPER_SECRET_KEY"
     AGNES_API_KEY = "AGNES_API_KEY"
+    ANALYSIS_PROVIDER_API_KEY = "ANALYSIS_PROVIDER_API_KEY"
     BEA_API_KEY = "BEA_API_KEY"
     BLS_API_KEY = "BLS_API_KEY"
     EIA_API_KEY = "EIA_API_KEY"
@@ -38,6 +39,7 @@ _SERVICES: Final[dict[SecretKind, str]] = {
     SecretKind.ALPACA_PAPER_KEY_ID: "seven-lens.paper-trading.alpaca-paper.key-id",
     SecretKind.ALPACA_PAPER_SECRET_KEY: "seven-lens.paper-trading.alpaca-paper.secret-key",
     SecretKind.AGNES_API_KEY: "seven-lens.paper-trading.agnes.api-key",
+    SecretKind.ANALYSIS_PROVIDER_API_KEY: "seven-lens.paper-trading.analysis-provider.api-key",
     SecretKind.BEA_API_KEY: "seven-lens.paper-trading.bea.api-key",
     SecretKind.BLS_API_KEY: "seven-lens.paper-trading.bls.api-key",
     SecretKind.EIA_API_KEY: "seven-lens.paper-trading.eia.api-key",

@@ -45,12 +45,27 @@
 - [Codex Automations](https://learn.chatgpt.com/docs/automations)
 - [Agnes AI API reference](https://github.com/1038lab/Agnes-AI/blob/main/references/api.md)
 - [Agnes AI model catalog](https://github.com/AgnesAI-Labs/AgnesAI-Models/blob/main/MODEL_CATALOG.md)
+- [NVIDIA NIM / build.nvidia.com API](https://docs.api.nvidia.com/)：production base URL
+  `https://integrate.api.nvidia.com/v1`，OpenAI-compatible Chat Completions
+  （`POST /v1/chat/completions`），`Authorization: Bearer`；`openai/gpt-oss-120b` 為
+  NIM 上的 OpenAI gpt-oss-120b 部署（reasoning 模型；回應含 `reasoning_content`，僅作 bounded
+  非 authority 欄位處理）。2026-08-28 起為現行分析 route（ADR-033）
 - [OpenCode Go models、pricing 與 privacy](https://opencode.ai/docs/go/)
 
 對架構的影響：
 
-- P3-E所有logical roles固定`agnes-2.5-flash`及exact Chat Completions endpoint；無fallback、無automatic retry，
-  OpenCode與其他provider/model皆未啟用。
+- 分析 provider 已自「Agnes endpoint/model 寫死」改為 generic operator configuration：兩個
+  `python -m seven_lens.cli.analysis_provider set-endpoint / set-model` 指令持久設定 base URL 與
+  model；config 以 strict schema＋route_config_hash 存於
+  `${XDG_CONFIG_HOME:-$HOME/.config}/seven-lens/analysis-provider.json`。2026-08-28 設定後的
+  active route 於 2026-08-28 由使用者改為 `https://integrate.api.nvidia.com/v1` ＋
+  `openai/gpt-oss-120b`
+  （route_config_hash `0659d8fa9b38c9e7a800ce2bdc89b14eeb76a5c83f157f6b65afcbe568162524`，
+  endpoint_policy_id `analysis-route-v1:` + 該 hash）。package-owned default 仍為 legacy
+  Agnes base/model（generation=0），operator 檔案不存在時才使用。
+- 無fallback、無automatic retry、無 per-request override；舊 Agnes V12 歷史證據與 route identity
+  保留於 DB（provider=`AGNES`）與 archive 不變。新 route 的 P3-E/P3-F live 證據 pending fresh
+  authorization。
 - 公開文件未證實可用的MAX reasoning參數；只保存`reasoning_requested=MAX`，不傳未知參數並記
   `reasoning_effective=UNKNOWN`。
 - Agnes不得標示ZDR／不訓練；每批live payload、request count與成本仍需新的明確授權。

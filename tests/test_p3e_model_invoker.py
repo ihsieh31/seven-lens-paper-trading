@@ -32,7 +32,9 @@ from seven_lens.application.ports.model_transport import (
     ModelTransportError,
     ModelTransportErrorCode,
 )
-from seven_lens.config.provider import agnes_25_flash_config
+from seven_lens.config.analysis_provider import (
+    package_default_analysis_provider_config as agnes_25_flash_config,
+)
 from test_analysis_contracts import analysis_input, report, rid, timestamp
 from test_p3e_envelope_and_prompt import _envelope, _packet_with_excerpt
 

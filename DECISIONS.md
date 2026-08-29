@@ -153,6 +153,29 @@
   `seven-lens.paper-trading.agnes.api-key`、account`primary`。repository、env、argv、audit、telemetry與
   prompt均不得保存credential；聊天中出現的credential視為已暴露，必須rotation後以互動式Keychain輸入。
 
+### ADR-033 — 分析 provider 配置 generic 化（NVIDIA Chat Completions 為現行 route）
+
+- 日期：2026-08-28
+- 狀態：Accepted（generic route design；NVIDIA 為現行 operator route）
+- 分析 route 改由 strict operator configuration（`seven-lens.analysis-provider-config.v1`）驅動，
+  經 `set-endpoint`／`set-model` 兩個 CLI 指令持久化；fixed safety policy material
+  （timeouts、byte caps、no tools/state/files/redirect/proxy/env/retry/fallback）為 package-owned，
+  不因 operator 檔案改變。
+- route identity 以 `route_config_hash`（SHA-256 over canonical base URL＋model＋fixed policy
+  material）與 `analysis-route-v1:` policy id 表達；config hash 改變即 route identity 改變。
+- 現行 route 為 base `https://integrate.api.nvidia.com/v1`、
+  model `openai/gpt-oss-120b`、provider `OPENAI_COMPATIBLE`（generation=4）。package-owned default
+  （generation=0）仍為 legacy Agnes base/model；歷史 PostgreSQL rows／V12 證據維持 `AGNES` 與
+  `p3e-agnes-2.5-flash-only-v1` 完整不變。
+- NVIDIA/vLLM 回應的非 authority envelope metadata 以明列 allowlist＋bounded 驗證接受
+  （未知欄位仍 fail closed）；model id 內建單一 `/` 由 claim/audit/wire 的 exact model id 承載，
+  envelope version 以 `route_model_version` 投影。
+- P3-E 六案例 6/6、P3-F（V14）全部門檻通過（130/130 pre-network、258/260 strict completions、
+  accuracy 100%、violations 0、first-attempt 97.7%、eventual 99.2%、fallback 0、attempts 268/780）；
+  狀態為 implementation completed, pending fresh independent acceptance。
+- 舊 Agnes V12 route 的單一路由決策（ADR-031）為歷史決策；新 route 必須以新的 P3-E/P3-F
+  live conformance 與 fresh acceptance 重新取得 authority，本 ADR 不構成任何 live 授權。
+
 ### ADR-032 — P3-F immutable reflection、bounded memory與eval治理
 
 - 日期：2026-08-24

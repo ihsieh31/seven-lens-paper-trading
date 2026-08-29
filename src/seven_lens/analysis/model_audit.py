@@ -15,6 +15,10 @@ from seven_lens.analysis.contracts import (
 )
 from seven_lens.analysis.ports import DebateArgument, ProviderStage
 from seven_lens.analysis.proposal_contracts import PortfolioProposal, RiskArgument
+from seven_lens.config.analysis_provider import (
+    LEGACY_ENDPOINT_POLICY_ID,
+    LEGACY_ROUTE_CONFIG_HASH,
+)
 from seven_lens.config.provider import (
     ApiFlavor,
     ProviderKind,
@@ -45,6 +49,60 @@ _CALL_ID_DOMAIN: Final = "seven-lens.p3e.model-call.v1"
 _HASH_LENGTH: Final = 64
 _MAX_LATENCY_MS: Final = 900_000
 _MAX_TOKENS: Final = 1_000_000
+_GENERIC_MODEL_CHARACTERS: Final = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-"
+)
+
+
+def _valid_generic_model_id(model: object) -> bool:
+    """Bounded generic model id: one optional '/', no traversal or controls."""
+
+    if type(model) is not str or not 1 <= len(model) <= 128:
+        return False
+    segments = model.split("/")
+    if len(segments) > 2:
+        return False
+    return all(
+        segment
+        and segment not in {".", ".."}
+        and all(character in _GENERIC_MODEL_CHARACTERS for character in segment)
+        for segment in segments
+    )
+
+
+def _valid_generic_policy_id(policy: object) -> bool:
+    return (
+        type(policy) is str
+        and policy.startswith("analysis-route-v1:")
+        and len(policy) == len("analysis-route-v1:") + _HASH_LENGTH
+        and all(
+            character in "0123456789abcdef" for character in policy[len("analysis-route-v1:") :]
+        )
+    )
+
+
+def route_config_hash_for_claim(provider: ProviderKind, endpoint_policy_id: str) -> str:
+    """The exact route hash bound to one claim/audit provider and policy id."""
+
+    if provider is ProviderKind.AGNES and endpoint_policy_id == LEGACY_ENDPOINT_POLICY_ID:
+        return LEGACY_ROUTE_CONFIG_HASH
+    if provider is ProviderKind.OPENAI_COMPATIBLE and _valid_generic_policy_id(endpoint_policy_id):
+        return endpoint_policy_id[len("analysis-route-v1:") :]
+    raise ValueError("model-call audit route identity is invalid")
+
+
+def _validate_route_identity(provider: ProviderKind, model: str, endpoint_policy_id: str) -> None:
+    """Bounded historical + generic route closure (never any arbitrary string)."""
+
+    if provider is ProviderKind.AGNES:
+        if model != "agnes-2.5-flash" or endpoint_policy_id != LEGACY_ENDPOINT_POLICY_ID:
+            raise ValueError("model-call audit historical route identity is invalid")
+        return
+    if provider is ProviderKind.OPENAI_COMPATIBLE:
+        if not _valid_generic_model_id(model) or not _valid_generic_policy_id(endpoint_policy_id):
+            raise ValueError("model-call audit generic route identity is invalid")
+        return
+    raise ValueError("model-call audit provider is invalid")
 
 
 class ModelCallStage(StrEnum):
@@ -335,17 +393,21 @@ class ModelCallClaim:
             self.route_ordinal,
         ):
             raise ValueError("model-call claim identity is invalid")
-        if type(self.provider) is not ProviderKind or self.provider is not ProviderKind.AGNES:
+        if (
+            type(self.provider) is not ProviderKind
+            or type(self.model) is not str
+            or type(self.endpoint_policy_id) is not str
+        ):
             raise ValueError("model-call claim provider is invalid")
-        if self.model != "agnes-2.5-flash":
-            raise ValueError("model-call claim model is invalid")
+        try:
+            _validate_route_identity(self.provider, self.model, self.endpoint_policy_id)
+        except ValueError:
+            raise ValueError("model-call claim provider is invalid") from None
         if (
             type(self.api_flavor) is not ApiFlavor
             or self.api_flavor is not ApiFlavor.CHAT_COMPLETIONS
         ):
             raise ValueError("model-call claim API flavor is invalid")
-        if self.endpoint_policy_id != "p3e-agnes-2.5-flash-only-v1":
-            raise ValueError("model-call claim endpoint policy is invalid")
         _hash(self.prompt_template_hash, "claim prompt template")
         _hash(self.request_envelope_hash, "claim request envelope")
         if (
@@ -353,6 +415,15 @@ class ModelCallClaim:
             or self.reasoning_requested is not ReasoningRequested.MAX
         ):
             raise ValueError("model-call claim requested reasoning is invalid")
+
+    @property
+    def route_config_hash(self) -> str:
+        """The exact route hash this claim is bound to."""
+
+        try:
+            return route_config_hash_for_claim(self.provider, self.endpoint_policy_id)
+        except ValueError:
+            raise ValueError("model-call claim route identity is invalid") from None
 
 
 @dataclass(frozen=True, slots=True)
@@ -418,17 +489,21 @@ class ModelCallAuditRecord:
         )
         if self.call_id != expected_call_id:
             raise ValueError("model-call audit call identity is invalid")
-        if type(self.provider) is not ProviderKind or self.provider is not ProviderKind.AGNES:
+        if (
+            type(self.provider) is not ProviderKind
+            or type(self.model) is not str
+            or type(self.endpoint_policy_id) is not str
+        ):
             raise ValueError("model-call audit provider is invalid")
-        if self.model != "agnes-2.5-flash":
-            raise ValueError("model-call audit model is invalid")
+        try:
+            _validate_route_identity(self.provider, self.model, self.endpoint_policy_id)
+        except ValueError:
+            raise ValueError("model-call audit endpoint policy is invalid") from None
         if (
             type(self.api_flavor) is not ApiFlavor
             or self.api_flavor is not ApiFlavor.CHAT_COMPLETIONS
         ):
             raise ValueError("model-call audit API flavor is invalid")
-        if self.endpoint_policy_id != "p3e-agnes-2.5-flash-only-v1":
-            raise ValueError("model-call audit endpoint policy is invalid")
         _hash(self.prompt_template_hash, "prompt template")
         _hash(self.request_envelope_hash, "request envelope")
         _hash(self.response_hash, "response", optional=True)
@@ -476,6 +551,15 @@ class ModelCallAuditRecord:
         elif self.error_code is ModelCallErrorCode.NONE:
             raise ValueError("model-call audit outcome is inconsistent")
 
+    @property
+    def route_config_hash(self) -> str:
+        """The exact route hash this audit row is bound to."""
+
+        try:
+            return route_config_hash_for_claim(self.provider, self.endpoint_policy_id)
+        except ValueError:
+            raise ValueError("model-call audit route identity is invalid") from None
+
     def to_metadata(self) -> dict[str, object]:
         """Return exact bounded metadata for diagnostics and repository adaptation."""
         return {
@@ -491,6 +575,7 @@ class ModelCallAuditRecord:
             "api_flavor": self.api_flavor.value,
             "endpoint_policy_id": self.endpoint_policy_id,
             "route_ordinal": self.route_ordinal,
+            "route_config_hash": self.route_config_hash,
             "prompt_template_hash": self.prompt_template_hash,
             "request_envelope_hash": self.request_envelope_hash,
             "response_hash": self.response_hash,

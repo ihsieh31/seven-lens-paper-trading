@@ -252,7 +252,8 @@ optimizer 的目標是最大化經 haircut 的預期報酬，減去 variance、c
 ### 9.2 每日研究模型路由
 
 - Technical/Market、Fundamentals、News、Sentiment、Research Manager、Trader、三個Risk Debate角色及
-  Portfolio Manager全部固定`agnes-2.5-flash`，使用exact Chat Completions endpoint。
+  Portfolio Manager全部使用 operator-configured Chat Completions route（2026-08-28 起
+  `openai/gpt-oss-120b`＠`https://integrate.api.nvidia.com/v1`）；legacy package default 為 `agnes-2.5-flash`。
 - 此版本沒有fallback、automatic retry、可配置候選或Responses route；未來新增provider/model要先取得新決策並
   通過相同eval gate，不得由runtime任意切換。
 - 例外只存在於P3-F synthetic eval harness：production transport本身仍無hidden retry；eval orchestrator可在

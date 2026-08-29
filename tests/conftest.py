@@ -179,5 +179,17 @@ def migrated_postgres(test_database_url: str) -> Iterator[str]:
     try:
         yield test_database_url
     finally:
-        while current_version(test_database_url):
-            rollback(test_database_url)
+        try:
+            while current_version(test_database_url):
+                rollback(test_database_url)
+        except Exception:
+            # A test may have written rows whose route identity makes the down
+            # migration refuse by design (e.g. live generic-route audits).  The
+            # disposable test database is then reset out-of-band.
+            import psycopg
+
+            with psycopg.connect(test_database_url, autocommit=True) as connection:
+                connection.execute("DROP SCHEMA public CASCADE")
+                connection.execute("CREATE SCHEMA public")
+                connection.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA public")
+            migrate(test_database_url)

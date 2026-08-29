@@ -15,7 +15,7 @@ _AUTHORITATIVE_VIEW_NAMES: Final[frozenset[str]] = frozenset(
 )
 
 # The exact table inventory of the authoritative public schema after migrations
-# 0001-0021.  Any extra or missing table is privilege-surface drift.
+# 0001-0022.  Any extra or missing table is privilege-surface drift.
 _AUTHORITATIVE_TABLE_NAMES: Final[frozenset[str]] = frozenset(
     {
         "account_baseline_revisions",
@@ -69,7 +69,7 @@ _AUTHORITATIVE_TABLE_NAMES: Final[frozenset[str]] = frozenset(
     }
 )
 
-# The exact non-internal trigger inventory after migrations 0001-0021.  Trigger
+# The exact non-internal trigger inventory after migrations 0001-0022.  Trigger
 # names and their target tables are safety authority, not incidental metadata.
 _AUTHORITATIVE_TRIGGER_TABLES: Final[frozenset[tuple[str, str]]] = frozenset(
     {
@@ -141,7 +141,7 @@ _AUTHORITATIVE_TRIGGER_TABLES: Final[frozenset[tuple[str, str]]] = frozenset(
     }
 )
 
-# The exact function inventory of the public schema after migrations 0001-0021,
+# The exact function inventory of the public schema after migrations 0001-0022,
 # each entry being the function name plus its identity argument types rendered by
 # array_to_string(proargtypes::regtype[], ',').  This includes the 36 pgcrypto
 # extension functions installed by migration 0009.  Any extra function, overload

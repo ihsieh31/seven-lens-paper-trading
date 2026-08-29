@@ -46,7 +46,7 @@ Issue關閉不會自動關閉較大的phase gate。
 - 控制：`SINGLE_ACCOUNT_UNVERIFIED`固定fail closed；本地ticket/reference不能自我升權。
 - 關閉：可信外部授權、帳號集合綁定、quota ledger、ADR與獨立驗收全部完成。
 
-### OPEN-027 — Agnes transport可靠性不可由單次P3-F batch永久證明
+### OPEN-027 — Provider transport可靠性不可由單次P3-F batch永久證明
 
 - 嚴重度：High／P6 blocker；不是P3-F功能正確性blocker。
 - 問題：V4～V8多次因`TIMEOUT`／`TRANSIENT`在首錯停止；反覆換split沒有修復provider可用性，單次全綠也不能
@@ -57,6 +57,9 @@ Issue關閉不會自動關閉較大的phase gate。
 - 關閉：P6前另行授權的synthetic canary在rolling 7日、至少200 logical calls窗口達first-attempt≥95%、
   eventual≤3 attempts≥99%，且P6～P8持續監控；provider/model改版或rolling window跌破門檻即重開。
 
+- 2026-08-28 更新：active route 已改為 NVIDIA `openai/gpt-oss-120b`（ADR-033）。V14 單批 live snapshot
+  （130/130 pre-network、first-attempt 97.7%、eventual 99.2%、fallback 0）不構成永久可用性證明；
+  rolling 7 日 ≥200 logical calls canary 義務改綁現行 route，仍為 P6 前置。
 ### OPEN-036 — 多來源與point-in-time security master residual scope
 
 - 嚴重度：High／P4 blocker。
@@ -126,6 +129,39 @@ native smoke需要專用namespace與另行授權，不得查詢現有真實item�
 `pause_entries`、`cancel_open_orders`、`flatten_paper`已有application path；operator CLI留P6/P7，
 不得因現有service存在就宣稱已交付人工控制入口。
 
+### OPEN-039 — 分析 provider switch pending fresh acceptance 與 connect timeout 政策觀察
+
+- 嚴重度：High（provider switch acceptance blocker）；政策觀察部分為 Low。
+- 問題：2026-08-28 分析 provider switch（offline implementation＋P3-E live 6/6＋P3-F V14 全門檻通過）
+  曾因 fresh independent acceptance findings 進入 remediation；實作者不得自行關閉驗收缺口。
+  另 P3-F live 的 8 次 retry 全部為 ≈2004ms 的 TRANSIENT（`connect_timeout_ms=2000` 固定預算用盡），
+  顯示 2 秒連線預算對 NVIDIA edge 偏緊；屬政策敏感度而非缺陷。
+- 控制：fresh independent acceptance；`connect_timeout_ms` 屬 package-owned policy material，任何調整
+  需新的使用者決策並重算 route hash（會改變 route identity）；rolling canary（OPEN-027）持續監控。
+- 關閉：fresh acceptance verdict 出爐（Accepted／Rejected）；connect timeout 若需調整另開 ADR 並重跑
+  P3-E/P3-F 授權 live 驗證。
+
+- 2026-08-29 fresh independent acceptance verdict＝**Rejected**，兩項 High 已於本輪修復：
+  F-01 transport 未驗證 DNS 解析位址為 public（credential 可送 loopback/private）→ `ResolvedAddress`
+  現逐地址拒絕 internal scope（含 IPv4-mapped），mixed public+private 整批 pre-connection 拒絕，並補
+  permanent tests；F-02 migration 0022 up 的 route-hash backfill 在任何既有 claim/audit rows 的庫上必然
+  55000 失敗（guard trigger 只允許 CLAIMED→CLOSED）→ backfill 改為 migration 交易內暫時 disable 該
+  row-write guard 後回填再 enable（owner＋ACCESS EXCLUSIVE 交易內無繞過窗口），並補
+  「0021 先寫 legacy rows 再升 0022」的真實 PG16 regression test。另修 F-06（generic live executor 的
+  per-record response_hash_kind 誤標 SCRIPTED→現為 PROVIDER_RAW_RESPONSE_BODY_SHA256 且逐 post 正確）、
+  F-04/F-05（docs latency 數字與 stale route 陳述）、F-08（production root 推導現拒絕任何 symlink
+  path component，`validate_production_root`＋permanent test；loader 保留 spec 認可的 test-injection 路徑）。
+- F-07（Low，延後）：generic route 的 claim 仍記錄 `reasoning_requested=MAX`。誠實修復需擴充
+  `ReasoningRequested` 封閉 enum（目前僅 MAX）並放寬 0012 已獨立驗收的 claims/audits 表
+  `reasoning_requested='MAX'` CHECK——對 audit 元數據級 Low 問題屬不成比例的 schema／domain 變更；
+  MAX 為自 Agnes route 沿用的 package-owned policy 常數，不影響 authority 或輸出正確性。
+- F-03（Medium，未完全關閉）：V14 live run 的 authorization JSON／grant 未隨 evidence 保存，其
+  expiry／authorization_id／timeout_ms 已不可獨立重算（evidence 內數值門檻本輪已由 raw records 全部獨立
+  重算通過）。`scripts/run_p3f_live_evals.sh` 現於 live-run 後自動歸檔 authorization 至 evidence 目錄；
+  後續任何 live evidence 必須含此 artifact 才可支持 Accepted。
+- 因 F-01/F-02/F-06 改動 transport／migration／evidence 代碼，既有 P3-E/P3-F live evidence 不再代表
+  current code；修復後需以當次精確授權重跑新 route live evidence，再提交 fresh independent acceptance。
+
 ## Closed／Superseded索引
 
 | IDs | 結論 |
@@ -143,5 +179,5 @@ native smoke需要專用namespace與另行授權，不得查詢現有真實item�
 | NEW-P2-01 — CLOSED | runtime role 原可直接 UPDATE `control_state` 的 authority blocker 已由 migration 0019、fixed-path `SECURITY DEFINER` control functions、ACL verifier 與 real-PG direct-update probe 關閉；direct update `42501`、unsafe resume `55000` |
 | SUPERSEDED-021 | 舊cash/NAV關閉理由被P2-CUR證據取代 |
 
-目前沒有剩餘的 P1/P2/P3 Gate blocker；OPEN-002～007、OPEN-027、OPEN-036～037 與其他 residual/future-phase issue
-仍需依各自的外部、營運或後續 phase 關閉條件處理，不能由本次 acceptance 擴張關閉。
+目前沒有剩餘的 P1/P2/P3 Gate blocker；OPEN-002～007、OPEN-027、OPEN-036～039 與其他 residual/future-phase
+issue 仍需依各自的外部、營運或後續 phase 關閉條件處理，不能由本次 acceptance 擴張關閉。

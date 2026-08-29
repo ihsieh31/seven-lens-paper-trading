@@ -8,7 +8,7 @@ def main() -> int:
 
     return pytest.main(
         [
-            "tests/integration/test_p3e_live_provider.py::test_authorized_six_case_agnes_conformance",
+            "tests/integration/test_p3e_live_provider.py::test_authorized_six_case_current_route_conformance",
             "-s",
             "-ra",
             "--tb=short",

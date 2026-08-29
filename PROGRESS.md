@@ -1,6 +1,7 @@
 # Progress
 
-最後更新：2026-08-28（P1–P3 Closed；P4-A／P4-B Accepted、Closed；P4-C～F未開始）
+最後更新：2026-08-29（P1–P3 Closed；P4-A／P4-B Accepted、Closed；P4-C～F未開始；
+generic analysis-provider 已整合，NVIDIA `openai/gpt-oss-120b` 為現行 route）
 
 ## 目前 Gate
 
@@ -10,6 +11,50 @@
 P3 於 2026-08-26 完成最後子閘的獨立重新驗收後一次性關門，並以 commit `b59e466` 發布工作樹、
 `d51e9a9` 修復 CI postgres service tmpfs、`660e062` 完成治理同步；exact-SHA run `32962320231`
 與 `32963312426` 的 `quality-unit`＋`postgres-integration` 兩 required jobs 均成功。
+
+## 2026-08-29 Generic analysis-provider 整合
+
+- 分析 provider 配置已 generic 化：
+  strict operator config schema/hash/loader（`config/analysis_provider.py`）、兩個 operator CLI 指令
+  （`cli/analysis_provider.py`：`set-endpoint`／`set-model`，另有唯讀 `show`／`validate`）、
+  generic Chat Completions transport（`infrastructure/chat_completions_transport.py`）、
+  config-driven composition 與 thin adapters（`analysis_provider_composition.py`、
+  `analysis_providers.py`）、generic secret kind
+  `seven-lens.paper-trading.analysis-provider.api-key`、bounded generic audit route identity
+  （新增 `route_config_hash`，legacy Agnes rows 完整保留）。
+- additive migration `0022_analysis_route_identity_up/down.sql`：provider/model/policy CHECK 改為
+  bounded union＋cross-field hash closure；`memory_curation_audits.model_id` 允許單一 `/`；
+  down migration 在存在 generic route rows 時 fail closed（SQLSTATE 55000）。
+- P3-E live harness 使用 current-route 六案例與 route-bound evidence；P3-F active source-only split 為
+  `p3f-synthetic-v14`（616 cases，route cases 綁定 current config hash）；歷史 V12 bytes/hash unchanged。
+- 現行 operator route：base `https://integrate.api.nvidia.com/v1`、model `openai/gpt-oss-120b`、
+  route_config_hash `0659d8fa9b38c9e7a800ce2bdc89b14eeb76a5c83f157f6b65afcbe568162524`。
+
+## NVIDIA `openai/gpt-oss-120b` current-code evidence
+
+- 現行 route 為 `https://integrate.api.nvidia.com/v1`＋`openai/gpt-oss-120b`（route_config_hash
+  `0659d8fa9b38c9e7a800ce2bdc89b14eeb76a5c83f157f6b65afcbe568162524`）。canonical Keychain
+  service `seven-lens.paper-trading.analysis-provider.api-key` 已由使用者提供之 key 就緒。
+- 因 provider 變更，重新產生綁定新 route 的 source-only split `p3f-synthetic-v14`
+  （616 cases、offline 616/616 byte-match、regeneration deterministic）；V12 bytes 不變。
+- Current-code P3-E final live：6/6 SUCCESS、retry=0、fallback=null，p50=`6114ms`、p95/max=`18804ms`；
+  evidence：`docs/P3E_LIVE_EVIDENCE_2026-08-29_NVIDIA.json`。
+- Current-code P3-F V14 final live：260/260 strict、0 errors、0 retries、0 fallback；130/130
+  invalid/ambiguous pre-network rejects；first-attempt/eventual/valid-primary皆100%，live quality與transport
+  gates皆通過。local immutable evidence hash `9fcc76258883365990f47783b1b5f01226d813c40d6b703ef033ee66da5b16e0`，
+  file SHA-256 `c69c3d7e6ccaf78e772a503bca8d394c488c2d4ffe649f23f679dd33c81dca85`。
+- Provider-drift 調整（使用者授權下）：NVIDIA/vLLM 回應含非 authority envelope metadata
+  （service_tier、system_fingerprint、prompt_logprobs、prompt_token_ids、kv_transfer_params、
+  choice logprobs/stop_reason/token_ids、message reasoning/reasoning_content/tool_calls/
+  function_call/annotations/audio/refusal、usage *_details），strict parser 以**明列 allowlist
+  ＋bounded 值驗證**接受；未知欄位仍 fail closed；content authority 路徑不變。
+- model id `openai/gpt-oss-120b` 含 `/`：envelope/producer version 以 derived
+  `route_model_version`（`openai.gpt-oss-120b`）投影；route closure 仍以 exact model id 於
+  claim/audit/wire 強制。live path（live-plan/live-run/execute）補上 route snapshot 綁定。
+- Offline／regression：V14 `616/616` 且 regeneration byte-identical；non-integration
+  `2075 passed, 272 deselected`；PG16 `270 passed, 2 deselected, 0 skipped`；static gates 全綠。
+- 狀態：**implementation integrated; current-code NVIDIA live evidence GREEN**（單批 snapshot，不能取代
+  P6 前 rolling canary 義務）。
 
 ## 2026-08-27 P1–P3 full remediation 狀態
 

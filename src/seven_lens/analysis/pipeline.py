@@ -45,6 +45,10 @@ from seven_lens.application.ports.analysis import (
     AnalysisStateRepository,
     StoredStageResult,
 )
+from seven_lens.config.analysis_provider import (
+    AnalysisProviderConfig,
+    package_default_analysis_provider_config,
+)
 from seven_lens.domain.json_values import JsonObject
 from seven_lens.domain.value_objects import RunId
 from seven_lens.sources.contracts import EvidencePacket, EvidenceStatus, FreshnessStatus
@@ -121,15 +125,21 @@ class PipelineResult:
 
 
 class AnalysisPipeline:
+    """P3-C orchestration bound to one immutable analysis route snapshot."""
+
     def __init__(
         self,
         provider: AnalysisProvider,
         repository: AnalysisStateRepository,
         *,
+        route: AnalysisProviderConfig | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._provider = provider
         self._repository = repository
+        self._route = route or package_default_analysis_provider_config()
+        if type(self._route) is not AnalysisProviderConfig:
+            raise AnalysisPipelineError("analysis pipeline route is invalid")
         self._now = now or (lambda: datetime.now(UTC))
 
     def run(
@@ -523,13 +533,17 @@ class AnalysisPipeline:
             versions=EnvelopeVersions(
                 graph="tradingagents.1",
                 prompt="p3e.1",
-                model="agnes-2.5-flash",
-                provider="agnes.1",
+                model=self._route.route_model_version,
+                provider=self._route.route_provider_version,
                 data=packet.producer_version,
                 memory="none.1",
             ),
             prompt_template_id=APPROVED_PROMPT_TEMPLATE_ID,
             prompt_template_hash=APPROVED_PROMPT_TEMPLATE_HASH,
+            route_versions=(
+                self._route.route_model_version,
+                self._route.route_provider_version,
+            ),
         )
         request = ProviderRequest(
             stage,

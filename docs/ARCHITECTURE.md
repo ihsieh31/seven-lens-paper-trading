@@ -294,7 +294,9 @@ serialized byte budgets。大型raw evidence只能進未來另行驗收的conten
 ### LLM provider adapters
 
 - P3-E目前所有Analyst、Research、Trader、Risk Debate與Portfolio Manager角色固定
-  `agnes-2.5-flash`／Chat Completions exact endpoint，無fallback、無automatic retry；其他provider/model皆disabled。
+  operator-configured Chat Completions route（2026-08-28 起為 `https://integrate.api.nvidia.com/v1`＋
+  `openai/gpt-oss-120b`，經 `set-endpoint`／`set-model` 持久設定），無fallback、無automatic retry；
+  非 configured 的 provider/model 皆disabled。legacy package default 仍為 Agnes base/model。
 - 上述production transport邊界不變。P3-F synthetic eval由較高層、exact authorization-bound orchestrator處理
   transient transport：同一hash-closed logical case只對`TIMEOUT`／`TRANSIENT`／`RATE_LIMIT`最多retry兩次，
   2s／4s exponential backoff加bounded deterministic jitter，三個連續cases耗盡retry即開circuit，260 logical
@@ -311,7 +313,8 @@ serialized byte budgets。大型raw evidence只能進未來另行驗收的conten
 - `SecretProvider` application port 只接受 typed、exact `SecretRef`，不提供 list/search/write/update/delete/export；domain/application 不依賴 PyObjC、Keychain、環境變數或資料庫。
 - macOS production adapter 只以 Security.framework `SecItemCopyMatching` 查 generic password，固定 service/account mapping、`match all` 與禁止 authentication UI；零筆、多筆、拒絕、locked、timeout、malformed 或 backend failure 全部 fail closed，沒有 env／argv／DB／第二 provider fallback。
 - `ScopedSecretProvider` 在 backend call 前強制 exact-reference allowlist。execution scope 才可取得 Alpaca Paper refs；research/LLM scope 只可取得 Agnes／OpenCode／未來經核准的 OpenAI／Tavily refs。未來 FRED／BLS／BEA／EIA 等 key 必須各有新的 typed `SecretRef` 與 exact-host GET-only adapter；公開 SEC／IR／exchange／GDELT 也不能因此取得任意網路能力。這是 application capability boundary，不是 OS sandbox。
-- P3-E只啟用exact ref `seven-lens.paper-trading.agnes.api-key/primary`；OpenCode與其他provider refs不在
+- P3-E只啟用exact ref `seven-lens.paper-trading.analysis-provider.api-key/primary`；legacy
+  `seven-lens.paper-trading.agnes.api-key` 僅供歷史相容、active composition 不讀取；OpenCode與其他provider refs不在
   research composition scope，未來需新決策及gate才能新增。
 - Alpaca/OpenAI account 固定為 `primary`；Tavily account 使用既有規則驗證的非秘密 `account_id`。Tavily 每個 key 只有 account metadata、compliance、quota、usage、reset/cooldown 狀態可進 DB，只有 `AUTHORIZED_ACCOUNT_POOL` 才能啟用多 key router。
 - `SecretValue` 只降低 `str/repr/log/serialization` 意外洩漏，不是程序記憶體加密或 OS isolation；plaintext 只能在未來 client composition boundary 透過明確 reveal 方法取得。

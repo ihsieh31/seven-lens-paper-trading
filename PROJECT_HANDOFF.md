@@ -1,15 +1,15 @@
 # Project Handoff
 
-最後更新：2026-08-28（P1–P3 Closed；P4-A／P4-B Accepted、Closed；P4-C～F未開始）
+最後更新：2026-08-29（P1–P3 Closed；P4-A／P4-B Accepted、Closed；P4-C～F未開始；
+generic analysis-provider 已整合，NVIDIA `openai/gpt-oss-120b` 為現行 route）
 專案：`/Users/zongen/Downloads/codex/trading`
 
 ## 1. 目前唯一狀態
 
 **P1–P3 full remediation 已完成獨立驗收並 Accepted；P4-A與P4-B均已完成 fresh independent acceptance，
 verdict 為 Accepted、Gate 狀態為 Closed；P4-C～P8未開始。P4 overall 仍為 In progress。**
-目前基線 HEAD=`1099573`（`main`＝`origin/main`）；P1–P3修復已提交／發布。其後工作樹包含docs-only規劃、
-P4-A source/tests與P4-B identity／corporate-action／quarantine source、migration、tests。沒有credential、
-外部API/model/broker呼叫，也尚未commit／push。
+本地 `main` 以 `origin/main` 的已發布 P4-A／P4-B checkpoint 為起點，整合 generic analysis-provider、
+NVIDIA V14 fixtures、migration 0022、測試與治理文件。沒有 broker/order authority；遠端尚未推送本輪整合。
 
 2026-08-27 獨立驗收證據：`./scripts/verify_p1.sh` 為 `1386 passed, 245 deselected`；targeted
 P1–P3 suites 為 `857 passed`；`./scripts/verify_p1.sh --postgres` 的 PostgreSQL 16 integration 為
@@ -67,7 +67,8 @@ reflection/memory/evals 各自經獨立驗收 Accepted 後合併關門；過程�
   `217 passed, 15 deselected, 0 skipped`；Ruff／format／mypy／`git diff --check` 全綠。
 - Offline eval：V12 frozen report byte-match，split/report hash 不變。
 - Authorized live evidence V12：260/260 strict 且全正確、violations=0、130/130 pre-network fail-closed；
-  Provider Transport first-attempt/eventual 皆 100%（該批 snapshot）。
+  Provider Transport first-attempt/eventual 皆 100%（該批 snapshot；Agnes route 歷史證據，
+  2026-08-28 起 active route 已改為 NVIDIA，見第6節）。
 
 ## 4. 邊界與存續義務
 
@@ -76,6 +77,10 @@ reflection/memory/evals 各自經獨立驗收 Accepted 後合併關門；過程�
   walk-forward/profitability 主張屬 P5。
 - Provider Transport 的 rolling canary 義務（OPEN-027）：P6 Shadow 前需另行授權 synthetic canary，
   於 rolling 7 日且 ≥200 logical calls 達 first-attempt≥95%／eventual≤3 attempts≥99%，跌破即重開。
+  該義務現在綁定現行 NVIDIA route（單批 V14 snapshot 不構成永久可用性證明）。
+- Keychain：active 分析 provider 憑證為 `seven-lens.paper-trading.analysis-provider.api-key`／
+  account `primary`（已含 NVIDIA key）；舊 `seven-lens.paper-trading.agnes.api-key` 項目保留未刪、
+  active composition 不讀取，建議操作者擇期刪除。
 - OPEN-002/003/004/005/006/007/025/027 等未結 issue 的關閉條件不變；詳見 `ISSUES.md`。
 - OPEN-036（多來源／security master）中P4-A／P4-B的implementation與獨立驗收子範圍已Closed；source rights、
   真實provider entitlement、P4-C～F production composition與P5 time-travel residual仍依issue條件保持Open。
@@ -87,12 +92,39 @@ reflection/memory/evals 各自經獨立驗收 Accepted 後合併關門；過程�
 
 ## 5. 下一個單一步驟
 
-**P4-A（含第0C節ADR-039 SEC delta）與P4-B已完成獨立驗收並Closed。下一步是依序開始P4-C
-implementation，再由未參與實作的fresh session依`P4C_ACCEPTANCE_PROMPT.md`驗收。** P4-C～F仍須各自完成
-implementation／acceptance；F acceptance同時是P4 Combined Final Gate。不得把P4-A／P4-B的Accepted或任何
-broker／order authority延伸到下一個Gate。
+**開始 P4-C implementation。** 本輪 NVIDIA route 的完整 regression、P3-E／P3-F current-code live
+evidence 與證據同步已完成。P4-C～F仍須各自完成 implementation／acceptance；F acceptance 同時是 P4
+Combined Final Gate。不得把 provider evidence 或 P4-A／P4-B 的 Accepted 擴張成 broker/order authority。
 
-## 6. 文件地圖
+## 6. Generic Analysis Provider（NVIDIA active route）
+
+- **Active route**：operator config 為 `https://integrate.api.nvidia.com/v1`＋`openai/gpt-oss-120b`，route_config_hash
+  `0659d8fa9b38c9e7a800ce2bdc89b14eeb76a5c83f157f6b65afcbe568162524`，policy `analysis-route-v1:`+hash。
+  兩個指令：`python -m seven_lens.cli.analysis_provider set-endpoint …`／`set-model …`；
+  config存於`${XDG_CONFIG_HOME:-$HOME/.config}/seven-lens/analysis-provider.json`（strict schema＋SHA-256
+  route hash＋atomic write＋flock）；package-owned default仍為legacy Agnes base/model（generation=0）。
+- **Offline implementation**：`config/analysis_provider.py`、`cli/analysis_provider.py`、
+  `infrastructure/chat_completions_transport.py`、`infrastructure/analysis_providers.py`、
+  `application/analysis_provider_composition.py`、generic secret kind
+  `seven-lens.paper-trading.analysis-provider.api-key`、bounded generic audit route identity（`route_config_hash`）、
+  additive migration `0022_analysis_route_identity_{up,down}.sql`（down在generic rows存在時fail closed 55000）、
+  model id允許單一`/`（envelope version以`route_model_version`投影，route closure仍綁exact model id）。
+- **P3-F split**：`p3f-synthetic-v14`綁定現行 route（616 cases、offline 616/616 byte-match、regeneration
+  deterministic）；歷史 V12 bytes 不變。live path（plan/run/request hash）綁定當次 route snapshot。
+- **Current-code P3-E live**：6/6 SUCCESS、retry=0、fallback=null，p50=`6114ms`、p95/max=`18804ms`；
+  tracked sanitized evidence為`docs/P3E_LIVE_EVIDENCE_2026-08-29_NVIDIA.json`。
+- **Current-code P3-F live**：V14 260/260 strict、0 errors/retries/fallback，130/130 invalid/ambiguous
+  pre-network rejects，first-attempt/eventual/valid-primary皆100%；local immutable evidence hash
+  `9fcc76258883365990f47783b1b5f01226d813c40d6b703ef033ee66da5b16e0`，file SHA-256
+  `c69c3d7e6ccaf78e772a503bca8d394c488c2d4ffe649f23f679dd33c81dca85`。這是單批snapshot，
+  不取代P6前rolling canary義務。
+- **Provider-drift調整**：NVIDIA/vLLM回應的非authority envelope metadata以明列allowlist＋bounded值驗證接受
+  （未知欄位仍fail closed；content authority路徑不變）。
+- **回歸**：V14 offline `616/616` 且 regeneration byte-identical；non-integration
+  `2075 passed, 272 deselected`；PG16 `270 passed, 2 deselected, 0 skipped`；Ruff format/check、mypy、
+  `git diff --check`全綠。
+
+## 7. 文件地圖
 
 - 現行治理：`PROGRESS.md`（gate 狀態）、`docs/ROADMAP_AND_ACCEPTANCE.md`（剩餘階段與完成條件）、
   `DECISIONS.md`、`ISSUES.md`、`RISK_REGISTER.md`、`WORKLOG.md`（逐輪歷史）、`P4_PROGRAM_PLAN.md`

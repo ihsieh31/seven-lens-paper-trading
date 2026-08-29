@@ -34,6 +34,25 @@ provider isolation、immutable reflection lineage、bounded curated memory 與 s
 - 發布：工作樹以 `b59e466` 登載、CI tmpfs 修復 `d51e9a9`；exact-SHA run `32962320231`
   的 `quality-unit` 與 `postgres-integration` 兩 required jobs 成功。
 
+## 分析 provider（2026-08-28）
+
+分析 AI 的 endpoint/model 由 provider-neutral operator configuration 驅動。任何符合本專案 strict
+OpenAI-compatible Chat Completions contract 的供應商都可用兩個指令持久切換，不需要改 application code：
+
+```bash
+uv run --locked python -m seven_lens.cli.analysis_provider set-endpoint https://integrate.api.nvidia.com/v1
+uv run --locked python -m seven_lens.cli.analysis_provider set-model openai/gpt-oss-120b
+```
+
+現行 route：NVIDIA Chat Completions＋`openai/gpt-oss-120b`（provider-neutral generic config，
+package default 為 legacy Agnes base/model）。憑證使用 macOS Keychain service
+`seven-lens.paper-trading.analysis-provider.api-key`／account `primary`；切換後新 process 才會採用新 route。
+Current-code live evidence 已完成：P3-E 六案例 6/6 success、P3-F V14 260/260 strict、0 errors、
+0 retries、0 fallback，且 130/130 invalid/ambiguous cases 在送網路前拒絕；詳見
+`docs/P3E_LIVE_EVIDENCE_2026-08-29_NVIDIA.json` 與 current handoff。offline／PostgreSQL integration 亦已綠。
+每次更換 endpoint/model 都會產生新的 route hash，
+並必須重新取得 P3-E／P3-F live evidence；穩定性本身不能取代 strict response-contract 相容性。
+
 2026-08-27 的 P1–P3 full remediation independent acceptance 另外確認：完整 non-integration
 `1386 passed, 245 deselected`、targeted P1–P3 `857 passed`、PostgreSQL 16 integration
 `243 passed, 2 deselected, 0 skipped`。runtime role 對 `control_state` 的 direct UPDATE 以 SQLSTATE

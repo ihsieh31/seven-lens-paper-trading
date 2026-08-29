@@ -86,6 +86,7 @@ def probe_route_contract(
     ordinal: int,
     fact_variant: str = "AAPL",
     claim_material: Mapping[str, JsonValue] | None = None,
+    expected_route: Mapping[str, JsonValue] | None = None,
 ) -> tuple[bool, str]:
     """Drive P3-E durable claim route closure plus real fact/citation closure."""
     try:
@@ -104,6 +105,8 @@ def probe_route_contract(
             else _claim_from_material(stage, role, claim_material)
         )
         claim.__post_init__()
+        if expected_route is not None:
+            _require_expected_route(claim, expected_route)
         if claim.round_number != expected_round_number:
             raise ValueError("route expected round does not match durable claim")
         if type(fact_variant) is not str or not fact_variant:
@@ -115,6 +118,27 @@ def probe_route_contract(
     except (KeyError, TypeError, ValueError):
         return False, "production_contract_rejected"
     return True, str(claim.call_id)
+
+
+_EXPECTED_ROUTE_KEYS: Final = {"provider", "model", "api_flavor", "endpoint_policy_id"}
+
+
+def _require_expected_route(claim: ModelCallClaim, expected_route: Mapping[str, JsonValue]) -> None:
+    """Reject any claim whose route identity is not the configured batch route."""
+
+    if (
+        type(expected_route) is not dict
+        or set(expected_route) != _EXPECTED_ROUTE_KEYS
+        or any(type(value) is not str for value in expected_route.values())
+    ):
+        raise ValueError("route expected identity material is invalid")
+    if (
+        claim.provider.value != expected_route["provider"]
+        or claim.model != expected_route["model"]
+        or claim.api_flavor.value != expected_route["api_flavor"]
+        or claim.endpoint_policy_id != expected_route["endpoint_policy_id"]
+    ):
+        raise ValueError("claim route identity does not match the configured route")
 
 
 def _claim_from_material(

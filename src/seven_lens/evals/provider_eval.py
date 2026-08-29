@@ -31,7 +31,10 @@ from seven_lens.application.ports.model_transport import (
     ModelTransportErrorCode,
 )
 from seven_lens.application.secret_service import ScopedSecretProvider
-from seven_lens.config.provider import agnes_25_flash_config
+from seven_lens.config.analysis_provider import (
+    AnalysisProviderConfig,
+    package_default_analysis_provider_config,
+)
 from seven_lens.domain.json_values import JsonValue
 from seven_lens.domain.value_objects import RunId, UtcTimestamp
 from seven_lens.evals.corpus import load_eval_corpus
@@ -47,10 +50,10 @@ from seven_lens.evals.models import (
     content_hash,
 )
 from seven_lens.evals.production_probes import probe_route_contract
-from seven_lens.infrastructure.agnes_transport import (
-    AgnesJsonModelTransport,
-    StdlibAgnesHttpExecutor,
-    build_agnes_request_body,
+from seven_lens.infrastructure.chat_completions_transport import (
+    ChatCompletionsModelTransport,
+    StdlibChatCompletionsHttpExecutor,
+    build_chat_completions_request_body,
 )
 from seven_lens.infrastructure.macos_keychain import MacOSKeychainSecretProvider
 from seven_lens.security.secret_values import SecretKind, SecretRef
@@ -59,6 +62,9 @@ MAX_LIVE_REQUESTS: Final = 1_000
 MAX_RETRIES_PER_CASE: Final = 2
 MAX_ATTEMPTS_PER_CASE: Final = MAX_RETRIES_PER_CASE + 1
 RETRY_BACKOFF_BASE_MS: Final = 2_000
+#: Fixed pause between logical cases; bounded pacing for providers with a
+#: sustained-rate wall (observed: back-to-back cases trip an empty-body 429
+#: within roughly ten requests, while five-second spacing sustains the batch).
 CIRCUIT_BREAKER_CONSECUTIVE_EXHAUSTED_CASES: Final = 3
 RETRYABLE_TRANSPORT_CODES: Final = (
     ModelTransportErrorCode.RATE_LIMIT.value,
@@ -71,11 +77,24 @@ TRANSPORT_MIN_FIRST_ATTEMPT_SUCCESS_RATE: Final = 0.95
 TRANSPORT_MIN_EVENTUAL_SUCCESS_RATE: Final = 0.99
 NORMAL_DEADLINE_MS: Final = 15 * 60 * 1_000
 EMERGENCY_DEADLINE_MS: Final = 3 * 60 * 1_000
-_POLICY_ID: Final = "p3e-agnes-2.5-flash-only-v1"
 _PARSER_ID: Final = "p3f-strict-route-decision-v5"
 _REASON_CODE: Final = "SYNTHETIC_CONTRACT_CHECK"
 NO_FEE_CAP_APPROVED_SENTINEL: Final = -1
-_PRODUCTION_EXECUTION_KIND: Final = "PRODUCTION_AGNES_KEYCHAIN_STDLIB"
+_PRODUCTION_EXECUTION_KIND: Final = "PRODUCTION_ANALYSIS_PROVIDER_KEYCHAIN_STDLIB"
+
+
+def _default_route() -> AnalysisProviderConfig:
+    """The route snapshot for tests and legacy callers (the package default)."""
+
+    return package_default_analysis_provider_config()
+
+
+def _route_policy_id(route: AnalysisProviderConfig | None) -> str:
+    """The authorized endpoint policy id for the bound route snapshot."""
+
+    return route.route_policy_id if route is not None else _default_route().route_policy_id
+
+
 _PRODUCTION_AUTHORIZED_CASES: Final = 390
 _PRODUCTION_POSTS: Final = 260
 _PRODUCTION_PRE_NETWORK_REJECTS: Final = 130
@@ -158,7 +177,9 @@ class LiveEvalAuthorization:
     config_hash: str
 
     @classmethod
-    def from_json(cls, raw: bytes) -> LiveEvalAuthorization:
+    def from_json(
+        cls, raw: bytes, *, route: AnalysisProviderConfig | None = None
+    ) -> LiveEvalAuthorization:
         try:
             value = json.loads(
                 raw,
@@ -231,7 +252,7 @@ class LiveEvalAuthorization:
             or value["request_byte_cap"] != 131_072
             or value["response_byte_cap"] != 131_072
             or value["privacy_class"] != "SYNTHETIC_ONLY"
-            or value["provider_policy_id"] != _POLICY_ID
+            or value["provider_policy_id"] != _route_policy_id(route)
             or value["parser_id"] != _PARSER_ID
             or value["prompt_template_hash"] != LIVE_PROMPT_TEMPLATE_HASH
             or value["automatic_retries"] != MAX_RETRIES_PER_CASE
@@ -253,7 +274,7 @@ class LiveEvalAuthorization:
             131_072,
             expires_at,
             "SYNTHETIC_ONLY",
-            _POLICY_ID,
+            _route_policy_id(route),
             _PARSER_ID,
             LIVE_PROMPT_TEMPLATE_HASH,
             MAX_RETRIES_PER_CASE,
@@ -399,11 +420,12 @@ class SanitizedLiveEvidence:
         return canonical_bytes(cast(JsonValue, dict(self.wire))) + b"\n"
 
 
-class AgnesLivePostExecutor:
-    """Concrete one-call adapter over the production no-retry Agnes transport."""
+class AnalysisProviderLivePostExecutor:
+    """Concrete one-call adapter over the production no-retry route transport."""
 
     __slots__ = (
         "_production_composed",
+        "_route",
         "_transport",
         "attempts",
         "request_hashes",
@@ -411,13 +433,23 @@ class AgnesLivePostExecutor:
         "token_usage",
     )
 
-    def __init__(self, transport: AgnesJsonModelTransport) -> None:
+    def __init__(
+        self,
+        transport: ChatCompletionsModelTransport,
+        *,
+        route: AnalysisProviderConfig,
+    ) -> None:
         if (
-            type(transport) is not AgnesJsonModelTransport
-            or type(getattr(transport, "_executor", None)) is not StdlibAgnesHttpExecutor
+            not isinstance(transport, ChatCompletionsModelTransport)
+            or type(getattr(transport, "_executor", None)) is not StdlibChatCompletionsHttpExecutor
         ):
-            raise ValueError("live production executor requires exact Agnes stdlib transport")
+            raise ValueError(
+                "live production executor requires the exact configured stdlib transport"
+            )
+        if type(route) is not AnalysisProviderConfig:
+            raise ValueError("live production executor requires an exact route snapshot")
         self._transport = transport
+        self._route = route
         self._production_composed = False
         self.attempts: list[str] = []
         self.request_hashes: list[str] = []
@@ -425,21 +457,32 @@ class AgnesLivePostExecutor:
         self.token_usage: list[tuple[int, int, int]] = []
 
     @classmethod
-    def from_macos_keychain(cls, *, clock: Callable[[], UtcTimestamp]) -> AgnesLivePostExecutor:
+    def from_macos_keychain(
+        cls,
+        *,
+        clock: Callable[[], UtcTimestamp],
+        route: AnalysisProviderConfig | None = None,
+    ) -> AnalysisProviderLivePostExecutor:
         """Only production composition: exact SecretRef, Keychain, and stdlib POST stack."""
 
+        from seven_lens.application.analysis_provider_composition import (
+            default_operator_config_root,
+        )
+        from seven_lens.config.analysis_provider import load_analysis_provider_config
+
+        bound_route = route or load_analysis_provider_config(default_operator_config_root())
         provider = ScopedSecretProvider(
             MacOSKeychainSecretProvider(timeout_seconds=2.0),
-            {SecretRef.primary(SecretKind.AGNES_API_KEY)},
+            {SecretRef.primary(SecretKind.ANALYSIS_PROVIDER_API_KEY)},
         )
-        api_key = provider.get_secret(SecretRef.primary(SecretKind.AGNES_API_KEY))
-        transport = AgnesJsonModelTransport(
-            config=agnes_25_flash_config(),
+        api_key = provider.get_secret(SecretRef.primary(SecretKind.ANALYSIS_PROVIDER_API_KEY))
+        transport = ChatCompletionsModelTransport(
+            config=bound_route,
             api_key=api_key,
-            executor=StdlibAgnesHttpExecutor(),
+            executor=StdlibChatCompletionsHttpExecutor(),
             clock=clock,
         )
-        result = cls(transport)
+        result = cls(transport, route=bound_route)
         result._production_composed = True
         return result
 
@@ -447,7 +490,7 @@ class AgnesLivePostExecutor:
         self, contract: BlindLiveRouteContract, payload: bytes, deadline: UtcTimestamp
     ) -> bytes:
         request = _live_model_request(contract, payload, deadline)
-        request_body = build_agnes_request_body(agnes_25_flash_config(), request)
+        request_body = build_chat_completions_request_body(self._route, request)
         self.attempts.append(hashlib.sha256(payload).hexdigest())
         self.request_hashes.append(hashlib.sha256(request_body).hexdigest())
         response = self._transport.execute(request)
@@ -456,6 +499,17 @@ class AgnesLivePostExecutor:
             (response.prompt_tokens, response.completion_tokens, response.total_tokens)
         )
         return response.content.encode("utf-8")
+
+
+class AgnesLivePostExecutor(AnalysisProviderLivePostExecutor):
+    """Deprecated legacy executor bound to the package-default Agnes route."""
+
+    def __init__(self, transport: ChatCompletionsModelTransport) -> None:
+        from seven_lens.infrastructure.agnes_transport import AgnesJsonModelTransport
+
+        if type(transport) is not AgnesJsonModelTransport:
+            raise ValueError("live production executor requires exact Agnes stdlib transport")
+        super().__init__(transport, route=_default_route())
 
 
 class ScriptedSingleAttemptExecutor:
@@ -490,7 +544,9 @@ class ScriptedSingleAttemptExecutor:
         self.payloads.append(payload)
         request = _live_model_request(contract, payload, deadline)
         self.request_hashes.append(
-            hashlib.sha256(build_agnes_request_body(agnes_25_flash_config(), request)).hexdigest()
+            hashlib.sha256(
+                build_chat_completions_request_body(_default_route(), request)
+            ).hexdigest()
         )
         result = self._responses[ordinal]
         if isinstance(result, BaseException):
@@ -614,8 +670,11 @@ def execute_authorized_live_eval(
     authorization: LiveEvalAuthorization,
     trusted_grant: TrustedLiveGrant,
     supplied_grant: str,
-    executor: AgnesLivePostExecutor | ScriptedSingleAttemptExecutor,
+    executor: AnalysisProviderLivePostExecutor
+    | AgnesLivePostExecutor
+    | ScriptedSingleAttemptExecutor,
     now: datetime,
+    route: AnalysisProviderConfig | None = None,
     monotonic_ns: Callable[[], int] = time.monotonic_ns,
     sleep: Callable[[float], None] = time.sleep,
     request_clock: Callable[[], UtcTimestamp] | None = None,
@@ -633,12 +692,18 @@ def execute_authorized_live_eval(
         split_hash=split_hash,
         now=now,
     )
-    if type(executor) not in {AgnesLivePostExecutor, ScriptedSingleAttemptExecutor}:
+    if type(executor) not in {
+        AnalysisProviderLivePostExecutor,
+        AgnesLivePostExecutor,
+        ScriptedSingleAttemptExecutor,
+    }:
         raise LiveEvalAuthorizationError("live executor is not package-owned")
     if type(executor) is AgnesLivePostExecutor and not executor._production_composed:
         raise LiveEvalAuthorizationError(
             "Agnes live executor is not Keychain/stdlib production-composed"
         )
+    if type(executor) is AnalysisProviderLivePostExecutor and not executor._production_composed:
+        raise LiveEvalAuthorizationError("live executor is not Keychain/stdlib production-composed")
     by_id = {case.case_id: case for case in cases}
     if set(authorization.case_ids) - set(by_id):
         raise LiveEvalAuthorizationError("authorization references unknown cases")
@@ -652,7 +717,13 @@ def execute_authorized_live_eval(
     records: list[LiveAuditRecord] = []
     parser = StrictLiveDecisionParser()
     execution_kind = "SCRIPTED_TEST_ONLY"
-    if type(executor) is AgnesLivePostExecutor:
+    if type(executor) is AnalysisProviderLivePostExecutor:
+        execution_kind = (
+            _PRODUCTION_EXECUTION_KIND
+            if executor._production_composed
+            else "ANALYSIS_PROVIDER_STDLIB_NOT_KEYCHAIN_ATTESTED"
+        )
+    elif type(executor) is AgnesLivePostExecutor:
         execution_kind = (
             _PRODUCTION_EXECUTION_KIND
             if executor._production_composed
@@ -681,6 +752,7 @@ def execute_authorized_live_eval(
         payload_hash = hashlib.sha256(payload_bytes).hexdigest()
         for case_attempt in range(1, authorization.automatic_retries + 2):
             post_count += 1
+            response_hashes_before = len(executor.response_hashes)
             if post_count > authorization.attempt_cap:
                 raise LiveEvalAuthorizationError("live attempt cap reached before attempt")
             started = monotonic_ns()
@@ -697,7 +769,7 @@ def execute_authorized_live_eval(
             try:
                 response = executor.post_once(contract, payload_bytes, deadline)
                 if _last_request_hash(executor, post_count) != _provider_request_hash(
-                    authorization, contract
+                    authorization, contract, route
                 ):
                     raise ValueError("provider request hash diverged from approved live plan")
                 latency_ms = max(0, (monotonic_ns() - started) // 1_000_000)
@@ -709,6 +781,7 @@ def execute_authorized_live_eval(
             except Exception as error:
                 latency_ms = max(0, (monotonic_ns() - started) // 1_000_000)
                 error_code = _safe_live_error_code(error)
+                post_responded = len(executor.response_hashes) > response_hashes_before
                 raw_diagnostics = getattr(error, "sanitized_diagnostics", None)
                 failure_diagnostics = (
                     dict(raw_diagnostics) if isinstance(raw_diagnostics, Mapping) else None
@@ -722,8 +795,8 @@ def execute_authorized_live_eval(
                         _last_request_hash(executor, post_count),
                         "FAILED",
                         error_code,
-                        _last_response_hash(executor, post_count),
-                        _response_hash_kind(executor, post_count),
+                        _last_response_hash(executor, responded=post_responded),
+                        _response_hash_kind(executor, responded=post_responded),
                         latency_ms,
                         None,
                         failure_diagnostics=failure_diagnostics,
@@ -757,8 +830,8 @@ def execute_authorized_live_eval(
                     _last_request_hash(executor, post_count),
                     "STRICTLY_PARSED",
                     None,
-                    _last_response_hash(executor, post_count),
-                    _response_hash_kind(executor, post_count),
+                    _last_response_hash(executor, responded=True),
+                    _response_hash_kind(executor, responded=True),
                     latency_ms,
                     parsed,
                 )
@@ -933,6 +1006,7 @@ def run_production_live_eval(
     supplied_grant: str,
     evidence_filename: str,
     now: datetime | None = None,
+    route: AnalysisProviderConfig | None = None,
 ) -> tuple[LiveEvalRun, SanitizedLiveEvidence, Path]:
     """Execute the one production route with all authority checks before Keychain/POST."""
 
@@ -941,6 +1015,7 @@ def run_production_live_eval(
         authorization,
         trusted_config_hash,
         corpus_root=corpus_root,
+        route=route,
     )
     corpus = load_eval_corpus(corpus_root)
     held_out = corpus.load_public_cases(EvalSplit.HELD_OUT).cases
@@ -969,11 +1044,12 @@ def run_production_live_eval(
         )
     if authorization.cost_cap_usd_cents != NO_FEE_CAP_APPROVED_SENTINEL:
         raise LiveEvalAuthorizationError(
-            "Agnes has no verifiable unit price; production requires approved no-fee-cap sentinel"
+            "the provider has no verifiable unit price; production requires the "
+            "approved no-fee-cap sentinel"
         )
     evidence_path = _prepare_local_evidence_path(repo_root, evidence_filename)
 
-    executor = AgnesLivePostExecutor.from_macos_keychain(clock=_utc_now)
+    executor = AnalysisProviderLivePostExecutor.from_macos_keychain(clock=_utc_now, route=route)
     try:
         run = execute_authorized_live_eval(
             corpus_root=corpus_root,
@@ -982,6 +1058,7 @@ def run_production_live_eval(
             supplied_grant=supplied_grant,
             executor=executor,
             now=selected_now,
+            route=route,
         )
     except LiveEvalExecutionError as error:
         evidence = build_sanitized_live_evidence(
@@ -1156,6 +1233,7 @@ def live_plan_summary(
     trusted_config_hash: str,
     *,
     corpus_root: Path,
+    route: AnalysisProviderConfig | None = None,
 ) -> MappingProxyType[str, JsonValue]:
     corpus = load_eval_corpus(corpus_root)
     if (
@@ -1188,7 +1266,8 @@ def live_plan_summary(
         for contract in contracts
     }
     request_hashes: dict[str, JsonValue] = {
-        contract.case_id: _provider_request_hash(authorization, contract) for contract in contracts
+        contract.case_id: _provider_request_hash(authorization, contract, route)
+        for contract in contracts
     }
     wire: dict[str, JsonValue] = {
         "authorization_id": authorization.authorization_id,
@@ -1271,39 +1350,17 @@ def _live_response_contract(contract: BlindLiveRouteContract) -> dict[str, JsonV
 
 
 def _live_response_format(contract: BlindLiveRouteContract) -> dict[str, JsonValue]:
-    """Provider-enforced strict schema whose literal values are pinned by ``const``.
+    """Provider-side JSON-object mode; exact literal values stay prompt-pinned.
 
     Eval-orchestrator-only: the P3-E production transport composes requests
-    without this field, so its wire bytes are unchanged.
+    without this field, so its wire bytes are unchanged.  The const-pinned
+    ``json_schema`` variant is intentionally not required because support varies
+    across OpenAI-compatible providers. Authority is unchanged: exact literal
+    values remain prompt-pinned and enforced by the local strict parser.
     """
 
-    return {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "route_decision",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "additionalProperties": False,
-                "required": ["case_id", "route", "decision", "citations", "reason_codes"],
-                "properties": {
-                    "case_id": {"type": "string", "const": contract.case_id},
-                    "route": {"type": "string", "const": contract.route},
-                    "decision": {"type": "string", "const": ExpectedDecision.ACCEPT.value},
-                    "citations": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "const": [contract.required_cited_fact],
-                    },
-                    "reason_codes": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "const": [_REASON_CODE],
-                    },
-                },
-            },
-        },
-    }
+    del contract
+    return {"type": "json_object"}
 
 
 def _live_model_request(
@@ -1324,7 +1381,9 @@ def _live_model_request(
 
 
 def _provider_request_hash(
-    authorization: LiveEvalAuthorization, contract: BlindLiveRouteContract
+    authorization: LiveEvalAuthorization,
+    contract: BlindLiveRouteContract,
+    route: AnalysisProviderConfig | None = None,
 ) -> str:
     payload = _live_payload_bytes(authorization, contract)
     request = _live_model_request(
@@ -1332,7 +1391,7 @@ def _provider_request_hash(
         payload,
         UtcTimestamp(datetime(2030, 1, 1, tzinfo=UTC)),
     )
-    body = build_agnes_request_body(agnes_25_flash_config(), request)
+    body = build_chat_completions_request_body(route or _default_route(), request)
     return hashlib.sha256(body).hexdigest()
 
 
@@ -1479,15 +1538,22 @@ def _pre_network_reject(case: EvalCase) -> LiveAuditRecord:
 
 
 def _last_response_hash(
-    executor: AgnesLivePostExecutor | ScriptedSingleAttemptExecutor, post_count: int
+    executor: AnalysisProviderLivePostExecutor
+    | AgnesLivePostExecutor
+    | ScriptedSingleAttemptExecutor,
+    *,
+    responded: bool,
 ) -> str | None:
-    if len(executor.response_hashes) != post_count:
+    if not responded or not executor.response_hashes:
         return None
     return executor.response_hashes[-1]
 
 
 def _last_request_hash(
-    executor: AgnesLivePostExecutor | ScriptedSingleAttemptExecutor, post_count: int
+    executor: AnalysisProviderLivePostExecutor
+    | AgnesLivePostExecutor
+    | ScriptedSingleAttemptExecutor,
+    post_count: int,
 ) -> str | None:
     if len(executor.request_hashes) != post_count:
         return None
@@ -1495,15 +1561,19 @@ def _last_request_hash(
 
 
 def _response_hash_kind(
-    executor: AgnesLivePostExecutor | ScriptedSingleAttemptExecutor, post_count: int
+    executor: AnalysisProviderLivePostExecutor
+    | AgnesLivePostExecutor
+    | ScriptedSingleAttemptExecutor,
+    *,
+    responded: bool,
 ) -> str | None:
-    if len(executor.response_hashes) != post_count:
+    if not responded:
         return None
-    return (
-        "AGNES_RAW_RESPONSE_BODY_SHA256"
-        if type(executor) is AgnesLivePostExecutor
-        else "SCRIPTED_RESPONSE_BYTES_SHA256"
-    )
+    if type(executor) is AgnesLivePostExecutor:
+        return "AGNES_RAW_RESPONSE_BODY_SHA256"
+    if type(executor) is ScriptedSingleAttemptExecutor:
+        return "SCRIPTED_RESPONSE_BYTES_SHA256"
+    return "PROVIDER_RAW_RESPONSE_BODY_SHA256"
 
 
 def _safe_live_error_code(error: Exception) -> str:
@@ -1533,7 +1603,10 @@ def _retry_delay_ms(case_id: str, failed_case_attempt_ordinal: int) -> int:
 
 def build_blind_live_route_contract(case: EvalCase) -> BlindLiveRouteContract:
     payload = dict(case.payload)
-    if set(payload) != {"expected_round_number", "claim", "fact_variant"}:
+    required = {"expected_round_number", "claim", "fact_variant"}
+    if "expected_route" in payload:
+        required = required | {"expected_route"}
+    if set(payload) != required:
         raise ValueError("live route case shape is invalid")
     claim = payload["claim"]
     if type(claim) is not dict or set(claim) != _ROUTE_CLAIM_KEYS:
@@ -1554,6 +1627,9 @@ def build_blind_live_route_contract(case: EvalCase) -> BlindLiveRouteContract:
     ):
         raise ValueError("live route claim values are invalid")
     ordinal = int(hashlib.sha256(case.case_id.encode()).hexdigest()[:8], 16)
+    expected_route = payload.get("expected_route")
+    if expected_route is not None and type(expected_route) is not dict:
+        raise ValueError("live route expected identity is invalid")
     accepted, _ = probe_route_contract(
         stage=cast(str, case.stage),
         role=cast(str, case.role),
@@ -1566,6 +1642,7 @@ def build_blind_live_route_contract(case: EvalCase) -> BlindLiveRouteContract:
         ordinal=ordinal,
         fact_variant=fact,
         claim_material=claim,
+        expected_route=cast(Mapping[str, JsonValue] | None, expected_route),
     )
     if not accepted:
         raise ValueError("production route contract rejected before network")
@@ -1734,6 +1811,7 @@ def _valid_sanitized_evidence_shape(value: dict[str, object]) -> bool:
             not in {
                 None,
                 "AGNES_RAW_RESPONSE_BODY_SHA256",
+                "PROVIDER_RAW_RESPONSE_BODY_SHA256",
                 "SCRIPTED_RESPONSE_BYTES_SHA256",
             }
             or type(record["latency_ms"]) is not int

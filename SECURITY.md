@@ -53,6 +53,12 @@ provider. The macOS adapter performs an exact read-only generic-password query w
 zero or multiple results, denial, timeout, malformed data, and backend failure are fatal. It has
 no environment, argv, database, shell, fake, or second-provider fallback.
 
+The analysis provider credential is the exact typed ref
+`ANALYSIS_PROVIDER_API_KEY` → macOS Keychain service
+`seven-lens.paper-trading.analysis-provider.api-key` / account `primary`.  The legacy
+`seven-lens.paper-trading.agnes.api-key` item is retained for history only and is never read by the
+active composition; there is no fallback, alias, or automatic copy between services.
+
 Any future FRED/BEA/BLS/EIA or other source API key requires its own exact typed `SecretRef`, scoped
 allowlist, bounded reveal point, redaction tests, and explicit authorization before a real lookup.
 This planning change does not authorize Keychain reads, source downloads, paid feeds, or account
@@ -60,6 +66,12 @@ creation. Public endpoints without keys remain untrusted network inputs and do n
 egress capability.
 
 The native query uses exact service/account matching with `kSecMatchLimitOne` (exact hit) and a hard 2-second spawned-worker timeout with UI disabled; the prior `kSecMatchLimitAll` was replaced after the P2-E live verification exposed `errSecParam` on `ReturnData+MatchAll`. `NSData` normalization handles PyObjC bridging. The fake contract suite does not constitute native Keychain smoke evidence; real Keychain happy-path has been exercised via live P2-E read-only verification, but formal disposable adversarial smoke (locked/denied/malformed/timeout) remains deferred and requires a dedicated namespace and separate authorization before execution.
+
+The generic analysis-provider provisioning script resolves the locked project Python runtime and
+its exact macOS Framework application executable, then adds only those two executable paths to the
+Keychain item's trusted-application ACL. It never uses the allow-all `-A` option. Re-provisioning
+remains interactive, and the credential is never accepted through argv, environment variables, or
+a file.
 
 ### PostgreSQL ownership and credentials
 

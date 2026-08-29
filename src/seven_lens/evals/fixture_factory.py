@@ -37,6 +37,8 @@ _TRANSPORT_RETEST_V2_SPLIT_VERSION = "p3f-synthetic-v9"
 _RETRY_GATE_REDESIGN_SPLIT_VERSION = "p3f-synthetic-v10"
 _FENCE_WIRE_REMEDIATION_SPLIT_VERSION = "p3f-synthetic-v11"
 _SHAPE_DIAGNOSTICS_SPLIT_VERSION = "p3f-synthetic-v12"
+_ANALYSIS_ROUTE_SPLIT_VERSION = "p3f-synthetic-v14"
+_CURRENT_ROUTE_LIVE_SPLIT_VERSION = "p3f-synthetic-v14"
 _FRESH_REMEDIATION_SPLIT_VERSIONS = frozenset(
     {
         _REMEDIATION_SPLIT_VERSION,
@@ -48,6 +50,8 @@ _FRESH_REMEDIATION_SPLIT_VERSIONS = frozenset(
         _RETRY_GATE_REDESIGN_SPLIT_VERSION,
         _FENCE_WIRE_REMEDIATION_SPLIT_VERSION,
         _SHAPE_DIAGNOSTICS_SPLIT_VERSION,
+        _ANALYSIS_ROUTE_SPLIT_VERSION,
+        _CURRENT_ROUTE_LIVE_SPLIT_VERSION,
     }
 )
 _TRACE_BASE = (
@@ -255,6 +259,40 @@ _ROLE_MAP = {
 }
 
 
+_LEGACY_ROUTE_MATERIAL = {
+    "provider": "AGNES",
+    "model": "agnes-2.5-flash",
+    "api_flavor": "CHAT_COMPLETIONS",
+    "endpoint_policy_id": "p3e-agnes-2.5-flash-only-v1",
+}
+
+
+def load_route_material(config_root: str | None = None) -> dict[str, str]:
+    """Read the current configured route identity for route-batch generation.
+
+    Deterministic for one immutable operator configuration: the same route
+    state always yields the same corpus bytes.
+    """
+
+    from pathlib import Path
+
+    from seven_lens.application.analysis_provider_composition import (
+        default_operator_config_root,
+    )
+    from seven_lens.config.analysis_provider import load_analysis_provider_config
+
+    if config_root is not None:
+        config = load_analysis_provider_config(Path(config_root))
+    else:
+        config = load_analysis_provider_config(default_operator_config_root())
+    return {
+        "provider": config.route_provider_kind,
+        "model": config.model_id,
+        "api_flavor": config.api_flavor,
+        "endpoint_policy_id": config.route_policy_id,
+    }
+
+
 def _route_claim(
     *,
     case_id: str,
@@ -263,9 +301,11 @@ def _route_claim(
     expected_round: int,
     fact: str,
     route_index: int,
+    route_material: dict[str, str] | None = None,
 ) -> dict[str, JsonValue]:
     """Build distinct production claim material, then one of ten semantic violations."""
 
+    material = route_material or dict(_LEGACY_ROUTE_MATERIAL)
     input_id = _route_id("input", case_id)
     context_id = _route_id("context", case_id)
     run_id = _route_id("run", case_id)
@@ -284,10 +324,10 @@ def _route_claim(
         "input_id": str(input_id),
         "context_id": str(context_id),
         "round_number": expected_round,
-        "provider": "AGNES",
-        "model": "agnes-2.5-flash",
-        "api_flavor": "CHAT_COMPLETIONS",
-        "endpoint_policy_id": "p3e-agnes-2.5-flash-only-v1",
+        "provider": material["provider"],
+        "model": material["model"],
+        "api_flavor": material["api_flavor"],
+        "endpoint_policy_id": material["endpoint_policy_id"],
         "route_ordinal": route_ordinal,
         "prompt_template_hash": _route_hash("prompt-template", case_id),
         "request_envelope_hash": _route_hash("request-envelope", case_id),
@@ -332,7 +372,10 @@ def _route_hash(domain: str, case_id: str) -> str:
 
 
 def create_response_contract_remediation_split(
-    root: Path, *, split_version: str = _REMEDIATION_SPLIT_VERSION
+    root: Path,
+    *,
+    split_version: str = _REMEDIATION_SPLIT_VERSION,
+    route_material: dict[str, str] | None = None,
 ) -> tuple[str, str]:
     """Create a source-derived remediation corpus without reading any prior split.
 
@@ -573,6 +616,7 @@ def create_response_contract_remediation_split(
             trace_hash=None,
         )
 
+    material = route_material or dict(_LEGACY_ROUTE_MATERIAL)
     for route_number, (stage, role, expected_round) in enumerate(_TRACE_BASE):
         for route_index in range(30):
             case_id = f"p3f.{version_tag}.route.{stage.lower()}.{role.lower()}.{route_index:02d}"
@@ -587,8 +631,13 @@ def create_response_contract_remediation_split(
                     expected_round=expected_round,
                     fact=fact,
                     route_index=route_index,
+                    route_material=material,
                 ),
             }
+            if route_material is not None:
+                # Route batches bound to a configured route carry the exact
+                # expected identity; claims that drift from it are invalid.
+                payload["expected_route"] = dict(material)
             valid = route_index < 20
             append(
                 "held_out",
@@ -674,9 +723,18 @@ def main() -> int:
     parser.add_argument("--fixtures", type=Path, required=True)
     parser.add_argument("--create-response-contract-remediation-split", action="store_true")
     parser.add_argument("--split-version", default=_REMEDIATION_SPLIT_VERSION)
+    parser.add_argument(
+        "--route-config-root",
+        default=None,
+        help="explicit analysis-provider config root; defaults to the current config",
+    )
     args = parser.parse_args()
     if args.create_response_contract_remediation_split:
-        create_response_contract_remediation_split(args.fixtures, split_version=args.split_version)
+        create_response_contract_remediation_split(
+            args.fixtures,
+            split_version=args.split_version,
+            route_material=load_route_material(args.route_config_root),
+        )
     else:
         rebuild(args.fixtures)
     return 0

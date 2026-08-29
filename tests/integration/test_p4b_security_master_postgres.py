@@ -761,8 +761,8 @@ def test_p4b_rollback_and_reapply_removes_and_rebuilds_the_authority(
     with psycopg.connect(migrated_postgres) as connection:
         records = PostgresP4RecordLog(connection)
         records.append(_source("source-1", P4SourceFamily.ALPACA_ASSETS))
-    assert current_version(migrated_postgres) == 21
-    assert rollback(migrated_postgres) == 20
+    assert current_version(migrated_postgres) == 22
+    assert rollback(migrated_postgres) == 21
     with psycopg.connect(migrated_postgres) as connection:
         assert connection.execute(
             "SELECT to_regclass('public.p4_source_records'), "
@@ -773,5 +773,5 @@ def test_p4b_rollback_and_reapply_removes_and_rebuilds_the_authority(
             "security_identities",
             "corporate_action_events",
         )
-    assert migrate(migrated_postgres) == 21
-    assert verify_schema(migrated_postgres) == 21
+    assert migrate(migrated_postgres) == 22
+    assert verify_schema(migrated_postgres) == 22

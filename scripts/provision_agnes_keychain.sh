@@ -1,5 +1,6 @@
 #!/bin/sh
-# Provision a rotated Agnes key without placing it in argv, environment, or a file.
+# DEPRECATED legacy Agnes key provisioning; kept for historical replay only.
+# The active route uses scripts/provision_analysis_provider_keychain.sh.
 set -eu
 
 if [ "$(uname -s)" != "Darwin" ]; then

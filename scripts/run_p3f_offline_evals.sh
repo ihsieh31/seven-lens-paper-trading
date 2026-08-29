@@ -2,9 +2,9 @@
 set -eu
 
 repo_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-fixture_dir="$repo_dir/tests/fixtures/p3f_evals_v12"
+fixture_dir="$repo_dir/tests/fixtures/p3f_evals_v14"
 
 cd "$repo_dir"
 exec uv run python -m seven_lens.evals offline \
   --fixtures "$fixture_dir" \
-  --frozen-report "$fixture_dir/reports/offline-scripted-v12.json"
+  --frozen-report "$fixture_dir/reports/offline-scripted-v14.json"

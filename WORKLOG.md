@@ -3,6 +3,52 @@
 本檔只保留可影響目前決策的里程碑。逐輪缺陷、命令輸出與已被取代的敘述保留於 Git history；
 目前狀態以 `PROJECT_HANDOFF.md` 與 `PROGRESS.md` 為準。
 
+## 2026-08-29 — NVIDIA current-code P3-E／P3-F final live
+
+- 修正generic Keychain provisioning：ACL只信任locked Python 3.13 executable與其macOS Framework
+  `Python.app`，不使用allow-all `-A`；使用者於一次性30秒授權probe按「永遠允許」後，正式2秒
+  Security.framework lookup通過。金鑰未進argv、env、檔案或輸出。
+- P3-E current-route live：NVIDIA `openai/gpt-oss-120b`六案例6/6 SUCCESS，retry=0、fallback=null，
+  p50=6114ms、p95/max=18804ms；sanitized evidence為
+  `docs/P3E_LIVE_EVIDENCE_2026-08-29_NVIDIA.json`。
+- P3-F V14 final live：260/260 strict、0 errors/retries/fallback；130/130 invalid/ambiguous pre-network
+  rejects；first-attempt/eventual/valid-primary皆100%，quality與transport gates皆通過。local immutable
+  evidence hash `9fcc76258883365990f47783b1b5f01226d813c40d6b703ef033ee66da5b16e0`，file SHA-256
+  `c69c3d7e6ccaf78e772a503bca8d394c488c2d4ffe649f23f679dd33c81dca85`。
+
+## 2026-08-29 — Generic provider 整合與 NVIDIA 主線收斂
+
+- 保留 provider-neutral config／CLI／transport／composition／audit／migration 0022，現行 operator route
+  固定為 NVIDIA `https://integrate.api.nvidia.com/v1`＋`openai/gpt-oss-120b`；P3-F active split 固定
+  `p3f-synthetic-v14`。移除已放棄供應商的 prompt、fixtures、live evidence 與 provider-specific protocol
+  workaround；protocol/model drift 回復 fail closed，不再特殊 retry，並移除 provider-specific 5 秒 inter-case pacing。
+- V14 offline `616/616`；臨時目錄重建與 frozen fixtures byte-identical。provider-focused `203 passed`；
+  完整 non-integration `2075 passed, 272 deselected`；真實 PostgreSQL 16 integration
+  `270 passed, 2 deselected, 0 skipped`；Ruff format/check、mypy、`git diff --check` 全綠。
+- 本段僅完成離線／PG 整合；NVIDIA current-code P3-E／P3-F final live evidence 另列於後續紀錄。
+
+## 2026-08-28 — 分析 provider switch（NVIDIA `openai/gpt-oss-120b`）offline＋live
+
+- 完成 generic route implementation（config/CLI/transport/composition/audit/migration 0022/V14 split）；
+  現行 route 以兩個 set 指令切換至 `https://integrate.api.nvidia.com/v1`＋`openai/gpt-oss-120b`。
+- Keychain：canonical service `seven-lens.paper-trading.analysis-provider.api-key`／`primary` 依使用者
+  「直接使用」指示，以Security framework單一process複製其既有（已改值）項目，byte-identical驗證；
+  舊`agnes.api-key`項目保留未刪、active composition不讀取。
+- P3-E live：當時六案例 6/6 SUCCESS（cap=6、retry=0）；該證據其後由 current-code final rerun supersede。
+- P3-F live（V14）：全部門檻通過（130/130 pre-network、258/260 completions、accuracy 100%、violations 0、
+  first-attempt 97.7%、eventual 99.2%、fallback 0、268/780 attempts）；evidence存
+  `.seven-lens-local/p3f-live-evidence/p3f-live-evidence-v14-nvidia-2026-08-28-r2.json`
+  （evidence_hash `94387977…dd49c`）。首跑因generic executor的execution_kind分類缺陷被誤標
+  `SCRIPTED_TEST_ONLY`，修正後重跑取得r2；誤標版保留未刪。
+- 8次retry成因判定：兩簇十餘秒的連線層故障（失敗延遲≈2004ms＝`connect_timeout_ms=2000`預算用盡，
+  全部TRANSIENT、無RATE_LIMIT/TIMEOUT），同payload重試即成功；重試政策行為與授權一致，非程式缺陷；
+  2秒連線預算對NVIDIA edge偏緊列入OPEN-039政策觀察。
+- Provider-drift調整：NVIDIA/vLLM非authority envelope metadata以明列allowlist＋bounded驗證接受
+  （未知欄位仍fail closed）；model id含`/`以`route_model_version`投影。
+- 驗證：non-integration `2040 passed, 271 deselected`；PG16 `269 passed, 2 deselected, 0 skipped`；
+  Ruff/mypy/`git diff --check`全綠。當時狀態為 implementation completed、pending fresh independent
+  acceptance；未commit/push。
+
 ## 2026-08-28 — PostgreSQL integration OOM remediation
 
 - 排查P3-F首個`mark_validated`錯誤後確認SQL不是根因：單一P3-F測試與整個P3-F PostgreSQL檔案均可通過；

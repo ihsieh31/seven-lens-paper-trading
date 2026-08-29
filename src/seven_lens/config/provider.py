@@ -1,4 +1,9 @@
-"""Exact P3-E Agnes provider route without runtime discovery or overrides."""
+"""Legacy package-default Agnes route plus the generic provider kind enum.
+
+The active analysis route is built by
+:mod:`seven_lens.config.analysis_provider`; the types here remain only as the
+historical package default identity and shared enums for claims and audits.
+"""
 
 from __future__ import annotations
 
@@ -12,9 +17,10 @@ from seven_lens.config.errors import ConfigurationError
 
 
 class ProviderKind(StrEnum):
-    """Provider identities explicitly approved for this release."""
+    """Provider identities: the historical default and the generic active kind."""
 
     AGNES = "AGNES"
+    OPENAI_COMPATIBLE = "OPENAI_COMPATIBLE"
 
 
 class ApiFlavor(StrEnum):

@@ -20,6 +20,11 @@ from seven_lens.application.ports.model_transport import (
     ModelTransportError,
     ModelTransportErrorCode,
 )
+from seven_lens.config.analysis_provider import (
+    AnalysisProviderConfig,
+    ConfigSource,
+    canonical_operator_bytes,
+)
 from seven_lens.config.provider import agnes_25_flash_config
 from seven_lens.domain.json_values import JsonValue
 from seven_lens.domain.value_objects import UtcTimestamp
@@ -175,6 +180,7 @@ def _execute(
         "supplied_grant": GRANT,
         "executor": executor,
         "now": datetime(2026, 8, 24, tzinfo=UTC),
+        "sleep": lambda seconds: None,
     }
     values.update(changes)
     return execute_authorized_live_eval(**values)
@@ -325,7 +331,7 @@ def test_full_live_route_set_is_260_posts_and_130_local_rejections() -> None:
     assert metrics["provider_transport_gate_passed"] is False
 
     real_metrics = recompute_live_metrics(
-        replace(run, execution_kind="PRODUCTION_AGNES_KEYCHAIN_STDLIB"),
+        replace(run, execution_kind="PRODUCTION_ANALYSIS_PROVIDER_KEYCHAIN_STDLIB"),
         authorization=auth,
         cases=route,
         answers=answers,
@@ -458,6 +464,7 @@ def test_failed_response_contract_attempt_records_sanitized_diagnostics() -> Non
             supplied_grant=GRANT,
             executor=ScriptedSingleAttemptExecutor((f"{body}\n```".encode(),)),
             now=datetime(2026, 8, 24, tzinfo=UTC),
+            sleep=lambda seconds: None,
         )
     failed_record = stopped.value.partial_run.records[-1]
     assert failed_record.outcome == "FAILED"
@@ -473,12 +480,13 @@ def test_failed_response_contract_attempt_records_sanitized_diagnostics() -> Non
         trusted_grant=_grant(auth),
         supplied_grant=GRANT,
         executor=fenced_executor,
+        sleep=lambda seconds: None,
         now=datetime(2026, 8, 24, tzinfo=UTC),
     )
     assert success_run.records[-1].outcome == "STRICTLY_PARSED"
     assert success_run.records[-1].failure_diagnostics is None
     metrics = recompute_live_metrics(
-        replace(success_run, execution_kind="PRODUCTION_AGNES_KEYCHAIN_STDLIB"),
+        replace(success_run, execution_kind="PRODUCTION_ANALYSIS_PROVIDER_KEYCHAIN_STDLIB"),
         authorization=auth,
         cases=cases,
         answers=answers,
@@ -500,23 +508,11 @@ def test_live_requests_pin_const_response_format_and_legacy_wire_is_unchanged() 
         "temperature",
         "response_format",
     }
-    schema = cast(dict[str, object], body["response_format"]["json_schema"]["schema"])
-    assert schema["additionalProperties"] is False
-    properties = cast(dict[str, object], schema["properties"])
-    assert properties["case_id"] == {"type": "string", "const": contract.case_id}
-    assert properties["route"] == {"type": "string", "const": contract.route}
-    assert properties["decision"] == {"type": "string", "const": "ACCEPT"}
-    assert properties["citations"] == {
-        "type": "array",
-        "items": {"type": "string"},
-        "const": [contract.required_cited_fact],
-    }
-    assert properties["reason_codes"] == {
-        "type": "array",
-        "items": {"type": "string"},
-        "const": ["SYNTHETIC_CONTRACT_CHECK"],
-    }
-    assert body["response_format"]["json_schema"]["strict"] is True
+    # json_object mode: some providers reject json_schema intermittently with a
+    # 400 "unavailable" while accepting json_object on every call.  The exact
+    # literal values stay pinned by the prompt response_contract and the local
+    # strict parser, never by the provider.
+    assert body["response_format"] == {"type": "json_object"}
 
     legacy = JsonModelRequest(request.call_id, request.messages, request.deadline, 2_048)
     legacy_wire = json.loads(build_agnes_request_body(agnes_25_flash_config(), legacy))
@@ -576,6 +572,8 @@ def test_transient_errors_retry_twice_then_continue_without_hiding_attempts() ->
     case_records = [record for record in run.records if record.case_id == cases[0].case_id]
     assert [record.error_code for record in case_records[:2]] == ["TIMEOUT", "TRANSIENT"]
     assert case_records[2].outcome == "STRICTLY_PARSED"
+    # Only the two approved retry backoffs are slept; successful logical cases
+    # do not add provider-specific pacing.
     assert len(delays) == 2
     assert 2.0 <= delays[0] < 3.0
     assert 4.0 <= delays[1] < 5.0
@@ -602,7 +600,6 @@ def test_three_consecutive_transport_exhaustions_open_circuit_breaker() -> None:
         ModelTransportErrorCode.AUTH,
         ModelTransportErrorCode.CONFIG,
         ModelTransportErrorCode.PERMANENT,
-        ModelTransportErrorCode.PROTOCOL,
     ],
 )
 def test_non_retryable_provider_errors_stop_after_one_attempt(
@@ -661,9 +658,11 @@ def test_live_plan_hash_closes_over_prompt_and_model_wire_mutations(
     assert changed_prompt["plan_hash"] != baseline["plan_hash"]
 
     monkeypatch.setattr(provider_eval_module, "_LIVE_SYSTEM_PROMPT", _LIVE_SYSTEM_PROMPT)
-    tampered_config = agnes_25_flash_config()
-    object.__setattr__(tampered_config, "model_id", "agnes-2.5-flash-revision")
-    monkeypatch.setattr(provider_eval_module, "agnes_25_flash_config", lambda: tampered_config)
+    from seven_lens.config.analysis_provider import package_default_analysis_provider_config
+
+    tampered_route = package_default_analysis_provider_config()
+    object.__setattr__(tampered_route, "model_id", "openai/gpt-oss-120b-revision")
+    monkeypatch.setattr(provider_eval_module, "_default_route", lambda: tampered_route)
     changed_model = live_plan_summary(auth, auth.config_hash, corpus_root=FIXTURES)
     assert changed_model["provider_request_hash_root"] != baseline["provider_request_hash_root"]
     assert changed_model["plan_hash"] != baseline["plan_hash"]
@@ -869,6 +868,10 @@ def test_cli_live_plan_is_default_zero_network(
     authorization_file = tmp_path / "authorization.json"
     authorization_file.write_bytes(_authorization_bytes(auth))
 
+    # Bind the CLI's route resolution to the package default via the test-only
+    # override; the production CLI resolves the operator route instead.
+    monkeypatch.setenv("SEVEN_LENS_ANALYSIS_PROVIDER_CONFIG_ROOT", str(tmp_path / "absent-root"))
+
     def forbidden_keychain(*args: object, **kwargs: object) -> object:
         raise AssertionError("dry-run must not touch Keychain")
 
@@ -898,3 +901,99 @@ def test_cli_live_plan_is_default_zero_network(
     assert '!= "1"' in script
     assert "live-plan" in script
     assert "--execute-live" in script
+
+
+def test_cli_live_plan_binds_operator_route_plan_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A non-default operator route must make the CLI live-plan emit the exact
+    # route-bound plan hash that live-run later requires as the external grant.
+    # Binding to the package default (the other CLI test) cannot detect a missing
+    # route argument because the default and None collapse to the same hash.
+    route = AnalysisProviderConfig(
+        config_source=ConfigSource.OPERATOR_FILE,
+        generation=1,
+        base_url="https://integrate.api.nvidia.com/v1",
+        model_id="openai/gpt-oss-120b",
+    )
+    config_root = tmp_path / "operator-config"
+    config_root.mkdir()
+    (config_root / "analysis-provider.json").write_bytes(canonical_operator_bytes(route))
+    monkeypatch.setenv("SEVEN_LENS_ANALYSIS_PROVIDER_CONFIG_ROOT", str(config_root))
+
+    cases, _ = _selected()
+    split_hash = _corpus_material()[0].split_manifest.split_hash
+    valid = sum(_corpus_material()[2][case.case_id].validity.value == "valid" for case in cases)
+    value: dict[str, object] = {
+        "schema_version": "seven-lens.p3f.live-auth.v4",
+        "authorization_id": "user-approved-eval-route",
+        "split_hash": split_hash,
+        "case_ids": [case.case_id for case in cases],
+        "request_cap": valid,
+        "attempt_cap": 3 * valid,
+        "cost_cap_usd_cents": 50,
+        "timeout_ms": 45_000,
+        "request_byte_cap": 131_072,
+        "response_byte_cap": 131_072,
+        "expires_at": "2030-01-01T00:00:00+00:00",
+        "privacy_class": "SYNTHETIC_ONLY",
+        "provider_policy_id": route.route_policy_id,
+        "parser_id": "p3f-strict-route-decision-v5",
+        "prompt_template_hash": LIVE_PROMPT_TEMPLATE_HASH,
+        "automatic_retries": MAX_RETRIES_PER_CASE,
+        "retryable_error_codes": ["RATE_LIMIT", "TIMEOUT", "TRANSIENT"],
+        "circuit_breaker_consecutive_exhausted_cases": 3,
+        "stop_on_first_error": False,
+    }
+    value["config_hash"] = content_hash(cast(JsonValue, value))
+    auth = LiveEvalAuthorization.from_json(json.dumps(value).encode(), route=route)
+    authorization_file = tmp_path / "authorization.json"
+    authorization_file.write_bytes(_authorization_bytes(auth))
+
+    def forbidden_keychain(*args: object, **kwargs: object) -> object:
+        raise AssertionError("live-plan must not touch Keychain")
+
+    monkeypatch.setattr(provider_eval_module, "MacOSKeychainSecretProvider", forbidden_keychain)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "seven-lens-evals",
+            "live-plan",
+            "--authorization-file",
+            str(authorization_file),
+            "--trusted-config-hash",
+            auth.config_hash,
+            "--fixtures",
+            str(FIXTURES),
+        ],
+    )
+    assert eval_cli_main() == 0
+    emitted = json.loads(capsys.readouterr().out)["plan_hash"]
+
+    # The CLI hash must equal the route-bound plan live-run recomputes internally.
+    assert (
+        emitted
+        == live_plan_summary(auth, auth.config_hash, corpus_root=FIXTURES, route=route)["plan_hash"]
+    )
+    # And must differ from the default-route plan, proving a dropped route argument
+    # (the historical defect) is caught by this test.
+    assert emitted != live_plan_summary(auth, auth.config_hash, corpus_root=FIXTURES)["plan_hash"]
+
+
+def test_protocol_errors_are_never_retried() -> None:
+    # Protocol failures are not availability signals. The live run stops instead
+    # of normalizing or retrying a potentially incompatible response contract.
+    cases, _ = _selected()
+    auth = _authorization([cases[0].case_id, cases[1].case_id])
+    protocol_then_ok = ScriptedSingleAttemptExecutor(
+        (
+            ModelTransportError(ModelTransportErrorCode.PROTOCOL),
+            _response(cases[0], ExpectedDecision.ACCEPT),
+            _response(cases[1], ExpectedDecision.ACCEPT),
+        )
+    )
+    with pytest.raises(LiveEvalExecutionError, match="non-retryable") as caught:
+        _execute(cases, auth, protocol_then_ok)
+    assert caught.value.partial_run.request_count == 1
+    assert caught.value.partial_run.records[0].error_code == "PROTOCOL"

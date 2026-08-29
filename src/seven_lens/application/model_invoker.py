@@ -53,7 +53,13 @@ from seven_lens.application.ports.model_transport import (
     ModelTransportError,
     ModelTransportErrorCode,
 )
-from seven_lens.config.provider import AgnesProviderConfig, ReasoningEffective
+from seven_lens.config.analysis_provider import AnalysisProviderConfig
+from seven_lens.config.provider import (
+    ApiFlavor,
+    ProviderKind,
+    ReasoningEffective,
+    ReasoningRequested,
+)
 from seven_lens.domain.json_values import MAX_SERIALIZED_BYTES, JsonObject
 from seven_lens.domain.value_objects import RunId, UtcTimestamp
 
@@ -67,8 +73,6 @@ ModelOutput = (
 )
 
 P3E_PROMPT_VERSION: Final = "p3e.1"
-AGNES_PROVIDER_VERSION: Final = "agnes.1"
-AGNES_MODEL_ID: Final = "agnes-2.5-flash"
 
 _ERROR_MESSAGES: Final = {
     ModelTransportErrorCode.CONFIG: "model call configuration is invalid",
@@ -146,17 +150,17 @@ class ModelInvocationError(RuntimeError):
 
 
 class AuditedModelInvoker:
-    """One exact Agnes attempt, with no fallback, retry, or unaudited output path."""
+    """One exact configured-route attempt; no fallback, retry, or unaudited output."""
 
     def __init__(
         self,
         *,
-        config: AgnesProviderConfig,
+        config: AnalysisProviderConfig,
         transport: JsonModelTransport,
         audit: ModelCallAuditPort,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
-        if type(config) is not AgnesProviderConfig:
+        if type(config) is not AnalysisProviderConfig:
             raise ValueError("model invoker configuration is invalid")
         config.__post_init__()
         if not hasattr(transport, "execute") or not all(
@@ -196,14 +200,14 @@ class AuditedModelInvoker:
             stage=stage,
             role=role,
             round_number=round_number,
-            provider=self._config.provider_kind,
+            provider=ProviderKind(self._config.route_provider_kind),
             model=self._config.model_id,
-            api_flavor=self._config.api_flavor,
-            endpoint_policy_id=self._config.policy_id,
+            api_flavor=ApiFlavor(self._config.api_flavor),
+            endpoint_policy_id=self._config.route_policy_id,
             route_ordinal=1,
             prompt_template_hash=envelope.prompt_template_hash,
             request_envelope_hash=envelope.envelope_hash,
-            reasoning_requested=self._config.reasoning_requested,
+            reasoning_requested=ReasoningRequested.MAX,
         )
 
     def invoke(
@@ -246,7 +250,7 @@ class AuditedModelInvoker:
 
         started_at = self._timestamp()
         try:
-            validate_agnes_route(envelope, self._config.model_id)
+            validate_configured_route(envelope, self._config)
         except ModelInvocationError:
             completed_at = self._completed(started_at)
             self._persist_failure(
@@ -396,7 +400,7 @@ class AuditedModelInvoker:
             raise ModelInvocationError(ModelTransportErrorCode.SCHEMA)
         try:
             envelope.validate_integrity()
-            validate_agnes_route(envelope, self._config.model_id)
+            validate_configured_route(envelope, self._config)
         except (AttributeError, TypeError, ValueError):
             raise ModelInvocationError(ModelTransportErrorCode.SCHEMA) from None
         if type(output_contract) is not OutputContract:
@@ -543,21 +547,34 @@ class AuditedModelInvoker:
         return completed if completed.value > started_at.value else _after(started_at)
 
 
-def validate_agnes_route(
+def validate_configured_route(
     envelope: SanitizedProviderEnvelope,
-    configured_model_id: str = AGNES_MODEL_ID,
+    config: AnalysisProviderConfig,
 ) -> None:
-    """Reject any envelope not bound to the one approved P3-E Agnes route."""
+    """Reject any envelope not bound to the exact configured analysis route."""
 
     if (
         type(envelope) is not SanitizedProviderEnvelope
-        or type(configured_model_id) is not str
-        or configured_model_id != AGNES_MODEL_ID
+        or type(config) is not AnalysisProviderConfig
         or envelope.versions.prompt != P3E_PROMPT_VERSION
-        or envelope.versions.provider != AGNES_PROVIDER_VERSION
-        or envelope.versions.model != configured_model_id
+        or envelope.versions.provider != config.route_provider_version
+        or envelope.versions.model != config.route_model_version
     ):
         raise ModelInvocationError(ModelTransportErrorCode.SCHEMA)
+
+
+def validate_agnes_route(
+    envelope: SanitizedProviderEnvelope,
+    configured_model_id: str | None = None,
+) -> None:
+    """Deprecated legacy wrapper binding the package-default Agnes route."""
+
+    from seven_lens.config.analysis_provider import package_default_analysis_provider_config
+
+    config = package_default_analysis_provider_config()
+    if configured_model_id is not None and configured_model_id != config.model_id:
+        raise ModelInvocationError(ModelTransportErrorCode.SCHEMA)
+    validate_configured_route(envelope, config)
 
 
 def _after(timestamp: UtcTimestamp) -> UtcTimestamp:

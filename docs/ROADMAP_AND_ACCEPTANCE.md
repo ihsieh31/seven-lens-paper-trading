@@ -42,11 +42,13 @@ P2 Closed只代表程式安全基線；真實submit、WebSocket transport與oper
   與 run/stage authority；identity/graph/citation/deadline/transition 全部驗收。
 - **P3-D** 兩輪三觀點 Risk Debate 與 strict target-weight `PortfolioProposal`；完整去識別化
   snapshot 缺一即 `INVALID/NO_TRADE`；無 risk approval／quantity／`OrderIntent` authority。
-- **P3-E** 唯一 Agnes route 固定 endpoint、sanitized envelope、append-only model-call audit；
-  authorized live 六案例 6/6（證據 `docs/P3E_LIVE_EVIDENCE_2026-08-24.json`）。
+- **P3-E** provider-neutral strict route、sanitized envelope、append-only model-call audit；現行 NVIDIA
+  `openai/gpt-oss-120b` authorized live 六案例 6/6（證據
+  `docs/P3E_LIVE_EVIDENCE_2026-08-29_NVIDIA.json`；2026-08-24 Agnes evidence僅為歷史snapshot）。
 - **P3-F** immutable reflection lineage、bounded curated memory、synthetic eval 治理；
   Offline Correctness 100%、Live Model Quality 260/260＋violations=0＋130/130 pre-network
-  fail-closed、Provider Transport first-attempt/eventual 皆 100%（V12 批次 snapshot）。
+  fail-closed、Provider Transport first-attempt/eventual 皆 100%（現行NVIDIA V14批次snapshot；歷史V12
+  關門證據仍immutable保留）。
 
 關門證據基線：targeted `423 passed`、non-integration `1299 passed, 232 deselected`、真實 PG16 整合
 `217 passed, 15 deselected, 0 skipped`、offline byte-match 不變。發布鏈：`b59e466`（工作樹）→

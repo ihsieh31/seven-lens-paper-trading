@@ -8,6 +8,8 @@ import os
 import stat
 from pathlib import Path
 
+from seven_lens.application.analysis_provider_composition import default_operator_config_root
+from seven_lens.config.analysis_provider import load_analysis_provider_config
 from seven_lens.evals.provider_eval import (
     LiveEvalAuthorization,
     live_plan_summary,
@@ -23,13 +25,14 @@ def main() -> int:
     offline.add_argument("--fixtures", type=Path, required=True)
     offline.add_argument("--frozen-report", type=Path, required=True)
     live_plan = subcommands.add_parser(
-        "live-plan", help="validate and print a live plan; never sends requests"
+        "live-plan",
+        help="validate and print a live plan against the configured route; never sends requests",
     )
     live_plan.add_argument("--authorization-file", type=Path, required=True)
     live_plan.add_argument("--trusted-config-hash", required=True)
     live_plan.add_argument("--fixtures", type=Path, required=True)
     live_run = subcommands.add_parser(
-        "live-run", help="execute the externally authorized production Agnes live evaluation"
+        "live-run", help="execute the externally authorized current-route live evaluation"
     )
     live_run.add_argument("--authorization-file", type=Path, required=True)
     live_run.add_argument("--trusted-config-hash", required=True)
@@ -43,8 +46,11 @@ def main() -> int:
         report = run_and_verify_frozen(args.fixtures, args.frozen_report)
         print(report.to_bytes().decode("utf-8"), end="")
         return 0 if report.wire["offline_passed"] is True else 1
+    # The live path is bound to the exact configured operator route snapshot.
+    route = load_analysis_provider_config(default_operator_config_root())
     authorization = LiveEvalAuthorization.from_json(
-        _read_regular_file(args.authorization_file, maximum_bytes=1_048_576)
+        _read_regular_file(args.authorization_file, maximum_bytes=1_048_576),
+        route=route,
     )
     if args.command == "live-plan":
         print(
@@ -54,6 +60,7 @@ def main() -> int:
                         authorization,
                         args.trusted_config_hash,
                         corpus_root=args.fixtures,
+                        route=route,
                     )
                 ),
                 allow_nan=False,
@@ -74,6 +81,7 @@ def main() -> int:
         trusted_grant_sha256=args.trusted_grant_sha256,
         supplied_grant=supplied_grant,
         evidence_filename=args.evidence_filename,
+        route=route,
     )
     print(
         json.dumps(
