@@ -368,6 +368,7 @@ def test_workflow_actions_and_postgres_image_are_immutable() -> None:
         "postgres:16.15-alpine@sha256:"
         "ab5c955e9e57ae9879d4411ab49a912be9d162455676f7bf56e951b11ac73785"
     ) in workflow
+    assert "--tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=2g" in workflow
 
 
 def test_workflow_commands_match_p1_c3_contract() -> None:

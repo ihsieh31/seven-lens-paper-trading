@@ -72,7 +72,7 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 12
-          --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=1g
+          --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=2g
     steps:
       - name: Check out source
         # Reviewed release: actions/checkout v7.0.1.

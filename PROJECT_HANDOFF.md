@@ -90,8 +90,8 @@ reflection/memory/evals 各自經獨立驗收 Accepted 後合併關門；過程�
   source rights、真實provider entitlement、P4-D～F production composition與P5 time-travel residual仍依issue條件保持Open。
 - OPEN-037的P4-B identity／quarantine子範圍已Accepted／Closed；已持有部位的`CORPORATE_ACTION_EXIT`、P5 replay、
   P6 shadow與P7 submit authority仍未實作／驗收。架構文件不等於order authority。
-- CI 注意事項：postgres-integration service container 的 tmpfs 已固定為 1g（512m 會被整合套件的
-  WAL churn 耗盡導致容器崩潰）；本機 `run_postgres_integration.sh` 使用disk-backed anonymous volume，
+- CI 注意事項：P4-C發布後exact-SHA run實證1g tmpfs被整合套件的WAL churn耗盡，service container現固定為2g；
+  本機 `run_postgres_integration.sh` 使用disk-backed anonymous volume，
   不再把WAL壓力放進Docker VM記憶體，但仍應避免與其他高記憶體容器並行。
 
 ## 5. 下一個單一步驟

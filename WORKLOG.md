@@ -13,6 +13,9 @@
 - Verdict：P4-C `Accepted`、Gate `Closed`，無High／Medium finding。P4 overall仍為`In progress`，
   P4-D～F未開始；下一步只能另開P4-D implementation。
 - P4-A／B／C implementation與acceptance prompts於closure publication移除；歷史決策與驗收證據保留於Git history。
+- Closure commit首次exact-SHA CI的`quality-unit`成功，但`postgres-integration`在249 tests通過後因1g tmpfs
+  `pg_wal`耗盡（`No space left on device`）失敗；這是CI容量而非application assertion failure。CI service
+  tmpfs最小調整為2g並由永久workflow test釘住，等待新SHA重新驗證兩個required jobs。
 
 ## 2026-08-31 — P4-C authority remediation與全面本地驗證完成
 
