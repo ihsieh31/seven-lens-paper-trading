@@ -124,8 +124,16 @@ if [[ "$ready" != true ]]; then
     exit 1
 fi
 
-server_version_num="$(docker exec "$container_id" \
-    psql -U "$postgres_user" -d "$postgres_database" -Atqc 'SHOW server_version_num')"
+server_version_num=""
+for (( attempt = 1; attempt <= 30; attempt++ )); do
+    server_version_num="$(docker exec "$container_id" \
+        psql -U "$postgres_user" -d "$postgres_database" \
+        -Atqc 'SHOW server_version_num' 2>/dev/null || true)"
+    if [[ "$server_version_num" =~ ^[0-9]+$ ]]; then
+        break
+    fi
+    sleep 1
+done
 if [[ ! "$server_version_num" =~ ^[0-9]+$ ]]; then
     echo "ERROR: PostgreSQL integration gate could not read the server version." >&2
     exit 1

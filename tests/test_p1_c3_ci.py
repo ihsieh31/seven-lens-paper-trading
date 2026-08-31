@@ -395,5 +395,7 @@ def test_postgres_integration_job_excludes_live_marker() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     postgres_script = POSTGRES_SCRIPT.read_text(encoding="utf-8")
     assert "./scripts/run_postgres_integration.sh" in workflow
-    assert 'pytest tests/integration -m "integration and not live" -ra --tb=short' in postgres_script
+    assert (
+        'pytest tests/integration -m "integration and not live" -ra --tb=short' in postgres_script
+    )
     assert "SEVEN_LENS_P2E_LIVE" not in workflow
