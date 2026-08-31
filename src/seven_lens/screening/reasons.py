@@ -1,0 +1,33 @@
+"""Closed P4-C rejection reasons shared by every closed record.
+
+A single catch-all ``INVALID`` would hide which hard rule excluded a
+security, so every closed record uses one of these exact codes.  Semantics
+are never merged; a code may be renamed only by an ADR that renames it
+everywhere at once.
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+
+
+class ClosedReason(StrEnum):
+    """Closed reason codes for market, universe, feature, and candidate records."""
+
+    UNSUPPORTED_ASSET_CLASS = "UNSUPPORTED_ASSET_CLASS"
+    OTC_OR_EXCLUDED_INSTRUMENT = "OTC_OR_EXCLUDED_INSTRUMENT"
+    NOT_ACTIVE_OR_TRADABLE = "NOT_ACTIVE_OR_TRADABLE"
+    PRICE_BELOW_MINIMUM = "PRICE_BELOW_MINIMUM"
+    ADV_BELOW_MINIMUM = "ADV_BELOW_MINIMUM"
+    INSUFFICIENT_TRADING_HISTORY = "INSUFFICIENT_TRADING_HISTORY"
+    IDENTITY_NOT_CLOSED = "IDENTITY_NOT_CLOSED"
+    CORPORATE_ACTION_QUARANTINE = "CORPORATE_ACTION_QUARANTINE"
+    QUOTE_MISSING_OR_STALE = "QUOTE_MISSING_OR_STALE"
+    SPREAD_TOO_WIDE = "SPREAD_TOO_WIDE"
+    MARKET_DATA_CONFLICT = "MARKET_DATA_CONFLICT"
+    FACTOR_INPUT_MISSING = "FACTOR_INPUT_MISSING"
+    FACTOR_MANIFEST_NOT_APPROVED = "FACTOR_MANIFEST_NOT_APPROVED"
+    SECTOR_TAXONOMY_NOT_AUTHORIZED = "SECTOR_TAXONOMY_NOT_AUTHORIZED"
+    CLUSTER_POLICY_NOT_APPROVED = "CLUSTER_POLICY_NOT_APPROVED"
+    EVIDENCE_INSUFFICIENT_OR_CONFLICTING = "EVIDENCE_INSUFFICIENT_OR_CONFLICTING"
+    WINDOW_OR_DEADLINE_INVALID = "WINDOW_OR_DEADLINE_INVALID"

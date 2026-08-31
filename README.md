@@ -15,7 +15,7 @@ execution 只能處理已核准的 Paper `OrderIntent`。本專案沒有 Alpaca 
 | P1 基礎／權威狀態 | Closed | typed config、Keychain、PostgreSQL、telemetry、CI |
 | P2 Paper 執行安全 | Closed | order/fill/reconciliation/control；真實下單仍未授權 |
 | **P3 研究／提案／記憶** | **Closed** | A～F 與 cleanup Batch A～G 均已驗收；詳見下節與 `WORKLOG.md` |
-| P4 | In progress | P4-A／P4-B已獨立驗收並Accepted／Closed；P4-C～F未開始 |
+| P4 | In progress | P4-A／P4-B／P4-C Accepted／Closed；P4-D～F未開始 |
 | P5～P8 | Not started | 驗證 → Shadow → Supervised → Unattended |
 
 ## P3 Close
@@ -85,10 +85,11 @@ P3-21 維持 FALSE POSITIVE。
 - Provider Transport GREEN 僅為 V12 批次 snapshot。P6 Shadow 開始前，需另行授權的 synthetic
   canary 在 rolling 7 日且 ≥200 logical calls 達 first-attempt≥95%／eventual≤3 attempts≥99%；
   跌破即重開（OPEN-027）。
-- 下一個階段仍是 **P4 multi-source／candidate／deterministic Risk**。`P4_PROGRAM_PLAN.md`與ADR-038已完成
-  使用者設定確認；ADR-039亦已固定Factor V1、SEC SIC Division、correlation cluster與gross turnover。P4-A與P4-B
-  均已fresh independent acceptance並Accepted／Closed；P4-C～F未開始。P4-A focused `372 passed`、P4-B focused
-  `132 passed`，fresh PG16 integration `256 passed, 2 deselected, 0 skipped`；完整P4仍未Closed。
+- P4-C 已於 2026-08-31 完成 fresh read-only independent acceptance，verdict 為 `Accepted`、Gate 為
+  `Closed`，無 High／Medium finding。最新 focused 為 `190 passed`；完整 non-integration
+  `2303 passed, 329 deselected`；PostgreSQL 16 integration `327 passed, 2 deselected`；
+  Ruff／format／mypy／`git diff --check` 全綠，外部／model／broker／Keychain 呼叫均為 0。
+- 下一個單一步驟是 **另開 P4-D implementation**；P4-D～F仍未開始，完整P4仍未Closed。
   P4只可建立no-submit intent；任何真實Paper送單能力屬P7且需再次明確授權。
 
 ## 文件入口

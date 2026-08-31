@@ -150,7 +150,7 @@
 - source URL 失效時保存 tombstone、hash 和既有 metadata；若無法驗證，降低 confidence。
 - 每次 `PortfolioProposal`、backtest 和 daily run 都固定 portfolio/source/data snapshot ids；Future Analyst Plugin 若啟用，另固定 plugin/doctrine version。
 
-## 9. 已核准的多來源資訊規劃（P4-A／P4-B Accepted／Closed；完整P4尚未完成）
+## 9. 已核准的多來源資訊規劃（P4-A／P4-B／P4-C Accepted／Closed；完整P4尚未完成）
 
 來源不是可互換的普通 fallback。每個 adapter 與每筆資料都必須標記下列封閉角色之一：
 
@@ -178,7 +178,7 @@ P4的ADR-039 SEC authority固定為同一CIK的submissions top-level `sic`及Com
 `us-gaap/PaymentsToAcquirePropertyPlantAndEquipment`、`dei/EntityCommonStockSharesOutstanding`。每筆保留taxonomy、
 concept、unit、period、FY/FP、form、accession、filed／accepted可用時間與content hash；不得以同義concept、今日值、
 ticker或模型推測補缺。Sector採point-in-time SEC SIC Division A～J；缺失、衝突、future或未映射值為
-`SECTOR_UNKNOWN`並禁止新增曝險，不使用GICS。
+`SECTOR_UNKNOWN`並禁止新增曝險，不使用未核准taxonomy。
 
 規劃依據：
 

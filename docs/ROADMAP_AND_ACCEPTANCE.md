@@ -1,6 +1,6 @@
 # 開發路線圖與驗收標準
 
-最後更新：2026-08-28。時程是專注開發估算，不是日曆承諾；任何phase只有在獨立證據滿足後才
+最後更新：2026-08-31。時程是專注開發估算，不是日曆承諾；任何phase只有在獨立證據滿足後才
 能Closed。完整目前狀態見`PROJECT_HANDOFF.md`與`PROGRESS.md`。
 
 ## 狀態總覽
@@ -11,7 +11,7 @@
 | P1 | Closed | — |
 | P2 | Closed | 真實submit仍需P7 |
 | P3 | Closed | A～F子閘及cleanup Batch A～G 已於2026-08-27完成獨立驗收；P3-4／P3-28 deferred、P3-21 false positive |
-| P4 | In progress | P4-A／P4-B已fresh independent acceptance並Accepted／Closed；P4-C～F未開始 |
+| P4 | In progress | P4-A／P4-B／P4-C Accepted／Closed；P4-D～F未開始 |
 | P5～P8 | Not started | 依序通過前一Gate |
 
 ## P0 — 規格與治理（Closed）
@@ -64,18 +64,18 @@ P2 Closed只代表程式安全基線；真實submit、WebSocket transport與oper
 provider 不明都無法進 P4」已滿足。子閘 prompt 與 requirement map 歸檔於 `docs/archive/`；
 Transport rolling canary 義務見 OPEN-027。
 
-## P4 — 多來源、候選與deterministic Risk（In progress；A／B Closed）
+## P4 — 多來源、候選與deterministic Risk（In progress；A／B／C Closed）
 
 使用者已核准`P4_PROGRAM_PLAN.md`／ADR-038／ADR-039：單一Paper帳戶、long-only、保守hard limits、整股quantity、
 零付費資料profile，以及exact Factor V1／SEC SIC Division／correlation cluster／gross turnover manifests。P4已分成A～F
-六個依序Gate，每個Gate各有implementation／acceptance prompt。P4-A（含ADR-039 SEC SIC／Company Facts第0C節
-delta）與P4-B已於2026-08-28經fresh independent acceptance，兩者verdict均為`Accepted`、Gate均為`Closed`；
-P4-C～F仍未開始。P4-A／P4-B的closure不代表完整P4 Closed。
+六個依序Gate。P4-A（含ADR-039 SEC SIC／Company Facts第0C節delta）與P4-B已於2026-08-28、P4-C已於
+2026-08-31經fresh independent acceptance，三者verdict均為`Accepted`、Gate均為`Closed`；P4-D～F仍未開始。
+P4-A／P4-B／P4-C的closure不代表完整P4 Closed。
 
 P4-B implementation scope已完成：point-in-time security identity resolver、append-only source／corporate-action／
 quarantine contracts、source correction／withdrawal lineage，以及in-memory與PostgreSQL authority。公開入口為
 `SecurityMasterService`，服務順序固定為validate → identity resolve → durable block → confirmation → CAS transition →
-readback → bounded telemetry。範圍只到identity、forward/reverse split與三層quarantine；沒有開始P4-C，沒有Risk／
+readback → bounded telemetry。該P4-B Gate範圍只到identity、forward/reverse split與三層quarantine；不包含P4-C、Risk／
   portfolio／quantity／broker／model authority；OPEN-037的exit／P5～P7條件仍未關閉。
 
 P4-A／P4-B acceptance evidence：P4-A focused＋invariants `372 passed`；P4-B focused＋invariants `132 passed`；
@@ -83,6 +83,11 @@ fresh PostgreSQL 16 integration `256 passed, 2 deselected, 0 skipped`，同輪no
 256 deselected`。修復後公開入口證明blocked head維持`entry_blocked`，direct `ELIGIBLE`與未知payload均以
 SQLSTATE `23514`拒絕，owner-safe eligible／extra-payload rows均為`0`；source transport／SEC／FRED adversarial
 PoC均按預期通過。結論：P4-A與P4-B均`Accepted`／`Closed`，且`no actionable findings`。
+
+P4-C acceptance evidence：focused P4-C＋clock `190 passed`；完整non-integration `2303 passed,
+329 deselected`；fresh PostgreSQL 16 integration `327 passed, 2 deselected`；Ruff／format／mypy／
+`git diff --check`全綠。獨立SIC／factor／ranking／10-permutation oracle通過，無High／Medium finding；
+結論為`Accepted`／`Closed`。下一步只能另開P4-D implementation。
 
 - exact-host GET-only adapters 與 source-role registry：Alpaca；FRED/ALFRED；Treasury/BLS/BEA/EIA；SEC/IR；
   Alpaca Corporate Actions＋Nasdaq/NYSE；Tavily/GDELT；yfinance supplement。任何 key／真實下載需另行授權。

@@ -13,10 +13,15 @@ from seven_lens.sources.adapters.records import (
     NormalizedSourceRecord,
     ProviderTimestampError,
     SourceSchemaDriftError,
-    build_normalized_record,
     parse_provider_timestamp,
     provider_utc_date,
     strict_json_loads,
+)
+from seven_lens.sources.adapters.records import (
+    _build_normalized_record as build_normalized_record,
+)
+from seven_lens.sources.adapters.records import (
+    build_normalized_record as public_build_normalized_record,
 )
 from seven_lens.sources.contracts import RightsStatus
 from seven_lens.sources.roles import CoverageLabel, P4SourceFamily, SourceRole, p4_manifest_registry
@@ -49,6 +54,43 @@ def test_record_derives_role_coverage_rights_from_registry() -> None:
     assert record.rights is policy.rights
     assert record.record_hash == record.compute_hash()
     assert len(record.record_hash) == 64
+
+
+def test_public_record_builder_rejects_caller_authored_source_authority() -> None:
+    with pytest.raises(ValueError, match="adapter-only"):
+        public_build_normalized_record(**_base_values())
+
+
+def test_record_authority_rejects_equality_spoofing() -> None:
+    class EqualToEverything:
+        def __eq__(self, other: object) -> bool:
+            del other
+            return True
+
+    record = build_normalized_record(**_base_values())
+    values = {
+        field: getattr(record, field)
+        for field in (
+            "record_id",
+            "family",
+            "endpoint_id",
+            "schema_version",
+            "content_hash",
+            "record_hash",
+            "retrieved_at",
+            "payload",
+            "material_claim",
+            "observation_at",
+            "published_at",
+            "available_at",
+            "effective_at",
+            "vintage",
+            "supersedes_content_hash",
+            "coverage_warning",
+        )
+    }
+    with pytest.raises(ValueError, match="adapter or trusted readback"):
+        NormalizedSourceRecord(**values, _authority=EqualToEverything())
 
 
 def test_role_coverage_rights_are_derived_and_unforgeable() -> None:

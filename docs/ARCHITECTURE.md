@@ -153,7 +153,7 @@ gross normal turnover 20%。short request會以
 
 上述分類與計算固定由ADR-039四個immutable manifests執行：`p4-factor-v1`、
 `sec-sic-division-v1`、`p4-correlation-cluster-v1`、`p4-gross-turnover-v1`。runtime/env/model不得
-override；manifest hash不符即fail closed。Sector只從point-in-time SEC SIC映射，不使用GICS名稱或推測分類。
+override；manifest hash不符即fail closed。Sector只從point-in-time SEC SIC映射，不使用未核准taxonomy名稱或推測分類。
 
 ### 4.5 TargetPortfolio → OrderIntent
 

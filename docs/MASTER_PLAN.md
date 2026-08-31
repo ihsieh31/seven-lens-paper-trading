@@ -2,7 +2,7 @@
 
 版本：0.5
 日期：2026-08-27
-狀態：P0～P3 Closed；P4 In progress（P4-A／P4-B已獨立驗收並Accepted／Closed；P4-C～F未開始）；P5～P8 Not started
+狀態：P0～P3 Closed；P4 In progress（P4-A／P4-B／P4-C已獨立驗收並Accepted／Closed；P4-D～F未開始）；P5～P8 Not started
 
 ## 1. 專案定義
 

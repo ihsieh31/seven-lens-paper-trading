@@ -217,7 +217,15 @@ def verify_schema(dsn: str) -> int:
                to_regclass('public.corporate_action_event_sources'),
                to_regclass('public.corporate_action_event_head'),
                to_regclass('public.security_quarantine_decisions'),
-               to_regclass('public.security_quarantine_decision_sources')
+               to_regclass('public.security_quarantine_decision_sources'),
+               to_regclass('public.market_snapshots'),
+               to_regclass('public.universe_snapshots'),
+               to_regclass('public.universe_snapshot_entries'),
+               to_regclass('public.feature_vectors'),
+               to_regclass('public.sector_assignments'),
+               to_regclass('public.candidate_sets'),
+               to_regclass('public.candidate_set_entries'),
+               to_regclass('public.cluster_results')
             """
         )
         tables = cast(tuple[object, ...] | None, cursor.fetchone())

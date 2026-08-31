@@ -15,7 +15,6 @@ from seven_lens.sources.adapters.records import (
     NormalizedSourceRecord,
     ProviderTimestampError,
     SourceSchemaDriftError,
-    build_normalized_record,
     content_hash_of,
     parse_provider_timestamp,
     require_date,
@@ -24,6 +23,9 @@ from seven_lens.sources.adapters.records import (
     require_type,
     schema_version,
     strict_json_loads,
+)
+from seven_lens.sources.adapters.records import (
+    _build_normalized_record as build_normalized_record,
 )
 from seven_lens.sources.roles import P4SourceFamily
 
@@ -83,6 +85,8 @@ def parse_assets(
                 schema_version=schema_version("1.0.0"),
                 content_hash=content_hash,
                 retrieved_at=retrieved_at,
+                observation_at=retrieved_at,
+                available_at=retrieved_at,
                 payload={
                     "id": asset_id,
                     "symbol": symbol,
@@ -103,6 +107,7 @@ def parse_bars(
     retrieved_at: UtcTimestamp,
     requested_feed: str,
     effective_feed: str,
+    requested_timeframe: str,
 ) -> tuple[NormalizedSourceRecord, ...]:
     """Validate one delayed-SIP historical bar page with explicit feed identity."""
     if requested_feed not in _FEEDS or effective_feed not in _FEEDS:
@@ -111,6 +116,8 @@ def parse_bars(
         raise FeedEntitlementError(
             "effective feed differs from the requested entitlement; no silent fallback"
         )
+    if requested_timeframe != "1Day":
+        raise SourceSchemaDriftError("P4-C historical bars require the exact 1Day timeframe")
     decoded = strict_json_loads(payload)
     if not isinstance(decoded, dict):
         raise SourceSchemaDriftError("bars payload must be an object")
@@ -174,9 +181,11 @@ def parse_bars(
             content_hash=content_hash,
             retrieved_at=retrieved_at,
             observation_at=latest,
+            available_at=retrieved_at,
             payload={
                 "symbol": symbol,
                 "feed": requested_feed,
+                "timeframe": requested_timeframe,
                 "bars": normalized_bars,
                 "next_page_token": next_page_token,
             },

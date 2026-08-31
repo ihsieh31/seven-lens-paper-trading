@@ -3,6 +3,139 @@
 本檔只保留可影響目前決策的里程碑。逐輪缺陷、命令輸出與已被取代的敘述保留於 Git history；
 目前狀態以 `PROJECT_HANDOFF.md` 與 `PROGRESS.md` 為準。
 
+## 2026-08-31 — P4-C fresh independent acceptance完成
+
+- 以read-only fresh session依P4-C evidence matrix完成source/call-graph、public-entry對抗、獨立formula／SIC／
+  ranking oracle、10 permutations、完整non-integration與真實PostgreSQL 16驗證；未修改runtime/tests，
+  provider／model／broker／Keychain呼叫均為0。
+- 結果：focused P4-C＋clock `190 passed`；完整non-integration `2303 passed, 329 deselected`；
+  PostgreSQL 16 integration `327 passed, 2 deselected`；Ruff／format／mypy／`git diff --check`全綠。
+- Verdict：P4-C `Accepted`、Gate `Closed`，無High／Medium finding。P4 overall仍為`In progress`，
+  P4-D～F未開始；下一步只能另開P4-D implementation。
+- P4-A／B／C implementation與acceptance prompts於closure publication移除；歷史決策與驗收證據保留於Git history。
+
+## 2026-08-31 — P4-C authority remediation與全面本地驗證完成
+
+- 重新把P4-A normalized records、P4-B identity／split head與P4-C public projections視為單一trust chain審查；
+  修復caller-minted source authority、DailyBar／AssetObservation／IdentityView直接建構旁路、bar feed／timeframe／
+  point-in-time identity、SEC frame／entity scope／CapEx sign、split identity substitution與nested authority tamper。
+- PostgreSQL補齊source payload契約、exact source/head binding、append-only CAS與worker/runtime ACL；PG16迭代中發現並
+  修正舊payload constraint未接受`timeframe=1Day`、錯誤schema-qualified `COALESCE`、非canonical corporate-action
+  測試夾具、precision-boundary夾具與ACL teardown grant清理。所有修復均有永久回歸，未放寬fail-closed邊界。
+- 最終`./scripts/verify_p1.sh --postgres`從頭全綠：265 files format、Ruff、mypy 264 source files；
+  non-integration `2302 passed, 329 deselected`；digest-pinned PostgreSQL 16 integration
+  `327 passed, 2 deselected`；`git diff --check`通過。provider／model／broker／Keychain呼叫均為0。
+- 本輪修復審查未留下High／Medium finding；狀態為`P4-C remediation verified; pending fresh independent acceptance`。
+  不以本輪自審冒稱Accepted，P4-D～F未開始。
+
+## 2026-08-30 — P4-C trust-boundary audit：五項誤信漏洞（P1–P5）實證並修復
+
+- 接續 sparse-calendar 修復的教訓，把「authority 輸入本身說謊/不完整」當成對抗面，對 P4-C 全部
+  public entry 重新掃描：日曆（`sessions`）、每個 `FactorInput` 自帶日曆、session window 內容、
+  asset observation／quarantine decision 新鮮度、source_ref 存在性、wire 可重導性、fiscal 標籤、
+  latest-selection、AssetKind 映射、cluster nodes 成員資格、EvidenceView bools、policy 常數雙源。
+  PoC（/tmp/p4c_poc/test_poc_trust_audit.py）實證五個漏洞，全部同日修復：
+- **P1【High】** 稀釋歷史日曆架空 252-session 歷史門檻：日曆「近 30 個平日 REGULAR＋更早 232 週
+  每週一 REGULAR」下，252 根 bar 橫跨約 5 年，ADV 窗走查通過、`reasons=[]`，universe 判
+  `eligible=True`——sparse-calendar 修復只覆蓋 ADV 窗，未覆蓋 history gate。
+  修復：`_validate_market_snapshot_fields` 對 bar_dates 全 span（最早 bar → as_of）做
+  `_require_complete_weekday_window` 走查。
+- **P2【Medium】** 各 `FactorInput` 攜帶分歧但各自完整的日曆（假假日明標 CLOSED＋補一個更舊日），
+  同一 cross-section 成員在不同 session 集上評分。修復：`build_feature_vectors` 要求所有 inputs
+  的 sessions tuple 值相等。
+- **P3【Medium】** session window「內容」從不受檢：平日 REGULAR 宣稱 00:00–23:59:59 可通過全部
+  結構檢查並影響 quote age／focus window 定義。修復：新增共用 `validate_nyse_session_window`
+  （opens ∈ 12:00–16:00 UTC、時長 1h–6h30m），market `_validate_nyse_sessions` 與 funnel
+  `_session_calendar` 都呼叫。
+- **P4/P5【Medium】** asset `observed_at` 與 quarantine `decision_at` 只有上限（≤ known_at）無下限：
+  5 個月前的觀察與決策配上今日 market snapshot 仍 `eligible=True`。修復：`build_universe` 加
+  `_MAX_AUTHORITY_STALENESS = 7 天`，超限分別以既有 closed reason `NOT_ACTIVE_OR_TRADABLE`／
+  `CORPORATE_ACTION_QUARANTINE` 排除（不新增 reason code、不改 wire contract）。
+- 新增永久回歸 7 項：market 稀釋歷史日曆拒絕、market 24h 窗拒絕、funnel 分歧日曆拒絕、
+  funnel 24h 窗拒絕（共用 validator）、universe 舊觀察排除、7 天 ±1µs 邊界、舊 quarantine 決策排除。
+  審計 PoC 反轉為「預期被拒」4/4 通過。全部修復僅觸及 `market_data/snapshots.py`、
+  `screening/funnel.py`、`universe/builder.py` 的輸入驗證，無新 capability、不改 A/B contracts、
+  不改 migration/wire shape。
+- 分析-only trust boundaries（跨層責任，本輪不動碼）：market snapshot source_ref 無 FK 綁
+  `p4_source_records`（sector_assignments 有——不對稱）；snapshot wire 不含 bar close/volume，
+  readback 無法重導 adv20（靠 restart 重算 features 緩解）；fiscal year/quarter 標籤由 P4-A
+  normalizer 保證；sector/identity「cutoff 前最新」的 latest-selection 由 A/B repository seam 保證；
+  AssetKind 映射由上游 adapter 保證；cluster nodes＝top100∪holdings 由 P4-D composition 保證；
+  EvidenceView bools 為 P3/P4 evidence seam 設計；`snapshots.py` 的 MIN_PRICE/MIN_ADV20/5s/30bps
+  與 `config/p4.py` 雙源（值一致，P4-A Accepted code 不可動，留待 composition review）；
+  明標 CLOSED 的全週說謊日曆仍屬 calendar authority 內容信任（P3 邊界檢查已限縮至小時合理性）。
+
+## 2026-08-30 — P4-C 第二輪 trust audit（非日期類誤信）：Q1/Q2 修復、Q3/Q4 如實記錄
+
+- 應「把已知條件本身當攻擊面」的審查指示，對非日期類信任假設再掃一輪（/tmp/p4c_poc/
+  test_poc_trust_audit2.py）。四個 lead，兩個實證為漏洞並已修復，兩個如實列為不修：
+- **Q1【Medium，已修復】** `select_focus_window` 直接消費 session window 內容、完全未呼叫
+  `validate_nyse_session_window`（P3 修復的覆蓋殘留）：24h 假日曆＋攻擊者選 as_of 00:30 即得
+  OPEN_PLUS_60M。修復：函式內加共用 validator。新增永久測試
+  `test_focus_window_rejects_lying_session_hours`。
+- **Q2【Medium，已修復】** shares observation 只檢查 `available_at ≤ known_at` 上限：pre-split
+  股數（available 4/1）配 2:1 split（available 5/1、ex_date 在中窗）＋split-adjusted 價格 →
+  market_cap 1000×20=20,000 而正確 40,000，earnings_yield 恰好膨脹 2x、status COMPLETE。
+  修復：`build_feature_vectors` 要求 shares observation 的 `available_at ≥` 最後一個
+  **已套用**（visible＋effective）split 的 `available_at`，否則 `FACTOR_INPUT_MISSING`
+  （reason="shares observation predates an applied split"）。邊界：available 恰等於 split
+  available 即通過；僅公告未生效（available > known_at）的 split 不約束股數——避免過度排除。
+  新增永久測試三態（stale → MISSING、boundary → COMPLETE、announced-only → COMPLETE）。
+- **Q3【不修，需 ADR】** quote 水準與 bar 收盤從不交叉檢查：quote mid 5.055 對 bar close 100
+  （95% 背離）仍 `eligible=True`、ADV 25M——價格 gate 與 ADV gate 各自使用被信任的輸入。
+  任何背離 band 都是新 threshold，屬 ADR-038/039 治理範圍，不擅自加；已列 composition
+  review 與 ADR 提案清單。
+- **Q4【部分阻擋，跨層信任】** fiscal 標籤錯置：直接 Q1↔Q4 對調會破壞 period_end 單調性 →
+  assemble_ttm 回 None（fail-closed 已擋）；但**完全自洽**的錯置（year/quarter/period_end
+  一起改）結構上與真實 filing 無法區分——標籤正確性由 P4-A normalizer 對 SEC XBRL context
+  的解析保證，屬跨層合約。
+- 其餘複查皆為已阻擋或已記錄：quant_candidates 對 stale as_of 向量經 known_at 單調檢查攔截；
+  duplicate quarter/conflict facts → None；EVIDENCE refs 與 security 的關聯性結構上無從驗證
+  （SourceRef 無 security 維度，跨層）；cluster 共同子集 zero-variance → pair_unknown；
+  build_candidate_set 分數必須綁定 parent vector。
+- 修復僅觸及 `screening/funnel.py`，無新 capability、不改 A/B contracts、migration 不變。
+
+## 2026-08-30 — P4-C 兩項Low修復、fresh independent acceptance `Accepted`、三項Low收斂
+
+- 工作樹（HEAD `8c7dd51`，14 modified＋14 untracked）含兩項驗收前已套用的Low修復：
+  1) `pyproject.toml` `[tool.mypy]`新增`exclude = "^skill/"`：gitignored本機skill腳本不再進入type gate，
+     repo gate語意不變。
+  2) spread邊界精度漂移：`market_data/snapshots.py`改以`Fraction`無界有理數計算`spread_bps`floor與
+     `>30bps`旗標（`_spread_exact`），任何context捨入不再能移動邊界決策；migration 0024的
+     `append_market_snapshot`同步將mid/last/spread_bps檢查改為交叉相乘精確恆等式與整數區間檢查
+     （numeric乘法/加法精確，僅除法捨入），Python與PG由代數保證一致。migration checksum up
+     `09113ffaa4956cd2995f237448b8cf174c896337ba8b50b5d2071621ffdeb290`。
+     新增unit迴歸兩例（精確30bps等號、30bps+1e-28超越28位Decimal解析度仍flag）與PG integration兩例
+     （forged spread_bps=999拒絕；真實P4-A lineage路徑下30bps−1e-21的精確floor 29可append且readback一致）。
+     修復僅觸及market snapshot scalar驗證與mypy設定，不新增任何capability、不改A/B contracts或P2/P3 authority。
+- 2026-08-30 fresh independent acceptance（依`P4C_ACCEPTANCE_PROMPT.md`，全程read-only、未stage/commit/push、
+  外部呼叫0）：以含上述兩修復之工作樹判定P4-C `Accepted`（無High/Medium、無conditional pass）。
+  證據：focused P4-C＋clock `150 passed`（收斂後重跑`158 passed`）；完整non-integration
+  `2257 passed, 319 deselected`（收斂後重跑`2265 passed, 319 deselected`）；真實PG16
+  （postgres:16.15-alpine digest-pinned）`317 passed, 2 deselected, 0 skipped`（兩輪同數）；Ruff
+  format/check、mypy（263檔）、`git diff --check` 全綠。獨立oracle PoC（/tmp/p4c_poc，未動repo）`55 passed`：
+  market mutation 12（30bps精確邊界、quote age 5s等號、IEX mandatory limited-coverage、future/亂序/休市
+  零authority、split可見性、caller不可注入derived值）、universe hard-filter矩陣15（asset kind全表、
+  4.99/5.00與20M等號、251/252、halted=None、master-version一致性、10組shuffle逐byte）、funnel/factor
+  oracle 15（20檔cross-section九因子逐byte、winsor/midrank N=1/N=20、TTM YTD/跨財年/重複季/幣別/
+  future filing/負CapEx、0/1/100/101截斷、composite同分但quality/value不同之確定tie、top100外不得替補、
+  同symbol不同identity、重複security拒絕、window ±1µs）、SIC/cluster 13（端點與gap全表、精確rho=3/4
+  等號成邊與ε=26/27 bracket、A-B-C chain、99/100共同觀測fail-closed、zero-variance非singleton、
+  10 permutation）。三個ADR-039 manifest hash由規格獨立重算與golden一致；GICS掃描=0；
+  P4-C capability closure乾淨。
+- 驗收另列三項Low（均不影響authority）並即場收斂：
+  1) WORKLOG本條目原本為驗收完成前預寫、且計數與實際觀察不符——本條目即為更正後的紀錄。
+  2) `classify_sic`／`SectorAssignment`以`str.isdigit()`驗證會接受Unicode十進位數字（如
+     "٦١٧０"仍映射H）：`screening/manifests.py`與`screening/contracts.py`改為ASCII `^[0-9]+$`
+     fullmatch，非ASCII形狀一律`SECTOR_UNKNOWN`或拒絕建構（division語意不變；上游P4-A adapter
+     本為ASCII-strict `^[0-9]{1,4}$`）。新增unit迴歸：classify_sic四種Unicode形狀（Arabic-Indic、
+     fullwidth、superscript）與SectorAssignment三種Unicode CIK/SIC拒絕。
+  3) cluster pair-coverage僅於雙方皆達每security 100筆最低門檻的完整序列間評估；資料不足節點自身
+     UNKNOWN但不毒化完整節點（一個稀疏持倉不得使整個node集UNKNOWN）。解讀已註記於
+     `build_clusters`，並新增永久測試`test_cluster_security_below_minimum_leaves_complete_nodes_assigned`釘住。
+- 收斂後重跑：focused `158 passed`；完整non-integration `2265 passed, 319 deselected`；完整PG16
+  `317 passed, 2 deselected, 0 skipped`；Ruff format/check、mypy、`git diff --check` 全綠。外部呼叫0。
+
 ## 2026-08-29 — P1～P4-B post-integration deep review
 
 - 以多輪Luna Max完成分區source review、adversarial reproducer、fresh acceptance、cross-phase review與真PG
@@ -120,7 +253,7 @@
   exact-host GET endpoint；`sec_edgar.py`全面改寫。
 - `parse_submissions`新增top-level四位數SIC point-in-time observation：僅接受1～4位數字文字、
   zero-pad至四位（不做任何mapping/guess），missing時仍輸出filings、invalid/conflict為typed
-  `SourceSchemaDriftError`；SIC record payload只含`cik_padded`與`sic`，絕不稱作sector/GICS。
+  `SourceSchemaDriftError`；SIC record payload只含`cik_padded`與`sic`，絕不稱作sector或其他未核准taxonomy。
 - `parse_companyfacts`只接受五個exact `(taxonomy,concept)` allowlist（us-gaap NetIncomeLoss／
   NetCashProvidedByUsedInOperatingActivities／Assets／PaymentsToAcquirePropertyPlantAndEquipment、
   dei EntityCommonStockSharesOutstanding），不做suffix/case-fold/extension/first-match；unknown／

@@ -292,7 +292,14 @@ esac
     )
     fake_docker.chmod(0o755)
     fake_uv = fake_bin / "uv"
-    fake_uv.write_text("#!/bin/bash\nexit 0\n", encoding="utf-8")
+    fake_uv.write_text(
+        "#!/bin/bash\n"
+        'if [[ "$*" == *"python -c"* ]]; then\n'
+        "    printf '%s\\n' '55432'\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
     fake_uv.chmod(0o755)
 
     result = _run_bash(
@@ -326,7 +333,7 @@ def test_scripts_exclude_unsafe_sources_and_destructive_commands() -> None:
         "wget",
     ):
         assert forbidden not in combined
-    assert "--publish 127.0.0.1::5432" in combined
+    assert '--publish "127.0.0.1:${host_port}:5432"' in combined
     assert "--mount type=volume,destination=/var/lib/postgresql/data" in combined
     assert 'docker rm --force --volumes "$candidate_id"' in combined
 

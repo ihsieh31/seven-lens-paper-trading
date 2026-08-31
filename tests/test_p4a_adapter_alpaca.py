@@ -59,6 +59,8 @@ def test_parse_assets_builds_authority_records_with_closed_enums() -> None:
     assert first.rights is RightsStatus.ALLOWED
     assert first.content_hash == content_hash_of(_ASSETS_JSON)
     assert first.payload.to_dict()["symbol"] == "AAPL"
+    assert first.observation_at == _RETRIEVED
+    assert first.available_at == _RETRIEVED
     assert first.record_id.startswith("alpaca-asset-")
     assert first.record_id != records[1].record_id
 
@@ -92,11 +94,13 @@ def test_parse_bars_records_requested_feed_and_latest_observation() -> None:
         retrieved_at=_RETRIEVED,
         requested_feed="sip",
         effective_feed="sip",
+        requested_timeframe="1Day",
     )
 
     assert len(records) == 1
     record = records[0]
     assert record.payload.to_dict()["feed"] == "sip"
+    assert record.payload.to_dict()["timeframe"] == "1Day"
     assert str(record.observation_at) == "2026-08-26T13:31:00.000000Z"
 
 
@@ -109,6 +113,15 @@ def test_parse_bars_never_silently_falls_back_across_feeds() -> None:
             retrieved_at=_RETRIEVED,
             requested_feed="sip",
             effective_feed="iex",
+            requested_timeframe="1Day",
+        )
+    with pytest.raises(SourceSchemaDriftError, match="1Day timeframe"):
+        parse_bars(
+            _BARS_JSON,
+            retrieved_at=_RETRIEVED,
+            requested_feed="sip",
+            effective_feed="sip",
+            requested_timeframe="1Min",
         )
 
 

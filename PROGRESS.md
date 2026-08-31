@@ -1,12 +1,13 @@
 # Progress
 
-最後更新：2026-08-29（P1–P3 Closed；P4-A／P4-B Accepted、Closed；P4-C～F未開始；
+最後更新：2026-08-31（P1–P3 Closed；P4-A／P4-B／P4-C Accepted、Closed；P4-D～F未開始；
 generic analysis-provider 已整合，NVIDIA `openai/gpt-oss-120b` 為現行 route）
 
 ## 目前 Gate
 
-**P0／P1／P2／P3全部Closed；P4-A與P4-B均已完成fresh independent acceptance，verdict為Accepted、Gate
-狀態為Closed；P4-C～P8未開始。P4 overall仍為In progress。**
+**P0／P1／P2／P3全部Closed；P4-A、P4-B與P4-C均已完成fresh independent acceptance，verdict為Accepted、Gate
+狀態為Closed；P4-D～P8未開始。
+P4 overall仍為In progress。**
 
 P3 於 2026-08-26 完成最後子閘的獨立重新驗收後一次性關門，並以 commit `b59e466` 發布工作樹、
 `d51e9a9` 修復 CI postgres service tmpfs、`660e062` 完成治理同步；exact-SHA run `32962320231`
@@ -98,7 +99,7 @@ P3 於 2026-08-26 完成最後子閘的獨立重新驗收後一次性關門，�
 | P1 專案骨架與權威狀態 | Closed | Python/uv、typed config、PostgreSQL、Keychain、telemetry、CI |
 | P2 Alpaca Paper 執行安全 | Closed | order/fill/reconciliation/control/NAV/runtime authority；真實下單仍未授權 |
 | **P3 研究／提案／記憶** | **Closed** | upstream contracts、evidence/event、研究管線、Risk Debate／提案、provider isolation、reflection lineage、bounded memory 與 eval 治理；A～F 子閘及 cleanup Batch A～G 均已獨立驗收 |
-| P4 多來源／候選／deterministic Risk | In progress | P4-A／P4-B已獨立驗收，均為Accepted／Closed；P4-C～F未開始；P4 overall仍In progress |
+| P4 多來源／候選／deterministic Risk | In progress | P4-A／P4-B／P4-C Accepted／Closed；P4-D～F未開始 |
 | P5 validation | Not started | point-in-time walk-forward、attribution、economic fills |
 | P6 Shadow | Not started | 至少20交易日，零送單 |
 | P7 Supervised Paper | Not started | 至少20交易日；此階段前不得送單 |
@@ -127,8 +128,8 @@ P3 於 2026-08-26 完成最後子閘的獨立重新驗收後一次性關門，�
 
 - Provider Transport rolling reliability evidence：V12 批次 snapshot 為 GREEN，但 P6 前仍需另行
   授權的 synthetic canary 在 rolling 7 日且 ≥200 logical calls 重驗，跌破即重開。
-- P4-C～F的production universe、deterministic Risk approval、quantity與zero-submit `OrderIntent` boundary
-  尚未實作／驗收；P4-A／P4-B已各自fresh independent acceptance並Closed。
+- P4-C production universe與deterministic candidate funnel已實作並fresh independent acceptance Closed；
+  P4-D～F的deterministic Risk approval、quantity與zero-submit `OrderIntent` boundary尚未實作／驗收。
 - Confirmed forward/reverse split的持倉退出尚未實作：P4只規劃intent，P5 replay、P6 shadow，P7首次Paper
   submit需fresh acceptance與使用者exact授權；short BUY-to-cover目前不在auto authority。
 - P5～P8 回測、Shadow、Supervised Paper 與 Unattended Paper。
@@ -177,8 +178,8 @@ P3 於 2026-08-26 完成最後子閘的獨立重新驗收後一次性關門，�
 - 修復後公開入口與對抗重驗：blocked head維持`entry_blocked`；direct `ELIGIBLE`與未知payload均以SQLSTATE
   `23514`拒絕；owner-safe state為`entry_blocked`，eligible與extra-payload rows均為`0`；source transport／SEC／
   FRED adversarial PoC均按預期通過。
-- 驗收結論：`no actionable findings`。本輪未讀Keychain、未呼叫provider／model／broker；P4仍Paper-only、
-  zero-submit，P4-C～F未開始，完整P4尚未Closed。
+- 驗收結論：`no actionable findings`。該2026-08-28驗收未讀Keychain、未呼叫provider／model／broker；
+  當時P4-C～F未開始。現況以本檔頂部為準，完整P4仍未Closed。
 
 ## 文件與歸檔
 

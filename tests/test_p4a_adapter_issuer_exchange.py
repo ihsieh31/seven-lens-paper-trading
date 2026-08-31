@@ -24,6 +24,14 @@ _EXCHANGE_JSON = b"""{"notices": [
      "exchange": "NYSE", "published_at": "2026-08-27T13:05:00Z"}
   ]}"""
 
+_TYPED_EXCHANGE_JSON = b"""{"notices": [
+    {"id": "nyse-2026-0043", "title": "Security status",
+     "url": "https://www.nyse.com/notice/2026/0043", "exchange": "NYSE",
+     "published_at": "2026-08-27T13:05:00Z", "symbol": "TEST",
+     "instrument_kind": "ordinary_common_stock", "halted": false,
+     "observed_at": "2026-08-27T13:04:59Z"}
+  ]}"""
+
 
 def test_parse_issuer_press_builds_confirmation_records() -> None:
     records = parse_issuer_press(_ISSUER_JSON, retrieved_at=_RETRIEVED, issuer_id="sevenlabs")
@@ -65,6 +73,29 @@ def test_parse_exchange_notice_pins_registered_exchanges() -> None:
 def test_parse_exchange_notice_rejects_unregistered_exchange() -> None:
     with pytest.raises(SourceSchemaDriftError):
         parse_exchange_notice(_EXCHANGE_JSON.replace(b'"NYSE"', b'"MOON"'), retrieved_at=_RETRIEVED)
+
+
+def test_parse_exchange_notice_preserves_typed_instrument_and_halt_authority() -> None:
+    record = parse_exchange_notice(_TYPED_EXCHANGE_JSON, retrieved_at=_RETRIEVED)[0]
+    payload = record.payload.to_dict()
+    assert payload["symbol"] == "TEST"
+    assert payload["instrument_kind"] == "ordinary_common_stock"
+    assert payload["halted"] is False
+    assert str(record.observation_at) == "2026-08-27T13:04:59.000000Z"
+    assert record.available_at == _RETRIEVED
+
+
+def test_parse_exchange_notice_rejects_partial_or_unknown_typed_status() -> None:
+    with pytest.raises(SourceSchemaDriftError, match="present together"):
+        parse_exchange_notice(
+            _TYPED_EXCHANGE_JSON.replace(b'     "instrument_kind": "ordinary_common_stock",', b""),
+            retrieved_at=_RETRIEVED,
+        )
+    with pytest.raises(SourceSchemaDriftError, match="closed enum"):
+        parse_exchange_notice(
+            _TYPED_EXCHANGE_JSON.replace(b'"ordinary_common_stock"', b'"mystery"'),
+            retrieved_at=_RETRIEVED,
+        )
 
 
 def test_notice_url_accepts_explicit_443_and_rejects_other_ports() -> None:

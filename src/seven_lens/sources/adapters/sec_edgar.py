@@ -19,7 +19,6 @@ from seven_lens.domain.value_objects import UtcTimestamp
 from seven_lens.sources.adapters.records import (
     NormalizedSourceRecord,
     SourceSchemaDriftError,
-    build_normalized_record,
     canonical_payload,
     content_hash_of,
     parse_provider_timestamp,
@@ -28,6 +27,9 @@ from seven_lens.sources.adapters.records import (
     require_type,
     schema_version,
     strict_json_loads,
+)
+from seven_lens.sources.adapters.records import (
+    _build_normalized_record as build_normalized_record,
 )
 from seven_lens.sources.roles import P4SourceFamily
 
@@ -40,6 +42,7 @@ _FORM: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,19}$")
 _FORM_FACT: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9/-]{0,19}$")
 _SIC: Final = re.compile(r"^[0-9]{1,4}$")
 _FISCAL_PERIOD: Final = re.compile(r"^(?:Q[1-4]|FY)$")
+_FRAME: Final = re.compile(r"^CY[0-9]{4}(?:Q[1-4]I?|I)?$")
 _MAX_RECENT: Final = 1_000
 _MAX_FACTS_PER_UNIT: Final = 1_000
 _FACT_ID_DOMAIN: Final = b"seven-lens.p4.sec-companyfact-id.v1\x00"
@@ -56,7 +59,8 @@ _CONCEPT_ALLOWLIST: Final[frozenset[tuple[str, str]]] = frozenset(
     }
 )
 _CAPEX_CONCEPT: Final = "PaymentsToAcquirePropertyPlantAndEquipment"
-_CAPEX_SIGN_CONVENTION: Final = "provider_value_preserved_no_abs"
+_CAPEX_SIGN_CONVENTION: Final = "positive_cash_outflow_provider_value"
+_INSTANT_CONCEPTS: Final = frozenset({"Assets", "EntityCommonStockSharesOutstanding"})
 
 
 def parse_submissions(
@@ -354,11 +358,24 @@ def _normalize_fact(
     for optional_text in ("frame", "avg"):
         if optional_text in fact and type(fact[optional_text]) is not str:
             raise SourceSchemaDriftError(f"{optional_text} must be text")
+    frame = fact.get("frame")
+    if frame is not None and (type(frame) is not str or _FRAME.fullmatch(frame) is None):
+        raise SourceSchemaDriftError("fact frame is not a canonical SEC calendar frame")
+    if type(frame) is str:
+        is_instant_frame = frame.endswith("I")
+        if (concept in _INSTANT_CONCEPTS) != is_instant_frame:
+            raise SourceSchemaDriftError(
+                "fact frame instant/duration semantics conflict with the concept"
+            )
 
     value = fact["val"]
     if type(value) is not int:
         raise SourceSchemaDriftError("fact value must be an exact integer (no bool/float/NaN)")
     value_decimal = Decimal(value)
+    if concept == _CAPEX_CONCEPT and value_decimal < 0:
+        raise SourceSchemaDriftError(
+            "CapEx must be a non-negative cash-outflow value; unknown sign fails closed"
+        )
 
     end_text = fact["end"]
     end_ts = require_date(end_text, "end")
@@ -369,6 +386,8 @@ def _normalize_fact(
         start_ts = require_date(start_text, "start")
         if start_ts.value >= end_ts.value:
             raise SourceSchemaDriftError("fact period start must precede its end")
+    if (concept in _INSTANT_CONCEPTS) == (start_text is not None):
+        raise SourceSchemaDriftError("fact period shape conflicts with instant/duration concept")
     filed_text = fact["filed"]
     filed_ts = require_date(filed_text, "filed")
 
@@ -417,6 +436,11 @@ def _normalize_fact(
         "form": form,
         "accession": accession,
         "filed": filed_text,
+        "frame": frame,
+        # The SEC companyfacts API includes only facts that apply to the entire
+        # filing entity.  Preserve that API-level context instead of accepting
+        # a caller-authored consolidation label downstream.
+        "consolidation_scope": "entire_filing_entity",
     }
     if concept == _CAPEX_CONCEPT:
         payload["sign_convention"] = _CAPEX_SIGN_CONVENTION

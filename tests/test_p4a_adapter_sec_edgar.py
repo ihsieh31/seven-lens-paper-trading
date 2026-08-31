@@ -132,9 +132,9 @@ def test_parse_submissions_emits_point_in_time_sic_observation(sic: str) -> None
     assert str(observation.observation_at) == str(_RETRIEVED)
     assert str(observation.available_at) == str(_RETRIEVED)
     assert observation.role is SourceRole.AUTHORITY
-    # P4-A never maps SIC to GICS or sector; only the raw division code is kept.
-    assert "sector" not in payload
-    assert "gics" not in payload
+    # P4-A never maps SIC to a sector; the payload is limited to raw identity
+    # and division inputs for the approved P4-C taxonomy.
+    assert set(payload) == {"cik_padded", "sic"}
 
 
 def test_parse_submissions_zero_pads_short_sic_to_four_digits() -> None:
@@ -190,12 +190,15 @@ def _fact(
     filed: str = "2026-07-31",
     accn: str = _ACCESSION_A,
     unit: str | None = "USD",
+    frame: str | None = None,
 ) -> dict:
     fact = {"end": end, "val": val, "fy": fy, "fp": fp, "form": form, "filed": filed, "accn": accn}
     if start is not None:
         fact["start"] = start
     if unit is not None:
         fact["unit"] = unit
+    if frame is not None:
+        fact["frame"] = frame
     return fact
 
 
@@ -272,6 +275,8 @@ def test_parse_companyfacts_preserves_full_point_in_time_lineage() -> None:
     assert payload["form"] == "10-Q"
     assert payload["accession"] == _ACCESSION_A
     assert payload["filed"] == "2026-07-31"
+    assert payload["frame"] is None
+    assert payload["consolidation_scope"] == "entire_filing_entity"
     assert str(net_income.observation_at) == "2026-06-27T00:00:00.000000Z"
     assert str(net_income.published_at) == "2026-07-31T00:00:00.000000Z"
     assert str(net_income.available_at) == str(_ACCEPTANCE)
@@ -282,26 +287,21 @@ def test_parse_companyfacts_preserves_full_point_in_time_lineage() -> None:
     assets = by_concept["Assets"]
     assert assets.payload.to_dict()["start"] is None
     assert assets.payload.to_dict()["value"] == "350000000000"
+    capex = by_concept["PaymentsToAcquirePropertyPlantAndEquipment"]
+    assert capex.payload.to_dict()["sign_convention"] == "positive_cash_outflow_provider_value"
 
 
-def test_parse_companyfacts_capex_value_is_signed_and_never_abs() -> None:
+def test_parse_companyfacts_rejects_negative_capex_instead_of_guessing_its_sign() -> None:
     facts = _five_concept_facts()
     facts["us-gaap"]["PaymentsToAcquirePropertyPlantAndEquipment"]["units"]["USD"] = [
         _fact(val=-2500000000)
     ]
-    records = parse_companyfacts(
-        _companyfacts(facts),
-        retrieved_at=_RETRIEVED,
-        submission_acceptance=_acceptance(),
-    )
-    capex = next(
-        r
-        for r in records
-        if r.payload.to_dict()["concept"] == "PaymentsToAcquirePropertyPlantAndEquipment"
-    )
-    payload = capex.payload.to_dict()
-    assert payload["value"] == "-2500000000"
-    assert payload["sign_convention"] == "provider_value_preserved_no_abs"
+    with pytest.raises(SourceSchemaDriftError, match="non-negative cash-outflow"):
+        parse_companyfacts(
+            _companyfacts(facts),
+            retrieved_at=_RETRIEVED,
+            submission_acceptance=_acceptance(),
+        )
 
 
 def test_parse_companyfacts_rejects_unknown_extension_and_case_variant_concepts() -> None:
@@ -393,6 +393,46 @@ def test_parse_companyfacts_distinguishes_quarter_and_ytd_periods() -> None:
     starts = sorted(r.payload.to_dict()["start"] for r in records)
     assert starts == ["2025-09-28", "2026-03-29"]
     assert len(records) == 2
+
+
+def test_parse_companyfacts_preserves_only_canonical_sec_frames() -> None:
+    facts = {"us-gaap": {"NetIncomeLoss": {"units": {"USD": [_fact(frame="CY2026Q2")]}}}}
+    record = parse_companyfacts(
+        _companyfacts(facts),
+        retrieved_at=_RETRIEVED,
+        submission_acceptance=_acceptance(),
+    )[0]
+    assert record.payload.to_dict()["frame"] == "CY2026Q2"
+
+    facts["us-gaap"]["NetIncomeLoss"]["units"]["USD"][0]["frame"] = "FY26Q2"
+    with pytest.raises(SourceSchemaDriftError, match="calendar frame"):
+        parse_companyfacts(
+            _companyfacts(facts),
+            retrieved_at=_RETRIEVED,
+            submission_acceptance=_acceptance(),
+        )
+
+
+def test_parse_companyfacts_rejects_instant_duration_frame_conflicts() -> None:
+    duration_with_instant_frame = {
+        "us-gaap": {"NetIncomeLoss": {"units": {"USD": [_fact(frame="CY2026Q2I")]}}}
+    }
+    with pytest.raises(SourceSchemaDriftError, match="instant/duration"):
+        parse_companyfacts(
+            _companyfacts(duration_with_instant_frame),
+            retrieved_at=_RETRIEVED,
+            submission_acceptance=_acceptance(),
+        )
+
+    instant_with_duration_frame = {
+        "us-gaap": {"Assets": {"units": {"USD": [_fact(start=None, frame="CY2026Q2")]}}}
+    }
+    with pytest.raises(SourceSchemaDriftError, match="instant/duration"):
+        parse_companyfacts(
+            _companyfacts(instant_with_duration_frame),
+            retrieved_at=_RETRIEVED,
+            submission_acceptance=_acceptance(),
+        )
 
 
 def test_parse_companyfacts_rejects_accession_not_closed_by_submissions() -> None:

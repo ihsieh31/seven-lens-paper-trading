@@ -54,8 +54,9 @@ from seven_lens.securities.quarantine import (
     QuarantineReason,
 )
 from seven_lens.sources.adapters.records import (
+    _RECORD_READBACK_AUTHORITY,
     NormalizedSourceRecord,
-    build_normalized_record,
+    _reconstruct_normalized_record,
     canonical_payload,
 )
 from seven_lens.sources.roles import P4SourceFamily
@@ -459,11 +460,13 @@ def _source_record_from_wire(wire: dict[str, object], record_hash: str) -> Norma
     warning = wire.get("coverage_warning")
     values["coverage_warning"] = _optional_text(warning, "coverage_warning")
     try:
-        record = build_normalized_record(**values)
+        record = _reconstruct_normalized_record(
+            authority=_RECORD_READBACK_AUTHORITY,
+            record_hash=record_hash,
+            **values,
+        )
     except ValueError as error:
         raise PostgresSecuritiesError("stored source record failed reconstruction") from error
-    if record.record_hash != record_hash:
-        raise PostgresSecuritiesError("stored source record hash does not match its lineage row")
     return record
 
 

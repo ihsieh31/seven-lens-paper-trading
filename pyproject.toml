@@ -52,6 +52,9 @@ line-ending = "lf"
 [tool.mypy]
 python_version = "3.13"
 files = ["src", "tests"]
+# Untracked local tooling directories (e.g. gitignored skill/ scratch scripts)
+# must never enter the type gate, even when mypy is invoked as `mypy .`.
+exclude = "^skill/"
 strict = true
 warn_unused_configs = true
 show_error_codes = true

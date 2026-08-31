@@ -10,7 +10,6 @@ from seven_lens.sources.adapters.records import (
     NormalizedSourceRecord,
     ProviderTimestampError,
     SourceSchemaDriftError,
-    build_normalized_record,
     canonical_payload,
     content_hash_of,
     provider_utc_date,
@@ -18,6 +17,9 @@ from seven_lens.sources.adapters.records import (
     require_type,
     schema_version,
     strict_json_loads,
+)
+from seven_lens.sources.adapters.records import (
+    _build_normalized_record as build_normalized_record,
 )
 from seven_lens.sources.roles import P4SourceFamily
 

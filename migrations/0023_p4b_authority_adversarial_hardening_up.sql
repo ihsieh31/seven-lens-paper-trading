@@ -163,6 +163,9 @@ ALTER TABLE public.p4_source_records
                     family = 'ALPACA_HISTORICAL_BARS'
                     AND jsonb_typeof(wire->'payload'->'symbol') = 'string'
                     AND jsonb_typeof(wire->'payload'->'feed') = 'string'
+                    AND wire->'payload'->>'feed' = 'sip'
+                    AND jsonb_typeof(wire->'payload'->'timeframe') = 'string'
+                    AND wire->'payload'->>'timeframe' = '1Day'
                     AND jsonb_typeof(wire->'payload'->'bars') = 'array'
                     AND jsonb_typeof(wire->'payload'->'next_page_token') IN ('string', 'null')
                 )
@@ -230,6 +233,10 @@ ALTER TABLE public.p4_source_records
                             AND jsonb_typeof(wire->'payload'->'form') = 'string'
                             AND jsonb_typeof(wire->'payload'->'accession') = 'string'
                             AND jsonb_typeof(wire->'payload'->'filed') = 'string'
+                            AND jsonb_typeof(wire->'payload'->'frame') IN ('string', 'null')
+                            AND jsonb_typeof(wire->'payload'->'consolidation_scope') = 'string'
+                            AND wire->'payload'->>'consolidation_scope'
+                                = 'entire_filing_entity'
                             AND (
                                 NOT (wire->'payload' ? 'sign_convention')
                                 OR jsonb_typeof(wire->'payload'->'sign_convention') = 'string'
@@ -248,6 +255,15 @@ ALTER TABLE public.p4_source_records
                     AND jsonb_typeof(wire->'payload'->'exchange') = 'string'
                     AND jsonb_typeof(wire->'payload'->'title') = 'string'
                     AND jsonb_typeof(wire->'payload'->'url') = 'string'
+                    AND (
+                        NOT (wire->'payload' ? 'symbol')
+                        OR (
+                            jsonb_typeof(wire->'payload'->'symbol') = 'string'
+                            AND jsonb_typeof(wire->'payload'->'instrument_kind') = 'string'
+                            AND jsonb_typeof(wire->'payload'->'halted') = 'boolean'
+                            AND jsonb_typeof(wire->'payload'->'observed_at') = 'string'
+                        )
+                    )
                 )
                 OR (
                     family = 'FRED_ALFRED'

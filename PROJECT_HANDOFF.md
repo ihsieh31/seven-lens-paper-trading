@@ -1,13 +1,13 @@
 # Project Handoff
 
-最後更新：2026-08-29（P1–P3 Closed；P4-A／P4-B Accepted、Closed；P4-C～F未開始；
+最後更新：2026-08-31（P1–P3 Closed；P4-A／P4-B／P4-C Accepted、Closed；P4-D～F未開始；
 generic analysis-provider 已整合，NVIDIA `openai/gpt-oss-120b` 為現行 route）
 專案：`/Users/zongen/Downloads/codex/trading`
 
 ## 1. 目前唯一狀態
 
-**P1–P3 full remediation 已完成獨立驗收並 Accepted；P4-A與P4-B均已完成 fresh independent acceptance，
-verdict 為 Accepted、Gate 狀態為 Closed；P4-C～P8未開始。P4 overall 仍為 In progress。**
+**P1–P3 full remediation 已完成獨立驗收並 Accepted；P4-A、P4-B與P4-C均已完成 fresh independent
+acceptance，verdict 為 Accepted、Gate 狀態為 Closed；P4-D～P8未開始。P4 overall 仍為 In progress。**
 本地 `main` 以 `origin/main` 的已發布 P4-A／P4-B checkpoint 為起點，整合 generic analysis-provider、
 NVIDIA V14 fixtures、migration 0022、P1～P4-B深審修復與additive migration 0023、測試及治理文件。
 沒有新增broker/order authority；本輪整合與治理同步已提交並發布至`origin/main`。
@@ -38,10 +38,10 @@ P3-4 與 P3-28 的 future lifecycle/event wiring 仍按設計 deferred，P3-21 �
 Division sector taxonomy、126-session correlation connected-components cluster，以及不除以2且不淨額抵銷的gross
 turnover公式。四項已不再待決，runtime／env／模型不得自行改公式或taxonomy。
 
-## 2. P4-A／P4-B acceptance status
+## 2. P4-A／P4-B／P4-C acceptance status
 
-P4-A與P4-B已於2026-08-28由fresh independent session完成重新驗收；兩者verdict均為`Accepted`，Gate狀態均為
-`Closed`。這只關閉A、B兩個子Gate，不代表完整P4 Closed，也不提前開啟P4-C～F的authority。
+P4-A與P4-B已於2026-08-28、P4-C已於2026-08-31由fresh independent session完成驗收；三者verdict均為
+`Accepted`，Gate狀態均為`Closed`。這只關閉A、B、C三個子Gate，不代表完整P4 Closed，也不提前開啟P4-D～F的authority。
 
 - **P4-A：Accepted／Closed。** focused P4-A＋secret／Paper-only invariants為`372 passed`；source transport與
   adapter adversarial PoC（forged request、malformed response、SEC rate-limit／unknown concept／bad date／CIK
@@ -52,7 +52,10 @@ P4-A與P4-B已於2026-08-28由fresh independent session完成重新驗收；兩�
   runtime ACL與quarantine。
 - 修復後的獨立公開入口重驗：blocked head維持`entry_blocked`；直接嘗試寫入`ELIGIBLE`與未知payload欄位均以
   SQLSTATE `23514`拒絕；owner-safe readback為`entry_blocked`、eligible rows=`0`、extra payload rows=`0`。
-- 本次驗收沒有Keychain讀取、provider／model／broker呼叫；P4仍維持Paper-only、zero-submit。P4-C～F的Risk、
+- **P4-C：Accepted／Closed。** focused P4-C＋clock `190 passed`；完整non-integration `2303 passed,
+  329 deselected`；fresh PostgreSQL 16 integration `327 passed, 2 deselected`。獨立oracle覆蓋SEC SIC 29案例、
+  20-security九因子winsor／midrank／composite逐值重算、完整tie-break與10 permutations；無High／Medium finding。
+- 本次驗收沒有Keychain讀取、provider／model／broker呼叫；P4仍維持Paper-only、zero-submit。P4-D～F的Risk、
   portfolio、quantity與`OrderIntent`尚未實作或驗收。
 
 ## 3. P3 Close 摘要
@@ -83,8 +86,8 @@ reflection/memory/evals 各自經獨立驗收 Accepted 後合併關門；過程�
   account `primary`（已含 NVIDIA key）；舊 `seven-lens.paper-trading.agnes.api-key` 項目保留未刪、
   active composition 不讀取，建議操作者擇期刪除。
 - OPEN-002/003/004/005/006/007/025/027 等未結 issue 的關閉條件不變；詳見 `ISSUES.md`。
-- OPEN-036（多來源／security master）中P4-A／P4-B的implementation與獨立驗收子範圍已Closed；source rights、
-  真實provider entitlement、P4-C～F production composition與P5 time-travel residual仍依issue條件保持Open。
+- OPEN-036（多來源／security master／候選篩選）中P4-A／P4-B／P4-C的implementation與獨立驗收子範圍已Closed；
+  source rights、真實provider entitlement、P4-D～F production composition與P5 time-travel residual仍依issue條件保持Open。
 - OPEN-037的P4-B identity／quarantine子範圍已Accepted／Closed；已持有部位的`CORPORATE_ACTION_EXIT`、P5 replay、
   P6 shadow與P7 submit authority仍未實作／驗收。架構文件不等於order authority。
 - CI 注意事項：postgres-integration service container 的 tmpfs 已固定為 1g（512m 會被整合套件的
@@ -93,9 +96,10 @@ reflection/memory/evals 各自經獨立驗收 Accepted 後合併關門；過程�
 
 ## 5. 下一個單一步驟
 
-**開始 P4-C implementation。** 本輪 NVIDIA route 的完整 regression、P3-E／P3-F current-code live
-evidence 與證據同步已完成。P4-C～F仍須各自完成 implementation／acceptance；F acceptance 同時是 P4
-Combined Final Gate。不得把 provider evidence 或 P4-A／P4-B 的 Accepted 擴張成 broker/order authority。
+**另開 P4-D implementation session。** P4-C已完成read-only independent acceptance並`Accepted／Closed`；
+market／universe／factor／cluster、append-only publication、ACL與restart證據完整。最新focused為`190 passed`，
+完整non-integration `2303 passed, 329 deselected`，PostgreSQL 16 integration `327 passed, 2 deselected`，
+Ruff／format／mypy／`git diff --check`全綠。P4-D～F仍未開始，必須依序獨立實作與驗收。
 
 ## 6. Generic Analysis Provider（NVIDIA active route）
 

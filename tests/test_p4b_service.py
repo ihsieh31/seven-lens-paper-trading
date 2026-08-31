@@ -36,7 +36,7 @@ from seven_lens.securities.service import (
     SourceLineageError,
 )
 from seven_lens.sources.adapters.in_memory_p4_records import InMemoryP4RecordLog
-from seven_lens.sources.adapters.records import build_normalized_record
+from seven_lens.sources.adapters.records import _build_normalized_record as build_normalized_record
 from seven_lens.sources.roles import P4SourceFamily
 
 _T0 = UtcTimestamp.from_isoformat("2026-01-01T00:00:00.000000Z")

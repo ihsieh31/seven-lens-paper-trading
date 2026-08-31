@@ -1,7 +1,7 @@
 # P4 Program Plan
 
 最後更新：2026-08-28
-狀態：**A～F工作包、12份詳細prompts與全部P4設定complete；P4-A／P4-B已完成fresh independent acceptance，均Accepted／Closed；P4-C～F未開始**
+狀態：**A～F工作包與全部P4設定complete；P4-A／P4-B／P4-C已完成fresh independent acceptance，均Accepted／Closed；P4-D～F未開始。A／B／C prompts已於Gate closure後移除，歷史版本保留於Git history。**
 範圍：P4 multi-source／candidate／deterministic Risk，Paper-only、zero-submit
 
 ## Current Gate Closure
@@ -261,9 +261,9 @@ DETECTED -> ENTRY_BLOCKED -> CONFIRMED -> EXIT_PLANNED_NO_SUBMIT
 
 | Gate | 範圍 | Implementation prompt | Independent acceptance prompt |
 |---|---|---|---|
-| P4-A | Immutable P4 config、source roles/Manifest、GET-only transport、全部零付費family adapters | `P4A_IMPLEMENTATION_PROMPT.md` | `P4A_ACCEPTANCE_PROMPT.md` |
-| P4-B | Point-in-time security master、symbol identity lineage、forward/reverse split confirmation與三層quarantine | `P4B_IMPLEMENTATION_PROMPT.md` | `P4B_ACCEPTANCE_PROMPT.md` |
-| P4-C | Market snapshots、monthly universe、hard filters、deterministic 100→30→12/5 candidate funnel | `P4C_IMPLEMENTATION_PROMPT.md` | `P4C_ACCEPTANCE_PROMPT.md` |
+| P4-A | Immutable P4 config、source roles/Manifest、GET-only transport、全部零付費family adapters | Closed；prompt保留於Git history | Closed；prompt保留於Git history |
+| P4-B | Point-in-time security master、symbol identity lineage、forward/reverse split confirmation與三層quarantine | Closed；prompt保留於Git history | Closed；prompt保留於Git history |
+| P4-C | Market snapshots、monthly universe、hard filters、deterministic 100→30→12/5 candidate funnel | Closed；prompt保留於Git history | Closed；prompt保留於Git history |
 | P4-D | Pure deterministic Risk、closed reason codes、一次PM重申與immutable TargetPortfolio | `P4D_IMPLEMENTATION_PROMPT.md` | `P4D_ACCEPTANCE_PROMPT.md` |
 | P4-E | Whole-share quantity、cash/open-order projection、zero-submit IntentPlan與corporate-action exit plan | `P4E_IMPLEMENTATION_PROMPT.md` | `P4E_ACCEPTANCE_PROMPT.md` |
 | P4-F | Capability-minimal composition、jobs、PG roles、operations、end-to-end integration與P4 Combined Final Gate | `P4F_IMPLEMENTATION_PROMPT.md` | `P4F_ACCEPTANCE_PROMPT.md` |

@@ -46,7 +46,12 @@ from seven_lens.securities.quarantine import (
     master_version_for,
 )
 from seven_lens.securities.service import SecurityMasterService
-from seven_lens.sources.adapters.records import NormalizedSourceRecord, build_normalized_record
+from seven_lens.sources.adapters.records import (
+    NormalizedSourceRecord,
+)
+from seven_lens.sources.adapters.records import (
+    _build_normalized_record as build_normalized_record,
+)
 from seven_lens.sources.roles import P4SourceFamily
 
 pytestmark = pytest.mark.integration
@@ -761,7 +766,8 @@ def test_p4b_rollback_and_reapply_removes_and_rebuilds_the_authority(
     with psycopg.connect(migrated_postgres) as connection:
         records = PostgresP4RecordLog(connection)
         records.append(_source("source-1", P4SourceFamily.ALPACA_ASSETS))
-    assert current_version(migrated_postgres) == 23
+    assert current_version(migrated_postgres) == 24
+    assert rollback(migrated_postgres) == 23
     assert rollback(migrated_postgres) == 22
     with psycopg.connect(migrated_postgres) as connection:
         assert connection.execute(
@@ -773,5 +779,5 @@ def test_p4b_rollback_and_reapply_removes_and_rebuilds_the_authority(
             "security_identities",
             "corporate_action_events",
         )
-    assert migrate(migrated_postgres) == 23
-    assert verify_schema(migrated_postgres) == 23
+    assert migrate(migrated_postgres) == 24
+    assert verify_schema(migrated_postgres) == 24

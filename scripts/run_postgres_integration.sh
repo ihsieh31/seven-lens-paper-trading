@@ -31,6 +31,12 @@ container_name="seven-lens-p1c3-postgres-$$-${RANDOM}"
 owner_token="${container_name}-owner"
 owner_label="seven-lens.p1c3.owner"
 container_id=""
+host_port="$(uv run --locked python -c \
+    'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
+if [[ ! "$host_port" =~ ^[0-9]+$ ]] || (( 10#$host_port < 1 || 10#$host_port > 65535 )); then
+    echo "ERROR: could not reserve a valid localhost PostgreSQL port." >&2
+    exit 1
+fi
 
 cleanup() {
     local original_status=$?
@@ -80,7 +86,7 @@ container_id="$(docker run --detach \
     --env "POSTGRES_USER=$postgres_user" \
     --env "POSTGRES_PASSWORD=$postgres_password" \
     --env "POSTGRES_DB=$postgres_database" \
-    --publish 127.0.0.1::5432 \
+    --publish "127.0.0.1:${host_port}:5432" \
     --mount type=volume,destination=/var/lib/postgresql/data \
     "$postgres_image")"
 
@@ -94,9 +100,13 @@ if [[ ! "$port_binding" =~ ^127\.0\.0\.1:([0-9]{1,5})$ ]]; then
     echo "ERROR: Docker returned an invalid localhost PostgreSQL port." >&2
     exit 1
 fi
-host_port="${BASH_REMATCH[1]}"
-if (( 10#$host_port < 1 || 10#$host_port > 65535 )); then
+observed_host_port="${BASH_REMATCH[1]}"
+if (( 10#$observed_host_port < 1 || 10#$observed_host_port > 65535 )); then
     echo "ERROR: Docker returned an invalid localhost PostgreSQL port." >&2
+    exit 1
+fi
+if [[ "$observed_host_port" != "$host_port" ]]; then
+    echo "ERROR: Docker did not retain the reserved localhost PostgreSQL port." >&2
     exit 1
 fi
 
@@ -127,4 +137,7 @@ fi
 
 TEST_DATABASE_URL="postgresql://${postgres_user}:${postgres_password}@127.0.0.1:${host_port}/${postgres_database}" \
 REQUIRE_POSTGRES_INTEGRATION=1 \
+SEVEN_LENS_TEST_POSTGRES_CONTAINER_ID="$container_id" \
+SEVEN_LENS_TEST_POSTGRES_CONTAINER_NAME="$container_name" \
+SEVEN_LENS_TEST_POSTGRES_OWNER_TOKEN="$owner_token" \
     uv run --locked pytest tests/integration -m "integration and not live" -ra --tb=short

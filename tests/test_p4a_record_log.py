@@ -9,7 +9,12 @@ from seven_lens.application.ports.p4_source_records import AppendOutcome, Record
 from seven_lens.domain.value_objects import SchemaVersion, UtcTimestamp
 from seven_lens.sources.adapters.alpaca import parse_assets
 from seven_lens.sources.adapters.in_memory_p4_records import InMemoryP4RecordLog
-from seven_lens.sources.adapters.records import build_normalized_record, content_hash_of
+from seven_lens.sources.adapters.records import (
+    _build_normalized_record as build_normalized_record,
+)
+from seven_lens.sources.adapters.records import (
+    content_hash_of,
+)
 from seven_lens.sources.roles import P4SourceFamily
 
 _RETRIEVED = UtcTimestamp.from_isoformat("2026-08-27T15:30:00.000000Z")

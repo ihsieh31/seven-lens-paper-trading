@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from datetime import UTC, datetime
 from functools import lru_cache
 from hashlib import sha256
@@ -30,6 +30,8 @@ _DATE_TEXT: Final = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 _MAX_PAYLOAD_BYTES: Final = 4_000_000
 _MAX_JSON_DEPTH: Final = 16
 _MAX_JSON_NODES: Final = 20_000
+_ADAPTER_RECORD_AUTHORITY: Final = object()
+_RECORD_READBACK_AUTHORITY: Final = object()
 
 _CANONICAL_STAMP = "%Y-%m-%dT%H:%M:%S.%fZ"
 
@@ -145,8 +147,16 @@ class NormalizedSourceRecord:
     vintage: tuple[str, str] | None = None
     supersedes_content_hash: str | None = None
     coverage_warning: str | None = None
+    _authority: object | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        if (
+            self._authority is not _ADAPTER_RECORD_AUTHORITY
+            and self._authority is not _RECORD_READBACK_AUTHORITY
+        ):
+            raise ValueError(
+                "normalized records must be produced by an adapter or trusted readback"
+            )
         if type(self.record_id) is not str or _RECORD_ID.fullmatch(self.record_id) is None:
             raise ValueError("record_id is not a canonical record identifier")
         if type(self.endpoint_id) is not str or _ENDPOINT_ID.fullmatch(self.endpoint_id) is None:
@@ -264,8 +274,9 @@ class NormalizedSourceRecord:
         return True
 
 
-def build_normalized_record(**values: object) -> NormalizedSourceRecord:
+def _build_normalized_record(**values: object) -> NormalizedSourceRecord:
     """Build a record while deriving, never trusting, its content-bound hash."""
+    values = {**values, "_authority": _ADAPTER_RECORD_AUTHORITY}
     if isinstance(values.get("payload"), dict):
         values = {**values, "payload": canonical_payload(values["payload"])}
     provisional = object.__new__(NormalizedSourceRecord)
@@ -276,6 +287,25 @@ def build_normalized_record(**values: object) -> NormalizedSourceRecord:
             object.__setattr__(provisional, field_item.name, field_item.default)
     object.__setattr__(provisional, "record_hash", provisional.compute_hash())
     return NormalizedSourceRecord(**values, record_hash=provisional.compute_hash())  # type: ignore[arg-type]
+
+
+def _reconstruct_normalized_record(
+    *, authority: object, record_hash: str, **values: object
+) -> NormalizedSourceRecord:
+    """Rebuild a stored record behind the persistence readback capability."""
+    if authority is not _RECORD_READBACK_AUTHORITY:
+        raise ValueError("normalized record reconstruction requires trusted readback authority")
+    record = _build_normalized_record(**values)
+    object.__setattr__(record, "_authority", _RECORD_READBACK_AUTHORITY)
+    if record.record_hash != record_hash:
+        raise ValueError("stored normalized record hash does not match its canonical content")
+    return record
+
+
+def build_normalized_record(**values: object) -> NormalizedSourceRecord:
+    """Reject caller-authored source authority; adapters own record construction."""
+    del values
+    raise ValueError("normalized record construction is an adapter-only API")
 
 
 def content_hash_of(payload: bytes) -> str:

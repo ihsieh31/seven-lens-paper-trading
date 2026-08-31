@@ -10,7 +10,6 @@ from seven_lens.sources.adapters.records import (
     NormalizedSourceRecord,
     ProviderTimestampError,
     SourceSchemaDriftError,
-    build_normalized_record,
     canonical_payload,
     content_hash_of,
     parse_provider_timestamp,
@@ -20,6 +19,9 @@ from seven_lens.sources.adapters.records import (
     schema_version,
     strict_json_loads,
 )
+from seven_lens.sources.adapters.records import (
+    _build_normalized_record as build_normalized_record,
+)
 from seven_lens.sources.roles import P4SourceFamily
 
 _CANONICAL_HTTPS_URL: Final = re.compile(
@@ -27,9 +29,24 @@ _CANONICAL_HTTPS_URL: Final = re.compile(
 )
 _ISSUER_ID: Final = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 _NOTICE_ID: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
+_SYMBOL: Final = re.compile(r"^[A-Z][A-Z0-9.-]{0,9}$")
 _FULL_STAMP: Final = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$")
 _REGISTERED_EXCHANGES: Final = frozenset({"NYSE", "NASDAQ"})
 _MAX_NOTICES: Final = 500
+_INSTRUMENT_KINDS: Final = frozenset(
+    {
+        "ordinary_common_stock",
+        "etf",
+        "preferred",
+        "warrant",
+        "unit",
+        "closed_end_fund",
+        "etn",
+        "leveraged_inverse_etf",
+        "otc",
+        "other",
+    }
+)
 
 
 def _require_https(url: object) -> str:
@@ -104,7 +121,17 @@ def parse_exchange_notice(
         require_keys(
             notice,
             required={"id", "title", "url", "exchange", "published_at"},
-            allowed={"id", "title", "url", "exchange", "published_at"},
+            allowed={
+                "id",
+                "title",
+                "url",
+                "exchange",
+                "published_at",
+                "symbol",
+                "instrument_kind",
+                "halted",
+                "observed_at",
+            },
         )
         notice_id = notice["id"]
         if type(notice_id) is not str or _NOTICE_ID.fullmatch(notice_id) is None:
@@ -117,6 +144,39 @@ def parse_exchange_notice(
             raise SourceSchemaDriftError("notice title must be bounded text")
         url = _require_https(notice["url"])
         published_at = require_date_checked(notice["published_at"])
+        typed_keys = {"symbol", "instrument_kind", "halted", "observed_at"}
+        present_typed_keys = typed_keys & set(notice)
+        if present_typed_keys and present_typed_keys != typed_keys:
+            raise SourceSchemaDriftError("typed exchange status fields must be present together")
+        typed_payload: dict[str, object] = {}
+        observation_at: UtcTimestamp | None = None
+        if present_typed_keys:
+            symbol = notice["symbol"]
+            instrument_kind = notice["instrument_kind"]
+            halted = notice["halted"]
+            observed_text = notice["observed_at"]
+            if type(symbol) is not str or _SYMBOL.fullmatch(symbol) is None:
+                raise SourceSchemaDriftError("exchange status symbol is not canonical")
+            if instrument_kind not in _INSTRUMENT_KINDS:
+                raise SourceSchemaDriftError("exchange instrument kind is not in the closed enum")
+            if type(halted) is not bool:
+                raise SourceSchemaDriftError("exchange halted status must be boolean")
+            if type(observed_text) is not str:
+                raise SourceSchemaDriftError("exchange observed_at must be timestamp text")
+            try:
+                observation_at = parse_provider_timestamp(observed_text)
+            except ProviderTimestampError as error:
+                raise SourceSchemaDriftError(
+                    "exchange observed_at is not a canonical timestamp"
+                ) from error
+            if observation_at.value > retrieved_at.value:
+                raise SourceSchemaDriftError("exchange status observation is after retrieval")
+            typed_payload = {
+                "symbol": symbol,
+                "instrument_kind": instrument_kind,
+                "halted": halted,
+                "observed_at": str(observation_at),
+            }
         records.append(
             build_normalized_record(
                 record_id=f"exchange-notice-{exchange}-{notice_id}",
@@ -126,7 +186,11 @@ def parse_exchange_notice(
                 content_hash=content_hash,
                 retrieved_at=retrieved_at,
                 published_at=published_at,
-                payload=canonical_payload({"exchange": exchange, "title": title, "url": url}),
+                observation_at=observation_at,
+                available_at=retrieved_at,
+                payload=canonical_payload(
+                    {"exchange": exchange, "title": title, "url": url, **typed_payload}
+                ),
                 material_claim=False,
             )
         )

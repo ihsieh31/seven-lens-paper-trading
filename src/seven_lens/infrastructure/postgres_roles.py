@@ -66,6 +66,14 @@ _AUTHORITATIVE_TABLE_NAMES: Final[frozenset[str]] = frozenset(
         "security_quarantine_decisions",
         "source_objects",
         "source_records",
+        "market_snapshots",
+        "universe_snapshots",
+        "universe_snapshot_entries",
+        "feature_vectors",
+        "sector_assignments",
+        "candidate_sets",
+        "candidate_set_entries",
+        "cluster_results",
     }
 )
 
@@ -138,6 +146,22 @@ _AUTHORITATIVE_TRIGGER_TABLES: Final[frozenset[tuple[str, str]]] = frozenset(
             "security_quarantine_decision_sources_guard_truncate",
             "security_quarantine_decision_sources",
         ),
+        ("market_snapshots_guard_write", "market_snapshots"),
+        ("market_snapshots_guard_truncate", "market_snapshots"),
+        ("universe_snapshots_guard_write", "universe_snapshots"),
+        ("universe_snapshots_guard_truncate", "universe_snapshots"),
+        ("universe_snapshot_entries_guard_write", "universe_snapshot_entries"),
+        ("universe_snapshot_entries_guard_truncate", "universe_snapshot_entries"),
+        ("feature_vectors_guard_write", "feature_vectors"),
+        ("feature_vectors_guard_truncate", "feature_vectors"),
+        ("sector_assignments_guard_write", "sector_assignments"),
+        ("sector_assignments_guard_truncate", "sector_assignments"),
+        ("candidate_sets_guard_write", "candidate_sets"),
+        ("candidate_sets_guard_truncate", "candidate_sets"),
+        ("candidate_set_entries_guard_write", "candidate_set_entries"),
+        ("candidate_set_entries_guard_truncate", "candidate_set_entries"),
+        ("cluster_results_guard_write", "cluster_results"),
+        ("cluster_results_guard_truncate", "cluster_results"),
     }
 )
 
@@ -156,6 +180,12 @@ _AUTHORITATIVE_FUNCTIONS: Final[frozenset[tuple[str, str]]] = frozenset(
         ("append_corporate_action_event", "text,text,jsonb"),
         ("append_p4_source_record", "text,text,text,jsonb"),
         ("append_security_identity", "text,jsonb"),
+        ("append_market_snapshot", "text,jsonb"),
+        ("append_universe_snapshot", "text,jsonb"),
+        ("append_feature_vector", "text,jsonb"),
+        ("append_sector_assignment", "text,jsonb"),
+        ("append_candidate_set", "text,jsonb"),
+        ("append_cluster_result", "text,jsonb"),
         ("guard_confirmed_corporate_action_event", ""),
         ("armor", "bytea"),
         ("armor", "bytea,text[],text[]"),
@@ -398,6 +428,62 @@ _P4B_FUNCTION_SIGNATURES: Final[frozenset[str]] = frozenset(
     }
 )
 
+# P4-C screening authorities: the only write path for the append-only
+# market/universe/feature/sector/candidate/cluster tables.  The three derived
+# authorities (feature/candidate/cluster) are intentionally *not* part of the
+# general runtime capability.  They are granted only to the separately
+# provisioned NOLOGIN worker group below.  Keeping the implementation functions
+# SECURITY DEFINER avoids reimplementing the nine factors/Pearson in SQL while
+# the ACL split closes the runtime direct-SQL derived-wire bypass.
+_P4C_RUNTIME_FUNCTION_SIGNATURES: Final[frozenset[str]] = frozenset(
+    {
+        "public.append_market_snapshot(text,jsonb)",
+        "public.append_universe_snapshot(text,jsonb)",
+        "public.append_sector_assignment(text,jsonb)",
+    }
+)
+_P4C_DERIVED_FUNCTION_SIGNATURES: Final[frozenset[str]] = frozenset(
+    {
+        "public.append_feature_vector(text,jsonb)",
+        "public.append_candidate_set(text,jsonb)",
+        "public.append_cluster_result(text,jsonb)",
+    }
+)
+_P4C_WORKER_FUNCTION_SIGNATURES: Final[frozenset[str]] = frozenset(
+    {
+        "public.append_market_snapshot(text,jsonb)",
+        "public.append_universe_snapshot(text,jsonb)",
+        "public.append_feature_vector(text,jsonb)",
+        "public.append_sector_assignment(text,jsonb)",
+        "public.append_candidate_set(text,jsonb)",
+        "public.append_cluster_result(text,jsonb)",
+    }
+)
+# Used for function-owner/security checks, which must cover every P4-C
+# SECURITY DEFINER authority regardless of which caller role may execute it.
+_P4C_FUNCTION_SIGNATURES: Final[frozenset[str]] = frozenset(_P4C_WORKER_FUNCTION_SIGNATURES)
+_P4C_WORKER_SELECT_TABLES: Final[tuple[str, ...]] = (
+    # The job reads point-in-time upstream authority and all of its own
+    # append-only outputs; it receives no direct DML privilege on any table.
+    "p4_source_records",
+    "security_identities",
+    "security_identity_sources",
+    "security_identity_heads",
+    "corporate_action_events",
+    "corporate_action_event_sources",
+    "corporate_action_event_head",
+    "security_quarantine_decisions",
+    "security_quarantine_decision_sources",
+    "market_snapshots",
+    "universe_snapshots",
+    "universe_snapshot_entries",
+    "feature_vectors",
+    "sector_assignments",
+    "candidate_sets",
+    "candidate_set_entries",
+    "cluster_results",
+)
+
 _CURATOR_EXECUTE_SIGNATURES: Final[frozenset[str]] = frozenset(
     {
         "public.register_memory_candidate(text,text,timestamp with time zone,"
@@ -427,6 +513,7 @@ _RUNTIME_EXECUTE_SIGNATURES: Final[frozenset[str]] = frozenset(
         "public.bump_flatten_generation()",
         *(signature for signature, expected in _P3_FUNCTION_SIGNATURES if expected),
         *_P4B_FUNCTION_SIGNATURES,
+        *_P4C_RUNTIME_FUNCTION_SIGNATURES,
     }
 )
 
@@ -446,6 +533,15 @@ class RuntimeRoleEvidence:
 class MemoryCuratorRoleEvidence:
     owner_role: str
     curator_role: str
+    database_name: str
+
+
+@dataclass(frozen=True, slots=True)
+class P4CWorkerRoleEvidence:
+    """Evidence for the NOLOGIN group role used by the P4-C screening job."""
+
+    owner_role: str
+    worker_role: str
     database_name: str
 
 
@@ -469,6 +565,7 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
         _assert_p3_function_security(cursor)
         _assert_control_function_security(cursor)
         _assert_p4b_function_security(cursor)
+        _assert_p4c_function_security(cursor)
 
         role = sql.Identifier(runtime_role)
         database = sql.Identifier(database_name)
@@ -517,7 +614,12 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
                 "public.corporate_action_event_sources, "
                 "public.corporate_action_event_head, "
                 "public.security_quarantine_decisions, "
-                "public.security_quarantine_decision_sources TO {}"
+                "public.security_quarantine_decision_sources, "
+                "public.market_snapshots, public.universe_snapshots, "
+                "public.universe_snapshot_entries, public.feature_vectors, "
+                "public.sector_assignments, "
+                "public.candidate_sets, public.candidate_set_entries, "
+                "public.cluster_results TO {}"
             ).format(role)
         )
         cursor.execute(
@@ -570,6 +672,9 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
             "public.append_security_identity(TEXT, JSONB)",
             "public.append_corporate_action_event(TEXT, TEXT, JSONB)",
             "public.record_quarantine_decision(TEXT, JSONB)",
+            "public.append_market_snapshot(TEXT, JSONB)",
+            "public.append_universe_snapshot(TEXT, JSONB)",
+            "public.append_sector_assignment(TEXT, JSONB)",
         ):
             cursor.execute(
                 sql.SQL("GRANT EXECUTE ON FUNCTION {} TO {}").format(
@@ -580,6 +685,7 @@ def provision_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvid
         _assert_runtime_privileges(cursor, runtime_role, database_name)
         _assert_p3_runtime_privileges(cursor, runtime_role)
         _assert_p4b_runtime_privileges(cursor, runtime_role)
+        _assert_p4c_runtime_privileges(cursor, runtime_role)
         _assert_runtime_function_privileges(cursor, runtime_role)
         _assert_no_public_privileges(cursor)
         _assert_public_schema_inventory(cursor)
@@ -603,13 +709,87 @@ def verify_runtime_role(owner_dsn: str, runtime_role: str) -> RuntimeRoleEvidenc
         _assert_runtime_privileges(cursor, runtime_role, database_name)
         _assert_p3_runtime_privileges(cursor, runtime_role)
         _assert_p4b_runtime_privileges(cursor, runtime_role)
+        _assert_p4c_runtime_privileges(cursor, runtime_role)
         _assert_runtime_function_privileges(cursor, runtime_role)
         _assert_p3_function_security(cursor)
         _assert_control_function_security(cursor)
         _assert_p4b_function_security(cursor)
+        _assert_p4c_function_security(cursor)
         _assert_no_public_privileges(cursor)
         _assert_public_schema_inventory(cursor)
     return RuntimeRoleEvidence(owner_role, runtime_role, database_name)
+
+
+def provision_p4c_worker_role(owner_dsn: str, worker_role: str) -> P4CWorkerRoleEvidence:
+    """Provision the NOLOGIN group role for the trusted P4-C screening job.
+
+    The role is deliberately separate from the general runtime login.  It is a
+    group role with no credential; an operator may grant it to a separately
+    managed worker login.  No password, token, or other secret is created here.
+    """
+
+    _validate_dsn(owner_dsn)
+    _validate_role_name(worker_role)
+    with psycopg.connect(owner_dsn, autocommit=False) as connection, connection.cursor() as cursor:
+        owner_role, database_name = _current_identity(cursor)
+        if owner_role == worker_role:
+            raise PostgresRoleError("P4-C worker role must differ from the migration owner role")
+        _ensure_p4c_worker_role(cursor, worker_role)
+        _assert_p4c_worker_role_flags(cursor, worker_role)
+        _assert_not_owner_member(cursor, worker_role, owner_role, role_label="P4-C worker role")
+        _assert_role_has_no_parent_memberships(cursor, worker_role, "P4-C worker role")
+        _assert_role_is_not_object_owner(cursor, worker_role, "P4-C worker role")
+        _assert_authoritative_object_owner(cursor, owner_role)
+        _assert_p4c_function_security(cursor)
+
+        role = sql.Identifier(worker_role)
+        database = sql.Identifier(database_name)
+        cursor.execute(sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(database, role))
+        cursor.execute(sql.SQL("REVOKE TEMPORARY ON DATABASE {} FROM {}").format(database, role))
+        cursor.execute(sql.SQL("REVOKE ALL ON ALL TABLES IN SCHEMA public FROM {}").format(role))
+        cursor.execute(sql.SQL("REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM {}").format(role))
+        cursor.execute(sql.SQL("REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM {}").format(role))
+        cursor.execute(sql.SQL("REVOKE CREATE ON SCHEMA public FROM {}").format(role))
+        cursor.execute(sql.SQL("GRANT USAGE ON SCHEMA public TO {}").format(role))
+        cursor.execute(
+            sql.SQL("GRANT SELECT ON TABLE {} TO {}").format(
+                sql.SQL(", ".join(f"public.{name}" for name in _P4C_WORKER_SELECT_TABLES)),
+                role,
+            )
+        )
+        for signature in _P4C_WORKER_FUNCTION_SIGNATURES:
+            cursor.execute(
+                sql.SQL("GRANT EXECUTE ON FUNCTION {} TO {}").format(
+                    sql.SQL(signature),
+                    role,
+                )
+            )
+        _assert_p4c_worker_privileges(cursor, worker_role, database_name)
+        _assert_no_public_privileges(cursor)
+        _assert_public_schema_inventory(cursor)
+        connection.commit()
+    return P4CWorkerRoleEvidence(owner_role, worker_role, database_name)
+
+
+def verify_p4c_worker_role(owner_dsn: str, worker_role: str) -> P4CWorkerRoleEvidence:
+    """Fail closed unless the P4-C worker group retains its exact ACL boundary."""
+
+    _validate_dsn(owner_dsn)
+    _validate_role_name(worker_role)
+    with psycopg.connect(owner_dsn, autocommit=True) as connection, connection.cursor() as cursor:
+        owner_role, database_name = _current_identity(cursor)
+        if owner_role == worker_role:
+            raise PostgresRoleError("P4-C worker role must differ from the migration owner role")
+        _assert_p4c_worker_role_flags(cursor, worker_role)
+        _assert_not_owner_member(cursor, worker_role, owner_role, role_label="P4-C worker role")
+        _assert_role_has_no_parent_memberships(cursor, worker_role, "P4-C worker role")
+        _assert_role_is_not_object_owner(cursor, worker_role, "P4-C worker role")
+        _assert_authoritative_object_owner(cursor, owner_role)
+        _assert_p4c_worker_privileges(cursor, worker_role, database_name)
+        _assert_p4c_function_security(cursor)
+        _assert_no_public_privileges(cursor)
+        _assert_public_schema_inventory(cursor)
+    return P4CWorkerRoleEvidence(owner_role, worker_role, database_name)
 
 
 def provision_memory_curator_role(owner_dsn: str, curator_role: str) -> MemoryCuratorRoleEvidence:
@@ -628,6 +808,7 @@ def provision_memory_curator_role(owner_dsn: str, curator_role: str) -> MemoryCu
         _assert_p3_function_security(cursor)
         _assert_control_function_security(cursor)
         _assert_p4b_function_security(cursor)
+        _assert_p4c_function_security(cursor)
 
         role = sql.Identifier(curator_role)
         database = sql.Identifier(database_name)
@@ -673,6 +854,7 @@ def verify_memory_curator_role(owner_dsn: str, curator_role: str) -> MemoryCurat
         _assert_p3_function_security(cursor)
         _assert_control_function_security(cursor)
         _assert_p4b_function_security(cursor)
+        _assert_p4c_function_security(cursor)
         _assert_no_public_privileges(cursor)
         _assert_public_schema_inventory(cursor)
     return MemoryCuratorRoleEvidence(owner_role, curator_role, database_name)
@@ -698,6 +880,21 @@ def _current_identity(cursor: psycopg.Cursor[object]) -> tuple[str, str]:
     return row[0], row[1]
 
 
+def _ensure_p4c_worker_role(cursor: psycopg.Cursor[object], worker_role: str) -> None:
+    """Create the credential-free P4-C group role when first provisioning it."""
+
+    cursor.execute(
+        "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = %s",
+        (worker_role,),
+    )
+    if cursor.fetchone() is None:
+        cursor.execute(
+            sql.SQL(
+                "CREATE ROLE {} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
+            ).format(sql.Identifier(worker_role))
+        )
+
+
 def _assert_runtime_role_flags(cursor: psycopg.Cursor[object], runtime_role: str) -> None:
     cursor.execute(
         "SELECT rolsuper, rolcreatedb, rolcreaterole, rolcanlogin "
@@ -707,6 +904,19 @@ def _assert_runtime_role_flags(cursor: psycopg.Cursor[object], runtime_role: str
     row = cast(tuple[object, ...] | None, cursor.fetchone())
     if row is None or row != (False, False, False, True):
         raise PostgresRoleError("runtime role must be LOGIN and have no elevated role flags")
+
+
+def _assert_p4c_worker_role_flags(cursor: psycopg.Cursor[object], worker_role: str) -> None:
+    cursor.execute(
+        "SELECT rolsuper, rolcreatedb, rolcreaterole, rolcanlogin, rolbypassrls, rolinherit "
+        "FROM pg_catalog.pg_roles WHERE rolname = %s",
+        (worker_role,),
+    )
+    row = cast(tuple[object, ...] | None, cursor.fetchone())
+    if row is None or row != (False, False, False, False, False, False):
+        raise PostgresRoleError(
+            "P4-C worker role must be NOLOGIN, NOINHERIT and have no elevated role flags"
+        )
 
 
 def _assert_curator_role_flags(cursor: psycopg.Cursor[object], curator_role: str) -> None:
@@ -721,6 +931,12 @@ def _assert_curator_role_flags(cursor: psycopg.Cursor[object], curator_role: str
 
 
 def _assert_no_role_memberships(cursor: psycopg.Cursor[object], role_name: str) -> None:
+    _assert_role_has_no_parent_memberships(cursor, role_name, "memory curator")
+
+
+def _assert_role_has_no_parent_memberships(
+    cursor: psycopg.Cursor[object], role_name: str, role_label: str
+) -> None:
     cursor.execute(
         """
         SELECT pg_catalog.count(*)
@@ -731,13 +947,15 @@ def _assert_no_role_memberships(cursor: psycopg.Cursor[object], role_name: str) 
         (role_name,),
     )
     if cursor.fetchone() != (0,):
-        raise PostgresRoleError("memory curator must not inherit any other role")
+        raise PostgresRoleError(f"{role_label} must not inherit any other role")
 
 
 def _assert_not_owner_member(
     cursor: psycopg.Cursor[object],
     runtime_role: str,
     owner_role: str,
+    *,
+    role_label: str = "runtime role",
 ) -> None:
     cursor.execute(
         "SELECT pg_catalog.pg_has_role(%s, %s, 'MEMBER')",
@@ -745,7 +963,7 @@ def _assert_not_owner_member(
     )
     row = cast(tuple[object, ...] | None, cursor.fetchone())
     if row is None or row[0] is not False:
-        raise PostgresRoleError("runtime role must not inherit migration-owner authority")
+        raise PostgresRoleError(f"{role_label} must not inherit migration-owner authority")
 
 
 def _assert_authoritative_object_owner(cursor: psycopg.Cursor[object], owner_role: str) -> None:
@@ -781,7 +999,10 @@ def _assert_authoritative_object_owner(cursor: psycopg.Cursor[object], owner_rol
                   'corporate_action_events', 'corporate_action_event_sources',
                   'corporate_action_event_head',
                   'security_quarantine_decisions',
-                  'security_quarantine_decision_sources'
+                  'security_quarantine_decision_sources',
+                  'market_snapshots', 'universe_snapshots',
+                  'universe_snapshot_entries', 'feature_vectors', 'sector_assignments',
+                  'candidate_sets', 'candidate_set_entries', 'cluster_results'
               )
             UNION ALL
             SELECT pg_catalog.pg_get_userbyid(p.proowner) AS owner_name
@@ -816,7 +1037,11 @@ def _assert_authoritative_object_owner(cursor: psycopg.Cursor[object], owner_rol
                   'p3f_fact_text_is_closed',
                   'append_p4_source_record', 'append_security_identity',
                   'append_corporate_action_event', 'record_quarantine_decision',
-                  'guard_confirmed_corporate_action_event'
+                  'guard_confirmed_corporate_action_event',
+                  'append_market_snapshot', 'append_universe_snapshot',
+                  'append_feature_vector', 'append_sector_assignment',
+                  'append_candidate_set',
+                  'append_cluster_result'
               )
         ) AS owners
         """
@@ -826,7 +1051,9 @@ def _assert_authoritative_object_owner(cursor: psycopg.Cursor[object], owner_rol
         raise PostgresRoleError("migration connection does not own every authoritative object")
 
 
-def _assert_runtime_is_not_object_owner(cursor: psycopg.Cursor[object], runtime_role: str) -> None:
+def _assert_role_is_not_object_owner(
+    cursor: psycopg.Cursor[object], role_name: str, role_label: str
+) -> None:
     cursor.execute(
         """
         SELECT EXISTS (
@@ -841,11 +1068,15 @@ def _assert_runtime_is_not_object_owner(cursor: psycopg.Cursor[object], runtime_
             WHERE n.nspname = 'public' AND pg_catalog.pg_get_userbyid(p.proowner) = %s
         )
         """,
-        (runtime_role, runtime_role),
+        (role_name, role_name),
     )
     row = cast(tuple[object, ...] | None, cursor.fetchone())
     if row is None or row[0] is not False:
-        raise PostgresRoleError("runtime role must not own objects in the authoritative schema")
+        raise PostgresRoleError(f"{role_label} must not own objects in the authoritative schema")
+
+
+def _assert_runtime_is_not_object_owner(cursor: psycopg.Cursor[object], runtime_role: str) -> None:
+    _assert_role_is_not_object_owner(cursor, runtime_role, "runtime role")
 
 
 def _assert_runtime_privileges(
@@ -1110,6 +1341,136 @@ def _assert_p4b_function_security(cursor: psycopg.Cursor[object]) -> None:
         if cursor.fetchone() != (True, ["search_path=pg_catalog, public, pg_temp"]):
             raise PostgresRoleError(
                 "P4-B security-master function security configuration does not match "
+                "the approved set"
+            )
+
+
+def _assert_p4c_runtime_privileges(cursor: psycopg.Cursor[object], runtime_role: str) -> None:
+    """Runtime has read-only P4-C tables and only non-derived append authorities."""
+
+    tables = (
+        "market_snapshots",
+        "universe_snapshots",
+        "universe_snapshot_entries",
+        "feature_vectors",
+        "sector_assignments",
+        "candidate_sets",
+        "candidate_set_entries",
+        "cluster_results",
+    )
+    for table in tables:
+        cursor.execute(
+            "SELECT "
+            "has_table_privilege(%s, %s, 'SELECT'), "
+            "has_table_privilege(%s, %s, 'INSERT'), "
+            "has_table_privilege(%s, %s, 'UPDATE'), "
+            "has_table_privilege(%s, %s, 'DELETE'), "
+            "has_table_privilege(%s, %s, 'TRUNCATE'), "
+            "has_table_privilege(%s, %s, 'REFERENCES'), "
+            "has_table_privilege(%s, %s, 'TRIGGER')",
+            tuple(value for _ in range(7) for value in (runtime_role, f"public.{table}")),
+        )
+        if cursor.fetchone() != (True, False, False, False, False, False, False):
+            raise PostgresRoleError(
+                "runtime role P4-C table privileges do not match the approved set"
+            )
+
+    for signature in _P4C_FUNCTION_SIGNATURES:
+        cursor.execute(
+            "SELECT has_function_privilege(%s, %s, 'EXECUTE')",
+            (runtime_role, signature),
+        )
+        expected = signature in _P4C_RUNTIME_FUNCTION_SIGNATURES
+        if cursor.fetchone() != (expected,):
+            raise PostgresRoleError(
+                "runtime role P4-C function privileges do not match the approved set"
+            )
+
+
+def _assert_p4c_worker_privileges(
+    cursor: psycopg.Cursor[object], worker_role: str, database_name: str
+) -> None:
+    """Require the worker group to have only upstream/P4-C SELECT and six writes."""
+
+    cursor.execute(
+        "SELECT has_database_privilege(%s, %s, 'CONNECT'), "
+        "has_database_privilege(%s, %s, 'TEMPORARY')",
+        (worker_role, database_name, worker_role, database_name),
+    )
+    if cursor.fetchone() != (True, False):
+        raise PostgresRoleError("P4-C worker database privileges exceed the approved set")
+
+    cursor.execute(
+        "SELECT has_schema_privilege(%s, 'public', 'USAGE'), "
+        "has_schema_privilege(%s, 'public', 'CREATE')",
+        (worker_role, worker_role),
+    )
+    if cursor.fetchone() != (True, False):
+        raise PostgresRoleError("P4-C worker schema privileges exceed the approved set")
+
+    cursor.execute(
+        """
+        SELECT c.relname,
+               has_table_privilege(%s, c.oid, 'SELECT'),
+               has_table_privilege(%s, c.oid, 'INSERT'),
+               has_table_privilege(%s, c.oid, 'UPDATE'),
+               has_table_privilege(%s, c.oid, 'DELETE'),
+               has_table_privilege(%s, c.oid, 'TRUNCATE'),
+               has_table_privilege(%s, c.oid, 'REFERENCES'),
+               has_table_privilege(%s, c.oid, 'TRIGGER')
+        FROM pg_catalog.pg_class AS c
+        JOIN pg_catalog.pg_namespace AS n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'v', 'm')
+        """,
+        (worker_role,) * 7,
+    )
+    allowed_tables = frozenset(_P4C_WORKER_SELECT_TABLES)
+    for row in cast("list[tuple[object, ...]]", cursor.fetchall()):
+        table_name = str(row[0])
+        expected = (
+            (True, False, False, False, False, False, False)
+            if table_name in allowed_tables
+            else (False, False, False, False, False, False, False)
+        )
+        if row[1:] != expected:
+            raise PostgresRoleError("P4-C worker table privileges exceed the approved set")
+
+    cursor.execute(
+        """
+        SELECT 'public.' || p.proname || '(' ||
+                   array_to_string(p.proargtypes::regtype[], ',') || ')',
+               has_function_privilege(%s, p.oid, 'EXECUTE')
+        FROM pg_catalog.pg_proc AS p
+        JOIN pg_catalog.pg_namespace AS n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+        """,
+        (worker_role,),
+    )
+    observed = {
+        str(row[0]): bool(row[1]) for row in cast("list[tuple[object, ...]]", cursor.fetchall())
+    }
+    expected_privileges = {
+        signature: signature in _P4C_WORKER_FUNCTION_SIGNATURES for signature in observed
+    }
+    if observed != expected_privileges or not observed.keys() >= _P4C_WORKER_FUNCTION_SIGNATURES:
+        raise PostgresRoleError("P4-C worker function privileges exceed the approved set")
+
+
+def _assert_p4c_function_security(cursor: psycopg.Cursor[object]) -> None:
+    """Every P4-C authority function must retain definer rights and a fixed path."""
+
+    for signature in _P4C_FUNCTION_SIGNATURES:
+        cursor.execute(
+            """
+            SELECT p.prosecdef, p.proconfig
+            FROM pg_catalog.pg_proc AS p
+            WHERE p.oid = pg_catalog.to_regprocedure(%s)
+            """,
+            (signature,),
+        )
+        if cursor.fetchone() != (True, ["search_path=pg_catalog, public, pg_temp"]):
+            raise PostgresRoleError(
+                "P4-C screening authority function security configuration does not match "
                 "the approved set"
             )
 

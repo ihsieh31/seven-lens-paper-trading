@@ -328,7 +328,8 @@ def test_fills_are_append_only(migrated_postgres: str) -> None:
 
 
 def test_migration_0003_down_and_up_restores_execution_schema(migrated_postgres: str) -> None:
-    assert current_version(migrated_postgres) == 23
+    assert current_version(migrated_postgres) == 24
+    assert rollback(migrated_postgres) == 23
     assert rollback(migrated_postgres) == 22
     assert rollback(migrated_postgres) == 21
     assert rollback(migrated_postgres) == 20
@@ -359,7 +360,7 @@ def test_migration_0003_down_and_up_restores_execution_schema(migrated_postgres:
             """
         )
         assert cursor.fetchone() == (None, None, None)
-    assert migrate(migrated_postgres) == 23
+    assert migrate(migrated_postgres) == 24
     with _connection(migrated_postgres) as connection, connection.cursor() as cursor:
         _insert_intent(cursor, _intent_row(version=1))
         connection.commit()

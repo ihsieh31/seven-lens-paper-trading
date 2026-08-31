@@ -157,9 +157,11 @@ ALTER TABLE public.p4_source_records
             )
             OR (
                 family = 'ALPACA_HISTORICAL_BARS'
-                AND wire->'payload' ?& ARRAY['symbol', 'feed', 'bars', 'next_page_token']::text[]
+                AND wire->'payload' ?& ARRAY[
+                    'symbol', 'feed', 'timeframe', 'bars', 'next_page_token'
+                ]::text[]
                 AND ((wire->'payload') - ARRAY[
-                    'symbol', 'feed', 'bars', 'next_page_token'
+                    'symbol', 'feed', 'timeframe', 'bars', 'next_page_token'
                 ]::text[]) = '{}'::jsonb
             )
             OR (
@@ -225,14 +227,14 @@ ALTER TABLE public.p4_source_records
                                 AND wire->'payload' ?& ARRAY[
                                     'cik_padded', 'taxonomy', 'concept', 'unit', 'value', 'start',
                                     'end', 'fiscal_year', 'fiscal_period', 'form', 'accession',
-                                    'filed', 'sign_convention'
+                                    'filed', 'frame', 'consolidation_scope', 'sign_convention'
                                 ]::text[]
                                 AND wire->'payload'->>'sign_convention'
-                                    = 'provider_value_preserved_no_abs'
+                                    = 'positive_cash_outflow_provider_value'
                                 AND ((wire->'payload') - ARRAY[
                                     'cik_padded', 'taxonomy', 'concept', 'unit', 'value', 'start',
                                     'end', 'fiscal_year', 'fiscal_period', 'form', 'accession',
-                                    'filed', 'sign_convention'
+                                    'filed', 'frame', 'consolidation_scope', 'sign_convention'
                                 ]::text[]) = '{}'::jsonb
                             )
                             OR (
@@ -240,11 +242,13 @@ ALTER TABLE public.p4_source_records
                                     <> 'PaymentsToAcquirePropertyPlantAndEquipment'
                                 AND wire->'payload' ?& ARRAY[
                                     'cik_padded', 'taxonomy', 'concept', 'unit', 'value', 'start',
-                                    'end', 'fiscal_year', 'fiscal_period', 'form', 'accession', 'filed'
+                                    'end', 'fiscal_year', 'fiscal_period', 'form', 'accession',
+                                    'filed', 'frame', 'consolidation_scope'
                                 ]::text[]
                                 AND ((wire->'payload') - ARRAY[
                                     'cik_padded', 'taxonomy', 'concept', 'unit', 'value', 'start',
-                                    'end', 'fiscal_year', 'fiscal_period', 'form', 'accession', 'filed'
+                                    'end', 'fiscal_year', 'fiscal_period', 'form', 'accession',
+                                    'filed', 'frame', 'consolidation_scope'
                                 ]::text[]) = '{}'::jsonb
                             )
                         )
@@ -259,7 +263,17 @@ ALTER TABLE public.p4_source_records
             OR (
                 family = 'EXCHANGE_OFFICIAL'
                 AND wire->'payload' ?& ARRAY['exchange', 'title', 'url']::text[]
-                AND ((wire->'payload') - ARRAY['exchange', 'title', 'url']::text[]) = '{}'::jsonb
+                AND ((wire->'payload') - ARRAY[
+                    'exchange', 'title', 'url', 'symbol', 'instrument_kind', 'halted', 'observed_at'
+                ]::text[]) = '{}'::jsonb
+                AND (
+                    NOT (wire->'payload' ?| ARRAY[
+                        'symbol', 'instrument_kind', 'halted', 'observed_at'
+                    ]::text[])
+                    OR wire->'payload' ?& ARRAY[
+                        'symbol', 'instrument_kind', 'halted', 'observed_at'
+                    ]::text[]
+                )
             )
             OR (
                 family = 'FRED_ALFRED'
