@@ -53,26 +53,6 @@ jobs:
   postgres-integration:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    env:
-      REQUIRE_POSTGRES_INTEGRATION: "1"
-      # Job-local fake password for the disposable CI service; never a production secret.
-      SEVEN_LENS_CI_POSTGRES_PASSWORD: seven-lens-ci-disposable-only
-    services:
-      postgres:
-        # Docker Official Image, reviewed tag 16.15-alpine (Alpine 3.24).
-        image: postgres:16.15-alpine@sha256:ab5c955e9e57ae9879d4411ab49a912be9d162455676f7bf56e951b11ac73785
-        env:
-          POSTGRES_USER: seven_lens_ci
-          POSTGRES_PASSWORD: ${{ env.SEVEN_LENS_CI_POSTGRES_PASSWORD }}
-          POSTGRES_DB: seven_lens_p1
-        ports:
-          - 5432/tcp
-        options: >-
-          --health-cmd "pg_isready -U seven_lens_ci -d seven_lens_p1"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-          --tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=2g
     steps:
       - name: Check out source
         # Reviewed release: actions/checkout v7.0.1.
@@ -96,24 +76,11 @@ jobs:
         run: uv sync --python 3.13 --locked
       - name: Check lockfile
         run: uv lock --check
-      - name: Assert PostgreSQL server major version
-        shell: bash
-        run: |
-          server_version_num="$(docker exec "${{ job.services.postgres.id }}" \
-            psql -U seven_lens_ci -d seven_lens_p1 -Atqc 'SHOW server_version_num')"
-          if [[ ! "$server_version_num" =~ ^[0-9]+$ ]]; then
-            echo "PostgreSQL integration gate could not read the server version." >&2
-            exit 1
-          fi
-          if (( 10#$server_version_num / 10000 != 16 )); then
-            echo "PostgreSQL integration gate requires PostgreSQL major version 16." >&2
-            exit 1
-          fi
       - name: Run zero-skip PostgreSQL integration tests
         env:
-          TEST_DATABASE_URL: >-
-            postgresql://seven_lens_ci:${{ env.SEVEN_LENS_CI_POSTGRES_PASSWORD }}@127.0.0.1:${{ job.services.postgres.ports[5432] }}/seven_lens_p1
+          # Job-local fake password for the repository-owned disposable container.
+          SEVEN_LENS_TEST_POSTGRES_PASSWORD: seven-lens-ci-disposable-only
         # The `live` marker requires real Alpaca Paper credentials from the
         # operator's Keychain and must never run on CI; it is exercised only
         # by the explicit P2-E read-only verification CLI.
-        run: uv run --locked pytest tests/integration -m "integration and not live" -ra --tb=short
+        run: ./scripts/run_postgres_integration.sh

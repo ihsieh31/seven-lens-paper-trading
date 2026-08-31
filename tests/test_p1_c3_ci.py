@@ -356,6 +356,7 @@ def test_workflow_is_two_job_read_only_zero_secret_gate() -> None:
 
 def test_workflow_actions_and_postgres_image_are_immutable() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
+    postgres_script = POSTGRES_SCRIPT.read_text(encoding="utf-8")
     action_references = re.findall(r"^\s*uses: ([^@\s]+)@([^\s]+)$", workflow, re.MULTILINE)
 
     assert action_references
@@ -367,8 +368,9 @@ def test_workflow_actions_and_postgres_image_are_immutable() -> None:
     assert (
         "postgres:16.15-alpine@sha256:"
         "ab5c955e9e57ae9879d4411ab49a912be9d162455676f7bf56e951b11ac73785"
-    ) in workflow
-    assert "--tmpfs /var/lib/postgresql/data:rw,noexec,nosuid,size=2g" in workflow
+    ) in postgres_script
+    assert "services:" not in workflow
+    assert "./scripts/run_postgres_integration.sh" in workflow
 
 
 def test_workflow_commands_match_p1_c3_contract() -> None:
@@ -380,18 +382,18 @@ def test_workflow_commands_match_p1_c3_contract() -> None:
         "uv run --locked ruff check .",
         "uv run --locked mypy",
         'uv run --locked pytest -m "not integration" -ra --tb=short',
-        'uv run --locked pytest tests/integration -m "integration and not live" -ra --tb=short',
+        "./scripts/run_postgres_integration.sh",
     )
 
     assert all(command in workflow for command in required_commands)
-    assert 'REQUIRE_POSTGRES_INTEGRATION: "1"' in workflow
-    assert "pg_isready" in workflow
-    assert "SHOW server_version_num" in workflow
+    assert "SEVEN_LENS_TEST_POSTGRES_PASSWORD: seven-lens-ci-disposable-only" in workflow
     assert "enable-cache: true" in workflow
     assert ".venv" not in workflow
 
 
 def test_postgres_integration_job_excludes_live_marker() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert 'pytest tests/integration -m "integration and not live" -ra --tb=short' in workflow
+    postgres_script = POSTGRES_SCRIPT.read_text(encoding="utf-8")
+    assert "./scripts/run_postgres_integration.sh" in workflow
+    assert 'pytest tests/integration -m "integration and not live" -ra --tb=short' in postgres_script
     assert "SEVEN_LENS_P2E_LIVE" not in workflow

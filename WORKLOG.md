@@ -15,7 +15,9 @@
 - P4-A／B／C implementation與acceptance prompts於closure publication移除；歷史決策與驗收證據保留於Git history。
 - Closure commit首次exact-SHA CI的`quality-unit`成功，但`postgres-integration`在249 tests通過後因1g tmpfs
   `pg_wal`耗盡（`No space left on device`）失敗；這是CI容量而非application assertion failure。CI service
-  tmpfs最小調整為2g並由永久workflow test釘住，等待新SHA重新驗證兩個required jobs。
+  tmpfs先調整為2g；第二輪完成`326 passed`但restart proof因service不能重啟自身而有`1 skipped`，zero-skip gate
+  正確拒絕。最終CI改用repository `run_postgres_integration.sh`：disk-backed disposable PG16、owner identity驗證、
+  fixed localhost port與真實restart，等待新SHA重新驗證兩個required jobs。
 
 ## 2026-08-31 — P4-C authority remediation與全面本地驗證完成
 
