@@ -15,7 +15,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Context, Decimal, localcontext
 from enum import StrEnum
 from hashlib import sha256
 from itertools import pairwise
@@ -69,6 +69,14 @@ _CLUSTER_ID_DOMAIN: Final = b"seven-lens.p4c.cluster-id.v1\x00"
 _HASH_TEXT: Final = re.compile(r"^[0-9a-f]{64}$")
 _FACTOR_SESSION_WINDOW: Final = 252
 _CLUSTER_SESSION_WINDOW: Final = 126
+_SCREENING_DECIMAL_CONTEXT: Final = Context(
+    prec=28,
+    rounding=ROUND_HALF_EVEN,
+    Emin=-999999,
+    Emax=999999,
+    capitals=1,
+    clamp=0,
+)
 MAX_CLUSTER_RESULT_BYTES: Final = 1_048_576
 MAX_CLUSTER_MEMBERS: Final = 256
 MAX_CLUSTER_SOURCE_REFS: Final = 1_024
@@ -474,12 +482,27 @@ def _source_bound_record(
     return cls(**body)
 
 
+def _adjusted_close_value(
+    close: Decimal,
+    trading_date: TradingDate,
+    split_adjustments: tuple[SplitAdjustment, ...],
+) -> Decimal:
+    """Apply the existing confirmed, visible split adjustment arithmetic."""
+    with localcontext(_SCREENING_DECIMAL_CONTEXT):
+        adjusted = close
+        for split in split_adjustments:
+            if trading_date.value < split.ex_date.value:
+                adjusted = adjusted * Decimal(split.denominator) / Decimal(split.numerator)
+        return adjusted
+
+
 def session_closes_from_record(
     record: NormalizedSourceRecord,
     *,
     security_id: SecurityId,
     identities: tuple[SecurityIdentityRecord, ...],
     known_at: UtcTimestamp,
+    split_adjustments: tuple[SplitAdjustment, ...] = (),
 ) -> tuple[SessionClose, ...]:
     """Project factor closes from exact delayed-SIP daily-bar authority."""
     bars = daily_bars_from_record(
@@ -488,6 +511,26 @@ def session_closes_from_record(
         identities=identities,
         known_at=known_at,
     )
+    if type(split_adjustments) is not tuple or any(
+        type(split) is not SplitAdjustment for split in split_adjustments
+    ):
+        raise ValueError("split_adjustments must be a tuple of SplitAdjustment values")
+    for split in split_adjustments:
+        split._verify_source_binding()
+    if any(split.security_id != security_id for split in split_adjustments):
+        raise ValueError("split adjustments must bind to the target security")
+    bar_identity_hashes = {getattr(bar._authority, "identity_hash", None) for bar in bars}
+    if split_adjustments and any(
+        split.security_identity_hash not in bar_identity_hashes for split in split_adjustments
+    ):
+        raise ValueError("split adjustment does not bind to the historical-bar identity")
+    latest_bar_date = max((bar.trading_date.value for bar in bars), default=None)
+    visible_splits = tuple(
+        split
+        for split in split_adjustments
+        if split.available_at.value <= known_at.value
+        and (latest_bar_date is None or split.ex_date.value <= latest_bar_date)
+    )
     closes: list[SessionClose] = []
     for bar in bars:
         authority = bar._authority
@@ -495,7 +538,7 @@ def session_closes_from_record(
             raise ValueError("daily bar is missing its source authority")
         values: dict[str, object] = {
             "trading_date": bar.trading_date,
-            "close": bar.close,
+            "close": _adjusted_close_value(bar.close, bar.trading_date, visible_splits),
             "source_ref": bar.source_ref,
             "available_at": bar.available_at,
             "security_id": bar.security_id,
@@ -849,7 +892,8 @@ def _quarter_value(fact: QuarterlyFact, prior_ytd: Decimal | None) -> Decimal:
     returning ``None``.
     """
     if fact.fiscal_period == "YTD":
-        return fact.value - (prior_ytd or Decimal(0))
+        with localcontext(_SCREENING_DECIMAL_CONTEXT):
+            return fact.value - (prior_ytd or Decimal(0))
     return fact.value
 
 
@@ -1056,18 +1100,20 @@ def assemble_ttm(
             return None
 
     def _quarter_values(quarters: tuple[QuarterlyFact, ...]) -> tuple[Decimal, ...]:
-        prior_ytd: Decimal | None = None
-        values: list[Decimal] = []
-        for q in quarters:
-            if q.fiscal_period == "YTD":
-                values.append(_quarter_value(q, prior_ytd))
-                prior_ytd = q.value
-            else:
-                values.append(q.value)
-        return tuple(values)
+        with localcontext(_SCREENING_DECIMAL_CONTEXT):
+            prior_ytd: Decimal | None = None
+            values: list[Decimal] = []
+            for q in quarters:
+                if q.fiscal_period == "YTD":
+                    values.append(_quarter_value(q, prior_ytd))
+                    prior_ytd = q.value
+                else:
+                    values.append(q.value)
+            return tuple(values)
 
     def _sum_ytd(quarters: tuple[QuarterlyFact, ...]) -> Decimal:
-        return sum(_quarter_values(quarters), Decimal(0))
+        with localcontext(_SCREENING_DECIMAL_CONTEXT):
+            return sum(_quarter_values(quarters), Decimal(0))
 
     ttm_net_income = _sum_ytd(net_income_quarters)
     ttm_cfo = _sum_ytd(cfo_quarters)
@@ -1213,10 +1259,7 @@ def adjusted_closes(
     )
     adjusted: list[SessionClose] = []
     for close in closes_tuple:
-        value = close.close
-        for split in visible_splits:
-            if close.trading_date.value < split.ex_date.value:
-                value = value * Decimal(split.denominator) / Decimal(split.numerator)
+        value = _adjusted_close_value(close.close, close.trading_date, visible_splits)
         adjusted.append(
             _finalize_session_close(
                 trading_date=close.trading_date,
@@ -1237,7 +1280,8 @@ def _simple_returns(closes: Sequence[SessionClose]) -> list[Decimal] | None:
     for earlier, later in pairwise(closes):
         if later.close <= 0 or earlier.close <= 0:
             return None
-        returns.append(later.close / earlier.close - 1)
+        with localcontext(_SCREENING_DECIMAL_CONTEXT):
+            returns.append(later.close / earlier.close - 1)
     return returns
 
 
@@ -1253,7 +1297,8 @@ def _trend(closes: Sequence[SessionClose], lookback: int) -> Decimal | None:
     base = closes[-lookback].close
     if reference <= 0 or base <= 0:
         return None
-    return reference / base - 1
+    with localcontext(_SCREENING_DECIMAL_CONTEXT):
+        return reference / base - 1
 
 
 def _vol63(closes: Sequence[SessionClose]) -> Decimal | None:
@@ -1262,11 +1307,12 @@ def _vol63(closes: Sequence[SessionClose]) -> Decimal | None:
     if returns is None or len(returns) < 63:
         return None
     recent = returns[-63:]
-    mean = sum(recent, Decimal(0)) / 63
-    variance = sum(((r - mean) ** 2 for r in recent), Decimal(0)) / 63
-    if variance < 0:
-        return None
-    return variance.sqrt() * Decimal(252).sqrt()
+    with localcontext(_SCREENING_DECIMAL_CONTEXT):
+        mean = sum(recent, Decimal(0)) / 63
+        variance = sum(((r - mean) ** 2 for r in recent), Decimal(0)) / 63
+        if variance < 0:
+            return None
+        return variance.sqrt() * Decimal(252).sqrt()
 
 
 def _max_drawdown252(closes: Sequence[SessionClose]) -> Decimal | None:
@@ -1281,7 +1327,8 @@ def _max_drawdown252(closes: Sequence[SessionClose]) -> Decimal | None:
             return None
         if close.close > peak:
             peak = close.close
-        drawdown = 1 - close.close / peak if peak > 0 else Decimal(0)
+        with localcontext(_SCREENING_DECIMAL_CONTEXT):
+            drawdown = 1 - close.close / peak if peak > 0 else Decimal(0)
         if drawdown > max_drawdown:
             max_drawdown = drawdown
     if max_drawdown >= 1:
@@ -1305,24 +1352,25 @@ def _raw_subfactors(
     if trend_126_21 is None or trend_252_21 is None or vol63 is None or max_drawdown252 is None:
         return None
 
-    average_assets = (ttm.assets_at_ttm_start + ttm.assets_at_ttm_end) / 2
-    if average_assets <= 0 or ttm.shares_outstanding <= 0 or previous_close <= 0:
-        return None
-    market_cap = ttm.shares_outstanding * previous_close
-    if market_cap <= 0:
-        return None
+    with localcontext(_SCREENING_DECIMAL_CONTEXT):
+        average_assets = (ttm.assets_at_ttm_start + ttm.assets_at_ttm_end) / 2
+        if average_assets <= 0 or ttm.shares_outstanding <= 0 or previous_close <= 0:
+            return None
+        market_cap = ttm.shares_outstanding * previous_close
+        if market_cap <= 0:
+            return None
 
-    return {
-        "trend_126_21": trend_126_21,
-        "trend_252_21": trend_252_21,
-        "roa": ttm.ttm_net_income / average_assets,
-        "cfo_to_assets": ttm.ttm_cfo / average_assets,
-        "accrual_quality": (ttm.ttm_cfo - ttm.ttm_net_income) / average_assets,
-        "earnings_yield": ttm.ttm_net_income / market_cap,
-        "fcf_yield": (ttm.ttm_cfo - ttm.ttm_capex) / market_cap,
-        "vol63": vol63,
-        "max_drawdown_252": max_drawdown252,
-    }
+        return {
+            "trend_126_21": trend_126_21,
+            "trend_252_21": trend_252_21,
+            "roa": ttm.ttm_net_income / average_assets,
+            "cfo_to_assets": ttm.ttm_cfo / average_assets,
+            "accrual_quality": (ttm.ttm_cfo - ttm.ttm_net_income) / average_assets,
+            "earnings_yield": ttm.ttm_net_income / market_cap,
+            "fcf_yield": (ttm.ttm_cfo - ttm.ttm_capex) / market_cap,
+            "vol63": vol63,
+            "max_drawdown_252": max_drawdown252,
+        }
 
 
 def _percentile(values: Sequence[Decimal]) -> list[Decimal]:
@@ -1345,10 +1393,11 @@ def _percentile(values: Sequence[Decimal]) -> list[Decimal]:
     winsorized = [min(max(value, q05), q95) for value in values]
     winsorized_sorted = sorted(winsorized)
     result: list[Decimal] = []
-    for value in winsorized:
-        first = winsorized_sorted.index(value)
-        last = len(winsorized_sorted) - 1 - winsorized_sorted[::-1].index(value)
-        result.append((Decimal(first) + Decimal(last)) / Decimal(2) / Decimal(n - 1))
+    with localcontext(_SCREENING_DECIMAL_CONTEXT):
+        for value in winsorized:
+            first = winsorized_sorted.index(value)
+            last = len(winsorized_sorted) - 1 - winsorized_sorted[::-1].index(value)
+            result.append((Decimal(first) + Decimal(last)) / Decimal(2) / Decimal(n - 1))
     return result
 
 
@@ -1387,16 +1436,17 @@ def _category_scores(
     scores: dict[str, dict[str, Decimal]] = {}
     for sid in security_ids:
         p = percentiles
-        trend = (p["trend_126_21"][sid] + p["trend_252_21"][sid]) / 2
-        quality = (p["roa"][sid] + p["cfo_to_assets"][sid] + p["accrual_quality"][sid]) / 3
-        value = (p["earnings_yield"][sid] + p["fcf_yield"][sid]) / 2
-        low_risk = (p["vol63"][sid] + p["max_drawdown_252"][sid]) / 2
-        composite = (
-            Decimal("0.35") * trend
-            + Decimal("0.25") * quality
-            + Decimal("0.15") * value
-            + Decimal("0.25") * low_risk
-        )
+        with localcontext(_SCREENING_DECIMAL_CONTEXT):
+            trend = (p["trend_126_21"][sid] + p["trend_252_21"][sid]) / 2
+            quality = (p["roa"][sid] + p["cfo_to_assets"][sid] + p["accrual_quality"][sid]) / 3
+            value = (p["earnings_yield"][sid] + p["fcf_yield"][sid]) / 2
+            low_risk = (p["vol63"][sid] + p["max_drawdown_252"][sid]) / 2
+            composite = (
+                Decimal("0.35") * trend
+                + Decimal("0.25") * quality
+                + Decimal("0.15") * value
+                + Decimal("0.25") * low_risk
+            )
         scores[sid] = {
             "trend": trend,
             "quality": quality,
@@ -2322,7 +2372,13 @@ class ReturnObservation:
             self.source_ref.family is not P4SourceFamily.ALPACA_HISTORICAL_BARS
         ):
             raise ValueError("return observations require the historical-bars authority")
-        if self._authority.fingerprint != _return_observation_fingerprint(self):
+        self._verify_source_binding()
+
+    def _verify_source_binding(self) -> None:
+        """Re-check the private authority after an attempted mutation."""
+        authority = self._authority
+        assert type(authority) is _RecordAuthority
+        if authority.fingerprint != _return_observation_fingerprint(self):
             raise ValueError("return-observation authority is not bound to frozen content")
 
 
@@ -2354,25 +2410,141 @@ def _reconstruct_return_observation(**values: object) -> ReturnObservation:
     return _finalize_return_observation(**values)
 
 
+def return_observations_from_record(
+    record: NormalizedSourceRecord,
+    *,
+    security_id: SecurityId,
+    identities: tuple[SecurityIdentityRecord, ...],
+    known_at: UtcTimestamp,
+    sessions: tuple[MarketSession, ...],
+    split_adjustments: tuple[SplitAdjustment, ...] = (),
+) -> tuple[ReturnObservation, ...]:
+    """Derive simple returns from one validated split-aware bars record."""
+    if type(record) is not NormalizedSourceRecord:
+        raise ValueError("record requires an exact NormalizedSourceRecord")
+    if type(security_id) is not SecurityId:
+        raise ValueError("security_id requires an exact SecurityId")
+    if type(known_at) is not UtcTimestamp:
+        raise ValueError("known_at requires canonical UTC")
+
+    record.verify_integrity()
+    if record.family is not P4SourceFamily.ALPACA_HISTORICAL_BARS:
+        raise ValueError("return observations require the historical-bars authority")
+    if record.available_at is None or record.available_at.value > known_at.value:
+        raise ValueError("historical-bars source is not available by known_at")
+
+    closes = session_closes_from_record(
+        record,
+        security_id=security_id,
+        identities=identities,
+        known_at=known_at,
+        split_adjustments=split_adjustments,
+    )
+    record_ref = SourceRef(record.record_id, record.family, record.record_hash)
+    for close in closes:
+        close._verify_source_binding()
+        if (
+            close.security_id != security_id
+            or close.source_ref != record_ref
+            or close.source_ref.family is not P4SourceFamily.ALPACA_HISTORICAL_BARS
+            or close.available_at.value > known_at.value
+        ):
+            raise ValueError("session close is not bound to the requested historical record")
+        authority = close._authority
+        if (
+            type(authority) is not _RecordAuthority
+            or authority.source_record_hash != record.record_hash
+            or authority.identity_hash is None
+        ):
+            raise ValueError("session close is missing its source authority")
+
+    session_by_date = _session_calendar(sessions)
+    if closes:
+        present_dates = {session.trading_date.value for session in sessions}
+        current_date = closes[0].trading_date.value
+        while current_date <= closes[-1].trading_date.value:
+            if current_date.weekday() < 5 and current_date not in present_dates:
+                raise ValueError("NYSE calendar window must include every weekday explicitly")
+            current_date += timedelta(days=1)
+    open_dates = tuple(
+        session.trading_date
+        for session in sessions
+        if session.day_kind in (MarketDayKind.REGULAR, MarketDayKind.HALF_DAY)
+        and closes
+        and closes[0].trading_date.value
+        <= session.trading_date.value
+        <= closes[-1].trading_date.value
+    )
+    previous_open = {later: earlier for earlier, later in pairwise(open_dates)}
+
+    observations: list[ReturnObservation] = []
+    for previous, current in pairwise(closes):
+        if current.trading_date.value <= previous.trading_date.value:
+            raise ValueError("session closes must be strictly ordered by trading date")
+        if previous.source_ref != current.source_ref:
+            raise ValueError("adjacent session closes require one exact source ref")
+        if previous_open.get(current.trading_date) != previous.trading_date:
+            continue
+        if (
+            previous.trading_date not in session_by_date
+            or current.trading_date not in session_by_date
+        ):
+            raise ValueError("return closes require explicit NYSE sessions")
+        with localcontext(_SCREENING_DECIMAL_CONTEXT):
+            value = current.close / previous.close - Decimal("1")
+        current_authority = current._authority
+        assert type(current_authority) is _RecordAuthority
+        identity_hash = current_authority.identity_hash
+        if identity_hash is None:
+            raise ValueError("session close is missing its identity authority")
+        values: dict[str, object] = {
+            "trading_date": current.trading_date,
+            "value": value,
+            "available_at": max(
+                (previous.available_at, current.available_at),
+                key=lambda timestamp: timestamp.value,
+            ),
+            "security_id": security_id,
+            "source_ref": current.source_ref,
+        }
+        observations.append(
+            cast(
+                ReturnObservation,
+                _source_bound_record(
+                    ReturnObservation,
+                    _return_observation_fingerprint,
+                    values,
+                    source_record_hash=record.record_hash,
+                    identity_hash=identity_hash,
+                ),
+            )
+        )
+    return tuple(observations)
+
+
 def _pearson(ri: Sequence[Decimal], rj: Sequence[Decimal]) -> Decimal | None:
     """Return the Pearson correlation of two aligned return series."""
     if len(ri) != len(rj) or len(ri) < 100:
         return None
-    n = len(ri)
-    mean_i = sum(ri, Decimal(0)) / n
-    mean_j = sum(rj, Decimal(0)) / n
-    cov = sum(((a - mean_i) * (b - mean_j) for a, b in zip(ri, rj, strict=True)), Decimal(0))
-    var_i = sum(((a - mean_i) ** 2 for a in ri), Decimal(0))
-    var_j = sum(((b - mean_j) ** 2 for b in rj), Decimal(0))
-    if var_i <= 0 or var_j <= 0:
-        return None
-    denominator = (var_i * var_j).sqrt()
-    if denominator == 0:
-        return None
-    rho = cov / denominator
-    if not rho.is_finite():
-        return None
-    return rho
+    with localcontext(_SCREENING_DECIMAL_CONTEXT):
+        n = len(ri)
+        mean_i = sum(ri, Decimal(0)) / n
+        mean_j = sum(rj, Decimal(0)) / n
+        cov = sum(
+            ((a - mean_i) * (b - mean_j) for a, b in zip(ri, rj, strict=True)),
+            Decimal(0),
+        )
+        var_i = sum(((a - mean_i) ** 2 for a in ri), Decimal(0))
+        var_j = sum(((b - mean_j) ** 2 for b in rj), Decimal(0))
+        if var_i <= 0 or var_j <= 0:
+            return None
+        denominator = (var_i * var_j).sqrt()
+        if denominator == 0:
+            return None
+        rho = cov / denominator
+        if not rho.is_finite():
+            return None
+        return rho
 
 
 def _pearson_meets_threshold(
@@ -2381,15 +2553,19 @@ def _pearson_meets_threshold(
     """Compare Pearson to a fixed threshold without a rounded sqrt boundary."""
     if len(ri) != len(rj) or len(ri) < 100:
         return False
-    n = len(ri)
-    mean_i = sum(ri, Decimal(0)) / n
-    mean_j = sum(rj, Decimal(0)) / n
-    cov = sum(((a - mean_i) * (b - mean_j) for a, b in zip(ri, rj, strict=True)), Decimal(0))
-    var_i = sum(((a - mean_i) ** 2 for a in ri), Decimal(0))
-    var_j = sum(((b - mean_j) ** 2 for b in rj), Decimal(0))
-    if cov < 0 or var_i <= 0 or var_j <= 0:
-        return False
-    return cov * cov >= threshold * threshold * var_i * var_j
+    with localcontext(_SCREENING_DECIMAL_CONTEXT):
+        n = len(ri)
+        mean_i = sum(ri, Decimal(0)) / n
+        mean_j = sum(rj, Decimal(0)) / n
+        cov = sum(
+            ((a - mean_i) * (b - mean_j) for a, b in zip(ri, rj, strict=True)),
+            Decimal(0),
+        )
+        var_i = sum(((a - mean_i) ** 2 for a in ri), Decimal(0))
+        var_j = sum(((b - mean_j) ** 2 for b in rj), Decimal(0))
+        if cov < 0 or var_i <= 0 or var_j <= 0:
+            return False
+        return cov * cov >= threshold * threshold * var_i * var_j
 
 
 def _cluster_id_for(
@@ -2603,6 +2779,16 @@ def build_clusters(
             for item in series
         ):
             continue
+        if any(
+            item._authority is None
+            or item.source_ref is None
+            or item._authority.source_record_hash != item.source_ref.record_hash
+            or item._authority.identity_hash is None
+            for item in series
+        ):
+            continue
+        for item in series:
+            item._verify_source_binding()
         if len(series) < 100:
             continue
         dates = [item.trading_date for item in series]
@@ -2653,8 +2839,9 @@ def build_clusters(
     # unknown before pair processing so a singleton cannot bypass the gate.
     node_unknown: set[str] = set()
     for sid, values in return_series.items():
-        mean = sum(values, Decimal(0)) / len(values)
-        variance = sum(((value - mean) ** 2 for value in values), Decimal(0))
+        with localcontext(_SCREENING_DECIMAL_CONTEXT):
+            mean = sum(values, Decimal(0)) / len(values)
+            variance = sum(((value - mean) ** 2 for value in values), Decimal(0))
         if variance <= 0 or not variance.is_finite():
             node_unknown.add(sid)
 

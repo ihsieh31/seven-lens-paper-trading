@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace as dataclass_replace
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import ROUND_DOWN, ROUND_UP, Decimal, getcontext, setcontext
 
 import pytest
 
@@ -41,6 +42,11 @@ from seven_lens.screening.funnel import (
     _finalize_return_observation,
     _finalize_session_close,
     _finalize_shares_observation,
+    _pearson,
+    _pearson_meets_threshold,
+    _return_observation_fingerprint,
+    _session_close_fingerprint,
+    _source_bound_record,
     adjusted_closes,
     assemble_ttm,
     build_clusters,
@@ -48,6 +54,7 @@ from seven_lens.screening.funnel import (
     evidence_candidates,
     focus_candidates,
     quant_candidates,
+    return_observations_from_record,
     select_focus_window,
 )
 from seven_lens.screening.manifests import (
@@ -82,6 +89,7 @@ from seven_lens.securities.quarantine import (
     evaluate_quarantine,
     master_version_for,
 )
+from seven_lens.sources.adapters.alpaca import parse_assets, parse_bars
 from seven_lens.sources.roles import P4SourceFamily
 from seven_lens.universe.contracts import (
     _UNIVERSE_SNAPSHOT_AUTHORITY,
@@ -120,6 +128,16 @@ def ReturnObservation(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise TypeError("too many positional return-observation arguments")
     body = dict(zip(names, args, strict=False))
     body.update(kwargs)
+    source_ref = body.get("source_ref")
+    security_id = body.get("security_id")
+    if type(source_ref) is SourceRef and type(security_id) is SecurityId:
+        return _source_bound_record(
+            _ReturnObservation,
+            _return_observation_fingerprint,
+            body,
+            source_record_hash=source_ref.record_hash,
+            identity_hash="e" * 64,
+        )
     return _finalize_return_observation(**body)
 
 
@@ -172,6 +190,16 @@ def replace(obj, /, **changes):  # type: ignore[no-untyped-def]
             for name in ("trading_date", "value", "available_at", "security_id", "source_ref")
         }
         body.update(changes)
+        source_ref = body.get("source_ref")
+        security_id = body.get("security_id")
+        if type(source_ref) is SourceRef and type(security_id) is SecurityId:
+            return _source_bound_record(
+                _ReturnObservation,
+                _return_observation_fingerprint,
+                body,
+                source_record_hash=source_ref.record_hash,
+                identity_hash="e" * 64,
+            )
         return _finalize_return_observation(**body)
     if type(obj) is _FactorInput:
         body = {
@@ -205,6 +233,7 @@ def _confirmed_split(
     ex_date: TradingDate,
     available_at: UtcTimestamp,
     event_id: str,
+    security_identity_hash: str = "e" * 64,
 ) -> SplitAdjustment:
     """Build a split through the accepted P4-B lineage contract."""
     detected_at = UtcTimestamp(available_at.value - timedelta(minutes=2))
@@ -216,7 +245,7 @@ def _confirmed_split(
     common = {
         "event_id": event_id,
         "security_id": security_id,
-        "security_identity_hash": "e" * 64,
+        "security_identity_hash": security_identity_hash,
         "action_type": CorporateActionType.FORWARD_SPLIT,
         "ratio": SplitRatio.from_fraction(numerator=2, denominator=1),
         "declared_at": declared_at,
@@ -374,6 +403,54 @@ def _view(entry: CandidateEntry, **flags: bool) -> EvidenceView:
             ),
         ),
     )
+
+
+def _bar_record(
+    closes: tuple[str, ...] = ("100", "110"),
+    *,
+    dates: tuple[str, ...] = ("2026-05-28", "2026-05-29"),
+    retrieved_at: UtcTimestamp = _KNOWN,
+):
+    assert len(closes) == len(dates)
+    payload = {
+        "symbol": _symbol(0).value,
+        "bars": [
+            {
+                "t": f"{date}T20:00:00Z",
+                "o": close,
+                "h": close,
+                "l": close,
+                "c": close,
+                "v": 100,
+            }
+            for date, close in zip(dates, closes, strict=True)
+        ],
+    }
+    return parse_bars(
+        json.dumps(payload).encode(),
+        retrieved_at=retrieved_at,
+        requested_feed="sip",
+        effective_feed="sip",
+        requested_timeframe="1Day",
+    )[0]
+
+
+def _return_sessions(*dates: str) -> tuple[MarketSession, ...]:
+    return tuple(_session(TradingDate.from_isoformat(value)) for value in dates)
+
+
+def _asset_record():
+    payload = [
+        {
+            "id": _SID_ZERO.value,
+            "symbol": _symbol(0).value,
+            "exchange": "NYSE",
+            "asset_class": "us_equity",
+            "status": "active",
+            "tradable": True,
+        }
+    ]
+    return parse_assets(json.dumps(payload).encode(), retrieved_at=_KNOWN)[0]
 
 
 def _identities_for(entries: tuple[CandidateEntry, ...]) -> dict[str, SecurityIdentityRecord]:
@@ -574,6 +651,175 @@ def _sectors(quant: tuple[CandidateEntry, ...]) -> dict[str, SectorAssignment]:
         )
         for entry in quant
     }
+
+
+def test_return_observations_derive_exact_simple_return_from_record() -> None:
+    record = _bar_record(("100", "110"))
+    observations = return_observations_from_record(
+        record,
+        security_id=_SID_ZERO,
+        identities=(_identity(_SID_ZERO, _symbol(0)),),
+        known_at=_KNOWN,
+        sessions=_return_sessions("2026-05-28", "2026-05-29"),
+    )
+
+    assert len(observations) == 1
+    assert observations[0].trading_date == TradingDate.from_isoformat("2026-05-29")
+    assert observations[0].value == Decimal("0.1")
+    assert observations[0].security_id == _SID_ZERO
+    assert observations[0].source_ref == SourceRef(
+        record.record_id, record.family, record.record_hash
+    )
+
+
+def test_return_observations_derive_negative_simple_return_from_record() -> None:
+    observations = return_observations_from_record(
+        _bar_record(("100", "90")),
+        security_id=_SID_ZERO,
+        identities=(_identity(_SID_ZERO, _symbol(0)),),
+        known_at=_KNOWN,
+        sessions=_return_sessions("2026-05-28", "2026-05-29"),
+    )
+
+    assert observations[0].value == Decimal("-0.1")
+
+
+def test_return_observations_bind_availability_to_later_adjacent_close(monkeypatch) -> None:
+    record = _bar_record()
+    identity = _identity(_SID_ZERO, _symbol(0))
+    source_ref = SourceRef(record.record_id, record.family, record.record_hash)
+    previous = _source_bound_record(
+        _SessionClose,
+        _session_close_fingerprint,
+        {
+            "trading_date": TradingDate.from_isoformat("2026-05-28"),
+            "close": Decimal("100"),
+            "source_ref": source_ref,
+            "available_at": UtcTimestamp(_KNOWN.value - timedelta(minutes=2)),
+            "security_id": _SID_ZERO,
+        },
+        source_record_hash=record.record_hash,
+        identity_hash=identity.identity_hash,
+    )
+    current = _source_bound_record(
+        _SessionClose,
+        _session_close_fingerprint,
+        {
+            "trading_date": TradingDate.from_isoformat("2026-05-29"),
+            "close": Decimal("110"),
+            "source_ref": source_ref,
+            "available_at": UtcTimestamp(_KNOWN.value - timedelta(minutes=1)),
+            "security_id": _SID_ZERO,
+        },
+        source_record_hash=record.record_hash,
+        identity_hash=identity.identity_hash,
+    )
+
+    def stub_session_closes(*args, **kwargs):
+        del args, kwargs
+        return (previous, current)
+
+    monkeypatch.setattr(
+        "seven_lens.screening.funnel.session_closes_from_record",
+        stub_session_closes,
+    )
+    observations = return_observations_from_record(
+        record,
+        security_id=_SID_ZERO,
+        identities=(identity,),
+        known_at=_KNOWN,
+        sessions=_return_sessions("2026-05-28", "2026-05-29"),
+    )
+
+    assert observations[0].available_at == current.available_at
+
+
+def test_return_observations_use_split_aware_closes() -> None:
+    identity = _identity(_SID_ZERO, _symbol(0))
+    split = _confirmed_split(
+        security_id=_SID_ZERO,
+        ex_date=TradingDate.from_isoformat("2026-05-29"),
+        available_at=_KNOWN,
+        event_id="return-split",
+        security_identity_hash=identity.identity_hash,
+    )
+    observations = return_observations_from_record(
+        _bar_record(("200", "100")),
+        security_id=_SID_ZERO,
+        identities=(identity,),
+        known_at=_KNOWN,
+        sessions=_return_sessions("2026-05-28", "2026-05-29"),
+        split_adjustments=(split,),
+    )
+
+    assert observations[0].value == Decimal("0")
+
+
+def test_return_observations_accept_adjacent_sessions_across_weekend() -> None:
+    observations = return_observations_from_record(
+        _bar_record(("100", "110"), dates=("2026-05-29", "2026-06-01")),
+        security_id=_SID_ZERO,
+        identities=(_identity(_SID_ZERO, _symbol(0)),),
+        known_at=_KNOWN,
+        sessions=_return_sessions("2026-05-29", "2026-06-01"),
+    )
+    assert len(observations) == 1
+    assert observations[0].trading_date == TradingDate.from_isoformat("2026-06-01")
+
+
+def test_return_observations_do_not_replace_missing_prior_open_close() -> None:
+    observations = return_observations_from_record(
+        _bar_record(("100", "110"), dates=("2026-05-28", "2026-06-01")),
+        security_id=_SID_ZERO,
+        identities=(_identity(_SID_ZERO, _symbol(0)),),
+        known_at=_KNOWN,
+        sessions=_return_sessions("2026-05-28", "2026-05-29", "2026-06-01"),
+    )
+    assert observations == ()
+
+
+def test_return_observations_ignore_future_split() -> None:
+    identity = _identity(_SID_ZERO, _symbol(0))
+    future = UtcTimestamp.from_isoformat("2026-06-02T20:00:00.000000Z")
+    split = _confirmed_split(
+        security_id=_SID_ZERO,
+        ex_date=TradingDate.from_isoformat("2026-05-29"),
+        available_at=future,
+        event_id="future-return-split",
+        security_identity_hash=identity.identity_hash,
+    )
+    observations = return_observations_from_record(
+        _bar_record(("200", "100")),
+        security_id=_SID_ZERO,
+        identities=(identity,),
+        known_at=_KNOWN,
+        sessions=_return_sessions("2026-05-28", "2026-05-29"),
+        split_adjustments=(split,),
+    )
+    assert observations[0].value == Decimal("-0.5")
+
+
+def test_return_observations_reject_wrong_source_family() -> None:
+    with pytest.raises(ValueError, match="historical-bars authority"):
+        return_observations_from_record(
+            _asset_record(),
+            security_id=_SID_ZERO,
+            identities=(_identity(_SID_ZERO, _symbol(0)),),
+            known_at=_KNOWN,
+            sessions=(),
+        )
+
+
+def test_return_observations_reject_unavailable_record() -> None:
+    future = UtcTimestamp.from_isoformat("2026-06-02T20:00:00.000000Z")
+    with pytest.raises(ValueError, match="not available by known_at"):
+        return_observations_from_record(
+            _bar_record(retrieved_at=future),
+            security_id=_SID_ZERO,
+            identities=(_identity(_SID_ZERO, _symbol(0)),),
+            known_at=_KNOWN,
+            sessions=(),
+        )
 
 
 def test_trend_returns_hand_computed() -> None:
@@ -1413,6 +1659,127 @@ def test_permutation_byte_identical() -> None:
     assert [e.security_id.value for e in qa] == [e.security_id.value for e in qb]
 
 
+def test_feature_vectors_ignore_ambient_decimal_context() -> None:
+    inputs = (
+        _input(0, base=100.1234567, ni=Decimal("123456789")),
+        _input(1, base=101.7654321, ni=Decimal("987654321")),
+    )
+    universe = _universe(count=2)
+    original = getcontext().copy()
+    try:
+        context = getcontext()
+        context.prec = 6
+        context.rounding = ROUND_DOWN
+        low_precision = build_feature_vectors(
+            inputs,
+            as_of=_AS_OF,
+            known_at=_KNOWN,
+            universe=universe,
+        )
+
+        context.prec = 60
+        context.rounding = ROUND_UP
+        high_precision = build_feature_vectors(
+            inputs,
+            as_of=_AS_OF,
+            known_at=_KNOWN,
+            universe=universe,
+        )
+    finally:
+        setcontext(original)
+
+    assert low_precision == high_precision
+    assert tuple(vector.wire() for vector in low_precision) == tuple(
+        vector.wire() for vector in high_precision
+    )
+    assert tuple(vector.feature_hash for vector in low_precision) == tuple(
+        vector.feature_hash for vector in high_precision
+    )
+
+
+def test_cluster_results_ignore_ambient_decimal_context() -> None:
+    dates = tuple(close.trading_date for close in _closes(count=126))
+    first_id = _sid(0)
+    second_id = _sid(1)
+    first_ref = _cluster_source_ref(first_id)
+    second_ref = _cluster_source_ref(second_id)
+
+    # Build one fixed fixture before changing the caller's context.  The
+    # divisions deliberately produce non-terminating Decimal values, while
+    # the production calculations below must remain context-independent.
+    from decimal import localcontext
+
+    with localcontext() as fixture_context:
+        fixture_context.prec = 80
+        first_values = tuple(
+            Decimal(index - 63) / Decimal("97") + Decimal(index % 7) / Decimal("1000003")
+            for index in range(len(dates))
+        )
+        second_values = tuple(
+            first * Decimal("0.8") + Decimal(((index * 3) % 11) - 5) / Decimal("1000003")
+            for index, first in enumerate(first_values)
+        )
+
+    first = tuple(
+        ReturnObservation(
+            trading_date=trading_date,
+            value=value,
+            available_at=_KNOWN,
+            security_id=first_id,
+            source_ref=first_ref,
+        )
+        for trading_date, value in zip(dates, first_values, strict=True)
+    )
+    second = tuple(
+        ReturnObservation(
+            trading_date=trading_date,
+            value=value,
+            available_at=_KNOWN,
+            security_id=second_id,
+            source_ref=second_ref,
+        )
+        for trading_date, value in zip(dates, second_values, strict=True)
+    )
+    returns = {first_id.value: first, second_id.value: second}
+    sessions = _sessions_for_closes(_closes(count=126))
+
+    original = getcontext().copy()
+    try:
+        context = getcontext()
+        context.prec = 6
+        context.rounding = ROUND_DOWN
+        low_rho = _pearson(first_values, second_values)
+        low_edge = _pearson_meets_threshold(first_values, second_values, Decimal("0.75"))
+        low_results = build_clusters(
+            nodes=(first_id, second_id),
+            returns=returns,
+            policy_hash="a" * 64,
+            as_of=_AS_OF,
+            sessions=sessions,
+        )
+
+        context.prec = 60
+        context.rounding = ROUND_UP
+        high_rho = _pearson(first_values, second_values)
+        high_edge = _pearson_meets_threshold(first_values, second_values, Decimal("0.75"))
+        high_results = build_clusters(
+            nodes=(first_id, second_id),
+            returns=returns,
+            policy_hash="a" * 64,
+            as_of=_AS_OF,
+            sessions=sessions,
+        )
+    finally:
+        setcontext(original)
+
+    assert low_rho == high_rho
+    assert low_edge == high_edge
+    assert low_results == high_results
+    assert tuple(result.cluster_id for result in low_results) == tuple(
+        result.cluster_id for result in high_results
+    )
+
+
 def test_cluster_connected_components() -> None:
     nodes = (_sid(0), _sid(1), _sid(2))
     # Build perfectly correlated series (identical drift) for 0 and 1
@@ -1590,7 +1957,55 @@ def test_cluster_exactly_100_returns_in_126_session_window_is_assigned_singleton
 
     assert len(results) == 1
     assert results[0].status is ClusterStatus.ASSIGNED
-    assert results[0].members == (security_id,)
+
+
+def test_cluster_rejects_caller_authored_return_values() -> None:
+    security_id = _sid(0)
+    source_ref = _cluster_source_ref(security_id)
+    dates = tuple(close.trading_date for close in _closes(count=126))[-100:]
+    forged = tuple(
+        _finalize_return_observation(
+            trading_date=trading_date,
+            value=Decimal("999"),
+            available_at=_KNOWN,
+            security_id=security_id,
+            source_ref=source_ref,
+        )
+        for trading_date in dates
+    )
+    result = build_clusters(
+        nodes=(security_id,),
+        returns={security_id.value: forged},
+        policy_hash="a" * 64,
+        as_of=_AS_OF,
+        sessions=_sessions_for_closes(_closes(count=126)),
+    )[0]
+    assert result.status is ClusterStatus.UNKNOWN
+
+
+def test_cluster_accepts_source_bound_return_values() -> None:
+    security_id = _sid(0)
+    source_ref = _cluster_source_ref(security_id)
+    dates = tuple(close.trading_date for close in _closes(count=126))[-100:]
+    observations = tuple(
+        ReturnObservation(
+            trading_date=trading_date,
+            value=Decimal(index % 7 - 3) / Decimal("1000"),
+            available_at=_KNOWN,
+            security_id=security_id,
+            source_ref=source_ref,
+        )
+        for index, trading_date in enumerate(dates)
+    )
+    result = build_clusters(
+        nodes=(security_id,),
+        returns={security_id.value: observations},
+        policy_hash="a" * 64,
+        as_of=_AS_OF,
+        sessions=_sessions_for_closes(_closes(count=126)),
+    )[0]
+    assert result.status is ClusterStatus.ASSIGNED
+    assert result.members == (security_id,)
 
 
 def test_cluster_zero_variance_singleton_is_unknown() -> None:
