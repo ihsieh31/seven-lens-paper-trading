@@ -523,6 +523,43 @@ def _finalize_candidate_entry(**values: object) -> CandidateEntry:
     return CandidateEntry(**body)  # type: ignore[arg-type]
 
 
+def _expected_focus_from_evidence(
+    evidence: tuple[CandidateEntry, ...],
+    *,
+    stage: CandidateStage,
+) -> tuple[CandidateEntry, ...]:
+    """Derive the only admissible focus stage from the evidence prefix."""
+    if type(evidence) is not tuple or any(type(entry) is not CandidateEntry for entry in evidence):
+        raise ValueError("focus evidence requires an exact CandidateEntry tuple")
+    if any(entry.stage is not CandidateStage.EVIDENCE for entry in evidence):
+        raise ValueError("focus evidence must contain EVIDENCE entries")
+    if stage is CandidateStage.FOCUS_OPEN:
+        cap = FOCUS_OPEN_CAP
+    elif stage is CandidateStage.FOCUS_CLOSE:
+        cap = FOCUS_CLOSE_CAP
+    else:
+        raise ValueError("focus stage must be FOCUS_OPEN or FOCUS_CLOSE")
+    return tuple(
+        _finalize_candidate_entry(
+            security_id=entry.security_id,
+            symbol=entry.symbol,
+            composite=entry.composite,
+            trend=entry.trend,
+            quality=entry.quality,
+            value=entry.value,
+            low_risk=entry.low_risk,
+            stage=stage,
+            feature_hash=entry.feature_hash,
+            universe_hash=entry.universe_hash,
+            quarantine_decision_hash=entry.quarantine_decision_hash,
+            sector_assignment_hash=entry.sector_assignment_hash,
+            evidence_source_refs=entry.evidence_source_refs,
+            reasons=entry.reasons,
+        )
+        for entry in evidence[:cap]
+    )
+
+
 def _reconstruct_candidate_entry(**values: object) -> CandidateEntry:
     """Reconstruct one entry after DB wire/hash validation."""
     body = _candidate_entry_body(values)
@@ -677,6 +714,16 @@ class CandidateSet:
             parent_order = {entry.security_id.value: index for index, entry in enumerate(expected)}
             if ids != sorted(ids, key=parent_order.__getitem__):
                 raise ValueError(f"{name} must preserve parent stage order")
+        for name, expected_stage in (
+            ("focus_open", CandidateStage.FOCUS_OPEN),
+            ("focus_close", CandidateStage.FOCUS_CLOSE),
+        ):
+            expected_focus = _expected_focus_from_evidence(
+                self.evidence,
+                stage=expected_stage,
+            )
+            if getattr(self, name) != expected_focus:
+                raise ValueError(f"{name} must equal the canonical evidence prefix")
         _bounded_text(self.producer_version, "producer_version")
         if self.producer_version != _PRODUCER_VERSION:
             raise ValueError("candidate set producer_version is not approved")

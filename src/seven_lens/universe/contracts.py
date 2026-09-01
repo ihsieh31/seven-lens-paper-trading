@@ -162,12 +162,15 @@ class UniverseSnapshot:
             raise ValueError("UniverseSnapshot must be produced by a trusted authority")
         if type(self.as_of) is not TradingDate:
             raise ValueError("as_of requires an exact TradingDate")
-        if self.as_of.value.day != 1:
-            raise ValueError("universe as_of must be the first day of a calendar month")
         if type(self.known_at) is not UtcTimestamp:
             raise ValueError("known_at requires canonical UTC")
-        if self.known_at.value.date() > self.as_of.value:
-            raise ValueError("known_at cannot be after the universe as_of date")
+        known_date = self.known_at.value.date()
+        if (
+            known_date.year != self.as_of.value.year
+            or known_date.month != self.as_of.value.month
+            or known_date < self.as_of.value
+        ):
+            raise ValueError("universe known_at must be on or after the first open session")
         if (
             type(self.security_master_version) is not str
             or len(self.security_master_version.encode("utf-8")) > _MAX_MASTER_VERSION_BYTES

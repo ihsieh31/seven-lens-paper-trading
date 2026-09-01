@@ -366,8 +366,10 @@ def test_down_migration_refuses_generic_route_rows_and_keeps_data(
             assert repository.persist(record, _per_record_result(record)) is True
             connection.commit()
 
-        # P4-C is independent of model-call route rows; remove it and 0023
-        # first so this assertion exercises the 0022 down-migration guard.
+        # P4-C is independent of model-call route rows; remove both new P4-C
+        # migrations and 0023 first so this assertion exercises the 0022
+        # down-migration guard.
+        assert rollback(dsn) == 24
         assert rollback(dsn) == 23
         assert rollback(dsn) == 22
         with pytest.raises((MigrationError, psycopg.Error)):
@@ -389,11 +391,12 @@ def test_clean_database_up_down_up_cycle(test_database_url: str) -> None:
     while current_version(test_database_url):
         rollback(test_database_url)
     try:
-        assert migrate(test_database_url) == 24
+        assert migrate(test_database_url) == 25
+        assert rollback(test_database_url) == 24
         assert rollback(test_database_url) == 23
         assert rollback(test_database_url) == 22
         assert current_version(test_database_url) == 22
-        assert migrate(test_database_url) == 24
+        assert migrate(test_database_url) == 25
     finally:
         _force_schema_reset(test_database_url)
 
@@ -416,7 +419,8 @@ def test_0022_up_backfills_legacy_rows_written_before_the_migration(
     while current_version(test_database_url):
         rollback(test_database_url)
     try:
-        assert migrate(test_database_url) == 24
+        assert migrate(test_database_url) == 25
+        assert rollback(test_database_url) == 24
         assert rollback(test_database_url) == 23
         assert rollback(test_database_url) == 22
         assert rollback(test_database_url) == 21
@@ -427,7 +431,7 @@ def test_0022_up_backfills_legacy_rows_written_before_the_migration(
             assert repository.persist(audit_record(), canonical_result()) is True
             connection.commit()
         assert current_version(test_database_url) == 21
-        assert migrate(test_database_url) == 24
+        assert migrate(test_database_url) == 25
         with psycopg.connect(test_database_url) as connection:
             claim_row = connection.execute(
                 "SELECT provider, model, endpoint_policy_id, route_config_hash, status "
@@ -463,9 +467,10 @@ def test_0022_up_backfills_legacy_rows_written_before_the_migration(
             connection.rollback()
         # Down is still refused while the legacy-only rows exist?  No: legacy
         # rows are Agnes-only, so down succeeds and re-up must stay clean.
+        assert rollback(test_database_url) == 24
         assert rollback(test_database_url) == 23
         assert rollback(test_database_url) == 22
         assert rollback(test_database_url) == 21
-        assert migrate(test_database_url) == 24
+        assert migrate(test_database_url) == 25
     finally:
         _force_schema_reset(test_database_url)

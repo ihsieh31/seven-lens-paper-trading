@@ -434,7 +434,8 @@ def test_single_head_migration_rejects_legacy_branch_without_repairing_it(
 ) -> None:
     from seven_lens.infrastructure.migrations import current_version, migrate, rollback
 
-    assert current_version(migrated_postgres) == 24
+    assert current_version(migrated_postgres) == 25
+    assert rollback(migrated_postgres) == 24
     assert rollback(migrated_postgres) == 23
     assert rollback(migrated_postgres) == 22
     assert rollback(migrated_postgres) == 21

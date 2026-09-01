@@ -119,8 +119,11 @@ _SCHEMA = SchemaVersion("1.0.0")
 _POLICY = "a" * 64
 
 
-def _trusted_bar(trading_date: TradingDate) -> DailyBar:
-    source_ref = _source_ref("bar-1", P4SourceFamily.ALPACA_HISTORICAL_BARS)
+def _trusted_bar(
+    trading_date: TradingDate,
+    source_ref: SourceRef | None = None,
+) -> DailyBar:
+    source_ref = source_ref or _source_ref("bar-1", P4SourceFamily.ALPACA_HISTORICAL_BARS)
     values: dict[str, object] = {
         "trading_date": trading_date,
         "security_id": _SEC,
@@ -149,6 +152,7 @@ def _source(
     family: P4SourceFamily,
     *,
     available_at: UtcTimestamp = _T0,
+    bar_as_of: UtcTimestamp | None = None,
     version: str = "v1",
     cik: str = "0000320193",
     sic_only: bool = False,
@@ -174,7 +178,8 @@ def _source(
         }
     elif family is P4SourceFamily.ALPACA_HISTORICAL_BARS:
         bar_values: list[dict[str, object]] = []
-        current = datetime(2026, 6, 1, tzinfo=UTC) - timedelta(days=1)
+        bar_cutoff = bar_as_of.value.date() if bar_as_of is not None else _T0.value.date()
+        current = datetime.combine(bar_cutoff, datetime.min.time(), tzinfo=UTC) - timedelta(days=1)
         while len(bar_values) < 252:
             if current.weekday() < 5:
                 bar_values.append(
@@ -200,7 +205,7 @@ def _source(
             "symbol": _SYM.value,
             "bid_price": quote_bid,
             "ask_price": quote_ask,
-            "timestamp": str(_T0),
+            "timestamp": str(available_at),
             "feed": "iex",
         }
     elif family is P4SourceFamily.ALPACA_CORPORATE_ACTIONS:
@@ -438,9 +443,12 @@ def _market_snapshot(
     split_adjustments: tuple[SplitAdjustment, ...] = (),
     as_of: UtcTimestamp = _T0,
     known_at: UtcTimestamp = _T0,
+    quote_as_of: UtcTimestamp | None = None,
+    bar_source_ref: SourceRef | None = None,
+    explicit_closed_dates: tuple[TradingDate, ...] = (),
 ) -> MarketSnapshot:
     sessions: list[MarketSession] = []
-    current = datetime(2026, 6, 1, tzinfo=UTC)
+    current = datetime.combine(as_of.value.date(), datetime.min.time(), tzinfo=UTC)
     while len(sessions) < 253:
         if current.weekday() < 5:
             trading_date = TradingDate(current.date())
@@ -455,11 +463,20 @@ def _market_snapshot(
                 )
             )
         current -= timedelta(days=1)
-    ordered_sessions = tuple(reversed(sessions))
+    sessions.extend(
+        MarketSession(
+            trading_date=trading_date,
+            day_kind=MarketDayKind.CLOSED,
+            regular_session=None,
+        )
+        for trading_date in explicit_closed_dates
+    )
+    ordered_sessions = tuple(sorted(sessions, key=lambda session: session.trading_date.value))
     bars = tuple(
-        _trusted_bar(session.trading_date)
+        _trusted_bar(session.trading_date, source_ref=bar_source_ref)
         for session in ordered_sessions
-        if session.trading_date.value < _T0.value.date()
+        if session.trading_date.value < as_of.value.date()
+        and session.day_kind in (MarketDayKind.REGULAR, MarketDayKind.HALF_DAY)
     )
     if quote_record is None:
         quote_record = _source(
@@ -467,7 +484,24 @@ def _market_snapshot(
             P4SourceFamily.ALPACA_IEX_QUOTES,
             quote_bid=bid,
             quote_ask=ask,
+            available_at=quote_as_of if quote_as_of is not None else _T0,
         )
+        if quote_as_of is not None:
+            payload = quote_record.payload.to_dict()
+            payload["timestamp"] = str(quote_as_of)
+            quote_record = build_normalized_record(
+                record_id=quote_record.record_id,
+                family=quote_record.family,
+                endpoint_id=quote_record.endpoint_id,
+                schema_version=quote_record.schema_version,
+                content_hash=quote_record.record_hash,
+                retrieved_at=quote_as_of,
+                available_at=quote_as_of,
+                payload=payload,
+                material_claim=quote_record.material_claim,
+                observation_at=quote_as_of,
+                coverage_warning=quote_record.coverage_warning,
+            )
     quote = quote_input_from_record(quote_record)
     if quote_source_ref is not None and quote.source_ref != quote_source_ref:
         raise ValueError("quote record does not match the requested source reference")
@@ -483,14 +517,17 @@ def _market_snapshot(
     )
 
 
-def _universe_snapshot() -> UniverseSnapshot:
+def _universe_snapshot(
+    *, known_at: UtcTimestamp = _T0, market: MarketSnapshot | None = None
+) -> UniverseSnapshot:
     identity = _identity()
-    market = _market_snapshot()
+    if market is None:
+        market = _market_snapshot()
     decision = _decision()
     return _build_universe_snapshot(
         authority=_UNIVERSE_SNAPSHOT_AUTHORITY,
         as_of=TradingDate.from_isoformat("2026-06-01"),
-        known_at=_T0,
+        known_at=known_at,
         security_master_version=master_version_for(identity),
         market_snapshot_refs=(market.snapshot_hash,),
         entries=(
@@ -513,7 +550,13 @@ def _universe_snapshot() -> UniverseSnapshot:
     )
 
 
-def _feature_vector(*, as_of: UtcTimestamp = _T0, known_at: UtcTimestamp = _T0) -> object:
+def _feature_vector(
+    *,
+    as_of: UtcTimestamp = _T0,
+    known_at: UtcTimestamp = _T0,
+    universe: UniverseSnapshot | None = None,
+    bar_source_ref: SourceRef | None = None,
+) -> object:
     names = (
         "trend_126_21",
         "trend_252_21",
@@ -528,10 +571,19 @@ def _feature_vector(*, as_of: UtcTimestamp = _T0, known_at: UtcTimestamp = _T0) 
     from seven_lens.screening.contracts import RawFeature
     from seven_lens.screening.manifests import factor_manifest
 
-    universe = _universe_snapshot()
+    universe = universe or _universe_snapshot()
     factor_source_ref = _source_ref("factor-source", P4SourceFamily.SEC_EDGAR)
-    bar_source_ref = _source_ref("bar-1", P4SourceFamily.ALPACA_HISTORICAL_BARS)
-    market_sessions = _market_snapshot().sessions
+    bar_source_ref = bar_source_ref or _source_ref("bar-1", P4SourceFamily.ALPACA_HISTORICAL_BARS)
+    market_sessions = _market_snapshot(
+        as_of=as_of,
+        # This snapshot is only used to derive the deterministic session
+        # window for the fixture.  The vector keeps its caller-supplied
+        # known_at, which is intentionally allowed to lag its as_of in the
+        # future-visibility rejection test below.
+        known_at=as_of,
+        quote_as_of=as_of,
+        bar_source_ref=bar_source_ref,
+    ).sessions
 
     return _finalize_feature_vector(
         security_id=_SEC,
@@ -587,13 +639,14 @@ def _candidate_set(
     known_at: UtcTimestamp = _T0,
     vector: object | None = None,
     sector_assignment_hash: str | None = None,
+    universe: UniverseSnapshot | None = None,
 ) -> object:
     from seven_lens.screening.contracts import CandidateEntry
     from seven_lens.screening.manifests import cluster_manifest, factor_manifest
 
-    universe = _universe_snapshot()
+    universe = universe or _universe_snapshot()
     if vector is None:
-        vector = _feature_vector(as_of=as_of, known_at=known_at)
+        vector = _feature_vector(as_of=as_of, known_at=known_at, universe=universe)
     decision = _decision()
     assignment = _sector_assignment()
 
@@ -1753,3 +1806,296 @@ def test_cluster_function_rejects_source_for_unlisted_member(p4c_connection) -> 
     p4c_connection.rollback()
     assert error.value.sqlstate == "23514"
     assert p4c_connection.execute("SELECT count(*) FROM public.cluster_results").fetchone() == (0,)
+
+
+def _append_june_universe(
+    connection: psycopg.Connection[object],
+    *,
+    known_at: UtcTimestamp,
+    market_as_of: UtcTimestamp | None = None,
+    market_known_at: UtcTimestamp | None = None,
+) -> tuple[UniverseSnapshot, SourceRef]:
+    universe_market = _market_snapshot()
+    assert PostgresMarketSnapshotStore(connection).append(universe_market) in (
+        AppendOutcome.APPENDED,
+        AppendOutcome.IDEMPOTENT_DUPLICATE,
+    )
+    if market_as_of is None:
+        bar_source_ref = _source_ref("bar-1", P4SourceFamily.ALPACA_HISTORICAL_BARS)
+    else:
+        market_known_at = market_known_at or market_as_of
+        quote = _source(
+            "quote-june-later",
+            P4SourceFamily.ALPACA_IEX_QUOTES,
+            available_at=market_known_at,
+        )
+        bar = _source(
+            "bar-june-later",
+            P4SourceFamily.ALPACA_HISTORICAL_BARS,
+            available_at=market_known_at,
+            bar_as_of=market_as_of,
+        )
+        source_log = PostgresP4RecordLog(connection)
+        source_log.append(quote)
+        source_log.append(bar)
+        bar_source_ref = SourceRef(bar.record_id, bar.family, bar.record_hash)
+        later_market = _market_snapshot(
+            as_of=market_as_of,
+            known_at=market_known_at,
+            quote_record=quote,
+            bar_source_ref=bar_source_ref,
+        )
+        assert PostgresMarketSnapshotStore(connection).append(later_market) in (
+            AppendOutcome.APPENDED,
+            AppendOutcome.IDEMPOTENT_DUPLICATE,
+        )
+    snapshot = _universe_snapshot(known_at=known_at, market=universe_market)
+    assert PostgresUniverseSnapshotStore(connection).append(snapshot) in (
+        AppendOutcome.APPENDED,
+        AppendOutcome.IDEMPOTENT_DUPLICATE,
+    )
+    return snapshot, bar_source_ref
+
+
+def test_candidate_append_accepts_same_month_later_day(p4c_connection) -> None:
+    """Case A: a June 1 universe serves a June 15 candidate once known_at is
+    at or before the candidate cutoff."""
+    universe, bar_source_ref = _append_june_universe(
+        p4c_connection,
+        known_at=UtcTimestamp.from_isoformat("2026-06-15T14:00:00.000000Z"),
+        market_as_of=UtcTimestamp.from_isoformat("2026-06-15T14:00:00.000000Z"),
+    )
+    cutoff = UtcTimestamp.from_isoformat("2026-06-15T15:00:00.000000Z")
+    vector = _feature_vector(
+        as_of=cutoff,
+        known_at=cutoff,
+        universe=universe,
+        bar_source_ref=bar_source_ref,
+    )
+    assert PostgresFeatureVectorStore(p4c_connection).append(vector) is AppendOutcome.APPENDED
+    assert (
+        PostgresSectorAssignmentStore(p4c_connection).append(_sector_assignment())
+        is AppendOutcome.APPENDED
+    )
+    candidate = _candidate_set(
+        as_of=cutoff,
+        known_at=cutoff,
+        vector=vector,
+        universe=universe,
+    )
+    assert PostgresCandidateSetStore(p4c_connection).append(candidate) is AppendOutcome.APPENDED
+    readback = PostgresCandidateSetStore(p4c_connection).get(candidate.candidate_hash)
+    assert readback is not None
+    assert readback.universe_hash == universe.universe_hash
+
+
+def test_candidate_append_rejects_cutoff_before_universe_known_at(p4c_connection) -> None:
+    """Case B: a candidate whose as_of predates the universe known_at is
+    rejected by the authority gate."""
+    universe, bar_source_ref = _append_june_universe(
+        p4c_connection,
+        known_at=UtcTimestamp.from_isoformat("2026-06-15T14:00:00.000000Z"),
+        market_as_of=UtcTimestamp.from_isoformat("2026-06-15T14:00:00.000000Z"),
+    )
+    cutoff = UtcTimestamp.from_isoformat("2026-06-15T13:59:59.000000Z")
+    visible_cutoff = UtcTimestamp.from_isoformat("2026-06-15T15:00:00.000000Z")
+    vector = _feature_vector(
+        as_of=visible_cutoff,
+        known_at=visible_cutoff,
+        universe=universe,
+        bar_source_ref=bar_source_ref,
+    )
+    assert PostgresFeatureVectorStore(p4c_connection).append(vector) is AppendOutcome.APPENDED
+    assert (
+        PostgresSectorAssignmentStore(p4c_connection).append(_sector_assignment())
+        is AppendOutcome.APPENDED
+    )
+    candidate = _candidate_set(
+        as_of=visible_cutoff,
+        known_at=visible_cutoff,
+        vector=vector,
+        universe=universe,
+    )
+    wire = candidate.wire()
+    wire["as_of"] = str(cutoff)
+    wire["known_at"] = str(cutoff)
+    candidate_hash = _wire_hash("seven-lens.p4c.candidate-set.v1", wire)
+    with pytest.raises(psycopg.Error) as error:
+        p4c_connection.execute(
+            "SELECT public.append_candidate_set(%s, %s)",
+            (candidate_hash, psycopg.types.json.Jsonb(wire)),
+        )
+    p4c_connection.rollback()
+    assert error.value.sqlstate == "23514"
+    assert p4c_connection.execute("SELECT count(*) FROM public.candidate_sets").fetchone() == (0,)
+
+
+def test_candidate_append_rejects_cross_month_cutoff(p4c_connection) -> None:
+    """Case C: a July candidate cannot ride on the June universe."""
+    universe, bar_source_ref = _append_june_universe(
+        p4c_connection, known_at=UtcTimestamp.from_isoformat("2026-06-01T19:00:00.000000Z")
+    )
+    visible_cutoff = UtcTimestamp.from_isoformat("2026-06-01T19:00:00.000000Z")
+    july_cutoff = UtcTimestamp.from_isoformat("2026-07-01T14:00:00.000000Z")
+    vector = _feature_vector(
+        as_of=visible_cutoff,
+        known_at=visible_cutoff,
+        universe=universe,
+        bar_source_ref=bar_source_ref,
+    )
+    assert PostgresFeatureVectorStore(p4c_connection).append(vector) is AppendOutcome.APPENDED
+    candidate = _candidate_set(
+        as_of=visible_cutoff,
+        known_at=visible_cutoff,
+        vector=vector,
+        universe=universe,
+    )
+    wire = candidate.wire()
+    wire["as_of"] = str(july_cutoff)
+    wire["known_at"] = str(july_cutoff)
+    candidate_hash = _wire_hash("seven-lens.p4c.candidate-set.v1", wire)
+    with pytest.raises(psycopg.Error) as error:
+        p4c_connection.execute(
+            "SELECT public.append_candidate_set(%s, %s)",
+            (candidate_hash, psycopg.types.json.Jsonb(wire)),
+        )
+    p4c_connection.rollback()
+    assert error.value.sqlstate == "23514"
+    assert p4c_connection.execute("SELECT count(*) FROM public.candidate_sets").fetchone() == (0,)
+
+
+def test_weekend_month_start_universe_append_and_downstream_use(p4c_connection) -> None:
+    """Case D: the August universe as_of is Monday's first open session."""
+    market_as_of = UtcTimestamp.from_isoformat("2026-08-03T14:00:00.000000Z")
+    market_known_at = market_as_of
+    august_quote = _source(
+        "quote-august",
+        P4SourceFamily.ALPACA_IEX_QUOTES,
+        available_at=market_known_at,
+    )
+    august_bar = _source(
+        "bar-august",
+        P4SourceFamily.ALPACA_HISTORICAL_BARS,
+        available_at=market_known_at,
+        bar_as_of=market_as_of,
+    )
+    source_log = PostgresP4RecordLog(p4c_connection)
+    source_log.append(august_quote)
+    source_log.append(august_bar)
+    august_market = _market_snapshot(
+        as_of=market_as_of,
+        known_at=market_known_at,
+        quote_source_ref=SourceRef(
+            august_quote.record_id, august_quote.family, august_quote.record_hash
+        ),
+        quote_record=august_quote,
+        bar_source_ref=SourceRef(august_bar.record_id, august_bar.family, august_bar.record_hash),
+        explicit_closed_dates=(
+            TradingDate.from_isoformat("2026-08-01"),
+            TradingDate.from_isoformat("2026-08-02"),
+        ),
+    )
+    market_store = PostgresMarketSnapshotStore(p4c_connection)
+    assert market_store.append(august_market) in (
+        AppendOutcome.APPENDED,
+        AppendOutcome.IDEMPOTENT_DUPLICATE,
+    )
+    known_at = UtcTimestamp.from_isoformat("2026-08-03T14:30:00.000000Z")
+    identity = _identity()
+    decision = _decision()
+    universe = _build_universe_snapshot(
+        authority=_UNIVERSE_SNAPSHOT_AUTHORITY,
+        as_of=TradingDate.from_isoformat("2026-08-03"),
+        known_at=known_at,
+        security_master_version=master_version_for(identity),
+        market_snapshot_refs=(august_market.snapshot_hash,),
+        entries=(
+            UniverseEntry(
+                security_id=_SEC,
+                symbol=_SYM,
+                eligible=True,
+                reason=None,
+                identity_hash=identity.identity_hash,
+                master_version=master_version_for(identity),
+                market_snapshot_hash=august_market.snapshot_hash,
+                whole_share_feasibility=WholeShareFeasibility.NOT_EVALUATED,
+                quarantine_decision_hash=decision.decision_hash,
+                quarantine_event_ids=decision.event_ids,
+            ),
+        ),
+        policy_hash=_POLICY,
+        schema_version=_SCHEMA,
+        producer_version="p4c.universe.v1",
+    )
+    assert PostgresUniverseSnapshotStore(p4c_connection).append(universe) is AppendOutcome.APPENDED
+
+    cutoff = UtcTimestamp.from_isoformat("2026-08-03T15:00:00.000000Z")
+    vector = _feature_vector(
+        as_of=cutoff,
+        known_at=cutoff,
+        universe=universe,
+        bar_source_ref=SourceRef(august_bar.record_id, august_bar.family, august_bar.record_hash),
+    )
+    assert PostgresFeatureVectorStore(p4c_connection).append(vector) is AppendOutcome.APPENDED
+    assert (
+        PostgresSectorAssignmentStore(p4c_connection).append(_sector_assignment())
+        is AppendOutcome.APPENDED
+    )
+    candidate = _candidate_set(
+        as_of=cutoff,
+        known_at=cutoff,
+        vector=vector,
+        universe=universe,
+    )
+    assert PostgresCandidateSetStore(p4c_connection).append(candidate) is AppendOutcome.APPENDED
+    readback = PostgresCandidateSetStore(p4c_connection).get(candidate.candidate_hash)
+    assert readback is not None
+    assert readback.universe_hash == universe.universe_hash
+
+
+def test_candidate_append_requires_exact_focus_prefix(p4c_connection) -> None:
+    candidate = _append_candidate(p4c_connection)
+    wire = candidate.wire()
+    wire["focus_open"] = []
+    forged_hash = _wire_hash("seven-lens.p4c.candidate-set.v1", wire)
+    with pytest.raises(psycopg.Error) as error:
+        p4c_connection.execute(
+            "SELECT public.append_candidate_set(%s, %s)",
+            (forged_hash, psycopg.types.json.Jsonb(wire)),
+        )
+    p4c_connection.rollback()
+    assert error.value.sqlstate == "23514"
+    # The explicit rollback also removes the valid fixture append; the forged
+    # call must leave no committed candidate row behind.
+    assert p4c_connection.execute("SELECT count(*) FROM public.candidate_sets").fetchone() == (0,)
+
+
+@pytest.mark.parametrize(
+    ("focus_field", "focus_stage"),
+    (("focus_open", "FOCUS_OPEN"), ("focus_close", "FOCUS_CLOSE")),
+)
+def test_candidate_append_rejects_non_prefix_focus(
+    p4c_connection, focus_field: str, focus_stage: str
+) -> None:
+    """A correctly ordered child that skips the first evidence row is rejected."""
+    candidate = _append_candidate(p4c_connection)
+    wire = candidate.wire()
+    first = dict(wire["evidence"][0])  # type: ignore[index]
+    skipped = dict(first)
+    skipped["security_id"] = "22222222-2222-4222-8222-222222222222"
+    skipped["symbol"] = "SECOND"
+    skipped["stage"] = "EVIDENCE"
+    wire["evidence"] = [first, skipped]
+    focus = dict(skipped)
+    focus["stage"] = focus_stage
+    wire[focus_field] = [focus]
+    forged_hash = _wire_hash("seven-lens.p4c.candidate-set.v1", wire)
+
+    with pytest.raises(psycopg.Error) as error:
+        p4c_connection.execute(
+            "SELECT public.append_candidate_set(%s, %s)",
+            (forged_hash, psycopg.types.json.Jsonb(wire)),
+        )
+    p4c_connection.rollback()
+    assert error.value.sqlstate == "23514"
+    assert p4c_connection.execute("SELECT count(*) FROM public.candidate_sets").fetchone() == (0,)

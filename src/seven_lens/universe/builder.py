@@ -16,6 +16,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Final
 
+from seven_lens.clock.market_clock import MarketDayKind, MarketSession
 from seven_lens.domain.value_objects import SchemaVersion, TradingDate, UtcTimestamp
 from seven_lens.market_data.snapshots import (
     MIN_ADV20_USD,
@@ -598,6 +599,7 @@ def build_universe(
     identities: tuple[IdentityView, ...],
     quarantines: tuple[QuarantineView, ...],
     markets: tuple[MarketView, ...],
+    sessions: tuple[MarketSession, ...],
     policy_hash: str,
     schema_version: SchemaVersion,
 ) -> UniverseSnapshot:
@@ -610,10 +612,32 @@ def build_universe(
     """
     if type(as_of) is not TradingDate:
         raise ValueError("as_of requires an exact TradingDate")
-    if as_of.value.day != 1:
-        raise ValueError("universe as_of must be the first day of a calendar month")
     if type(known_at) is not UtcTimestamp:
         raise ValueError("known_at requires canonical UTC")
+    if type(sessions) is not tuple or any(
+        type(session) is not MarketSession for session in sessions
+    ):
+        raise ValueError("sessions must be a tuple of explicit MarketSession values")
+    session_by_date = {session.trading_date: session for session in sessions}
+    if len(session_by_date) != len(sessions):
+        raise ValueError("sessions must not repeat a trading date")
+    current = as_of.value.replace(day=1)
+    while current <= as_of.value:
+        session = session_by_date.get(TradingDate(current))
+        if session is None:
+            raise ValueError("NYSE calendar cannot prove the first open session")
+        if current < as_of.value and session.day_kind is not MarketDayKind.CLOSED:
+            raise ValueError("universe as_of is not the first open NYSE session")
+        current += timedelta(days=1)
+    as_of_session = session_by_date[as_of]
+    if as_of_session.day_kind not in (MarketDayKind.REGULAR, MarketDayKind.HALF_DAY):
+        raise ValueError("universe as_of must be an open NYSE session")
+    if (
+        known_at.value.date().year != as_of.value.year
+        or known_at.value.date().month != as_of.value.month
+        or known_at.value.date() < as_of.value
+    ):
+        raise ValueError("universe known_at must be on or after the first open session")
     if type(security_master_version) is not str or not security_master_version:
         raise ValueError("security_master_version requires non-empty text")
     if type(assets) is not tuple or any(type(a) is not AssetObservation for a in assets):
@@ -699,7 +723,7 @@ def build_universe(
     for market in markets:
         market.snapshot.verify_integrity()
         if market.snapshot.as_of.value.date() != as_of.value:
-            raise ValueError("market snapshots must match the universe as_of date")
+            raise ValueError("market snapshots must match the universe first open session")
         if market.snapshot.known_at.value > known_at.value:
             raise ValueError("market snapshots after known_at are not admissible")
         if market.snapshot.security_id != market.security_id:

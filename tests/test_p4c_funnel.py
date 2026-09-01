@@ -22,6 +22,7 @@ from seven_lens.screening.contracts import (
     FactorStatus,
     SectorAssignment,
     _finalize_sector_assignment,
+    build_candidate_set,
     build_feature_vector,
     build_sector_assignment,
 )
@@ -53,6 +54,8 @@ from seven_lens.screening.manifests import (
     ClusterStatus,
     FundamentalConcept,
     SicDivision,
+    cluster_manifest,
+    factor_manifest,
     sector_manifest,
 )
 from seven_lens.securities.contracts import (
@@ -257,11 +260,14 @@ def _session(date: TradingDate) -> MarketSession:
 
 
 def _sessions_for_closes(
-    closes: tuple[SessionClose, ...], *, include_as_of: bool = True
+    closes: tuple[SessionClose, ...],
+    *,
+    include_as_of: bool = True,
+    as_of: UtcTimestamp = _AS_OF,
 ) -> tuple[MarketSession, ...]:
     dates = {close.trading_date for close in closes}
     if include_as_of:
-        dates.add(TradingDate(_AS_OF.value.date()))
+        dates.add(TradingDate(as_of.value.date()))
     return tuple(_session(date) for date in sorted(dates, key=lambda date: date.value))
 
 
@@ -300,7 +306,12 @@ def _decision(security_id: SecurityId, symbol: SecuritySymbol) -> QuarantineDeci
     )
 
 
-def _universe(*, count: int = 100, known_at: UtcTimestamp = _KNOWN) -> UniverseSnapshot:
+def _universe(
+    *,
+    count: int = 100,
+    known_at: UtcTimestamp = _KNOWN,
+    as_of: TradingDate | None = None,
+) -> UniverseSnapshot:
     entries = tuple(
         UniverseEntry(
             security_id=security_id,
@@ -317,7 +328,7 @@ def _universe(*, count: int = 100, known_at: UtcTimestamp = _KNOWN) -> UniverseS
     )
     return _build_universe_snapshot(
         authority=_UNIVERSE_SNAPSHOT_AUTHORITY,
-        as_of=TradingDate(_AS_OF.value.date()),
+        as_of=as_of if as_of is not None else TradingDate(_AS_OF.value.date()),
         known_at=known_at,
         security_master_version=_MASTER_VERSION,
         market_snapshot_refs=(),
@@ -407,8 +418,9 @@ def _closes(
     count: int = 300,
     drift: float = 0.001,
     security_id: SecurityId = _SID_ZERO,
+    as_of: UtcTimestamp = _AS_OF,
 ) -> tuple[SessionClose, ...]:
-    current = _AS_OF.value - timedelta(days=1)
+    current = as_of.value - timedelta(days=1)
     dates: list[datetime] = []
     while len(dates) < count:
         if current.weekday() < 5:
@@ -515,9 +527,16 @@ def _facts(
     return tuple(facts)
 
 
-def _input(n: int, *, base: float = 100.0, ni: float = 1.0e8) -> FactorInput:
+def _input(
+    n: int,
+    *,
+    base: float = 100.0,
+    ni: float = 1.0e8,
+    as_of: UtcTimestamp = _AS_OF,
+    known_at: UtcTimestamp = _KNOWN,
+) -> FactorInput:
     security_id = _sid(n)
-    closes = _closes(base=base, security_id=security_id)
+    closes = _closes(base=base, security_id=security_id, as_of=as_of)
     return FactorInput(
         security_id=security_id,
         symbol=_symbol(n),
@@ -529,10 +548,10 @@ def _input(n: int, *, base: float = 100.0, ni: float = 1.0e8) -> FactorInput:
             currency="USD",
             consolidation="P",
             source_ref=SourceRef(f"shares-{n}", P4SourceFamily.SEC_EDGAR, "b" * 64),
-            available_at=_KNOWN,
+            available_at=known_at,
             security_id=security_id,
         ),
-        sessions=_sessions_for_closes(closes),
+        sessions=_sessions_for_closes(closes, as_of=as_of),
     )
 
 
@@ -1238,6 +1257,35 @@ def test_focus_caps_12_and_5() -> None:
     assert all(e.stage is CandidateStage.FOCUS_CLOSE for e in close_focus)
 
 
+def test_focus_prefix_caps_do_not_pad_short_evidence() -> None:
+    universe = _universe(count=7)
+    vectors = build_feature_vectors(
+        tuple(_input(i) for i in range(7)),
+        as_of=_AS_OF,
+        known_at=_KNOWN,
+        universe=universe,
+    )
+    quant = quant_candidates(vectors, universe=universe)
+    evidence = evidence_candidates(
+        quant,
+        tuple(_view(entry) for entry in quant),
+        sector_division=_sectors(quant),
+        identity_records=_identities_for(quant),
+        as_of=_AS_OF,
+        universe=universe,
+    )
+
+    open_focus = focus_candidates(evidence, FocusWindow.OPEN_PLUS_60M)
+    close_focus = focus_candidates(evidence, FocusWindow.CLOSE_MINUS_90M)
+    assert len(evidence) == 7
+    assert tuple(entry.security_id for entry in open_focus) == tuple(
+        entry.security_id for entry in evidence
+    )
+    assert tuple(entry.security_id for entry in close_focus) == tuple(
+        entry.security_id for entry in evidence[:FOCUS_CLOSE_CAP]
+    )
+
+
 def test_full_funnel_caps_and_ten_permutations_are_canonical() -> None:
     inputs = tuple(_input(i, base=100.0 + i, ni=1.0e8 + i * 1.0e6) for i in range(QUANT_CAP + 1))
     universe = _universe(count=QUANT_CAP + 1)
@@ -1284,6 +1332,73 @@ def test_full_funnel_caps_and_ten_permutations_are_canonical() -> None:
     assert tuple(entry.security_id for entry in focus_close) == tuple(
         entry.security_id for entry in evidence[:FOCUS_CLOSE_CAP]
     )
+
+
+def test_candidate_set_accepts_only_the_canonical_evidence_focus_prefix() -> None:
+    inputs = tuple(_input(i, base=100.0 + i, ni=1.0e8 + i * 1.0e6) for i in range(QUANT_CAP + 1))
+    universe = _universe(count=QUANT_CAP + 1)
+    vectors = build_feature_vectors(inputs, as_of=_AS_OF, known_at=_KNOWN, universe=universe)
+    quant = quant_candidates(vectors, universe=universe)
+    evidence = evidence_candidates(
+        quant,
+        tuple(_view(entry) for entry in quant),
+        sector_division=_sectors(quant),
+        identity_records=_identities_for(quant),
+        as_of=_AS_OF,
+        universe=universe,
+    )
+    assert len(evidence) == EVIDENCE_CAP
+
+    focus_open = focus_candidates(evidence, FocusWindow.OPEN_PLUS_60M)
+    focus_close = focus_candidates(evidence, FocusWindow.CLOSE_MINUS_90M)
+    candidate = build_candidate_set(
+        as_of=_AS_OF,
+        known_at=_KNOWN,
+        factor_manifest_hash=factor_manifest().manifest_hash,
+        cluster_manifest_hash=cluster_manifest().manifest_hash,
+        universe_hash=universe.universe_hash,
+        quant=quant,
+        evidence=evidence,
+        focus_open=focus_open,
+        focus_close=focus_close,
+        policy_hash="a" * 64,
+        producer_version="p4c.screening.v1",
+        schema_version=_SCHEMA,
+        feature_vectors=vectors,
+    )
+    assert candidate.focus_open == focus_open
+    assert candidate.focus_close == focus_close
+
+    for wrong_focus, field_name, message in (
+        (
+            focus_candidates(evidence[10:22], FocusWindow.OPEN_PLUS_60M),
+            "focus_open",
+            "focus_open",
+        ),
+        (
+            focus_candidates(evidence[1:6], FocusWindow.CLOSE_MINUS_90M),
+            "focus_close",
+            "focus_close",
+        ),
+    ):
+        values = {
+            "as_of": _AS_OF,
+            "known_at": _KNOWN,
+            "factor_manifest_hash": factor_manifest().manifest_hash,
+            "cluster_manifest_hash": cluster_manifest().manifest_hash,
+            "universe_hash": universe.universe_hash,
+            "quant": quant,
+            "evidence": evidence,
+            "focus_open": focus_open,
+            "focus_close": focus_close,
+            "policy_hash": "a" * 64,
+            "producer_version": "p4c.screening.v1",
+            "schema_version": _SCHEMA,
+            "feature_vectors": vectors,
+        }
+        values[field_name] = wrong_focus
+        with pytest.raises(ValueError, match=f"{message} must equal the canonical evidence prefix"):
+            build_candidate_set(**values)
 
 
 def test_permutation_byte_identical() -> None:
@@ -1812,3 +1927,100 @@ def test_shares_observation_at_split_availability_boundary_is_complete() -> None
         (announced_only,), as_of=_AS_OF, known_at=_KNOWN, universe=universe
     )[0]
     assert vector2.status is FactorStatus.COMPLETE
+
+
+def test_feature_vectors_accept_same_month_universe_on_later_day() -> None:
+    """A June 1 monthly universe serves the June 2 screening cutoff once its
+    known_at is at or before that cutoff; exact-date equality is not the
+    availability contract."""
+    universe = _universe(
+        count=1,
+        known_at=UtcTimestamp.from_isoformat("2026-06-02T20:00:00.000000Z"),
+    )
+    cutoff = UtcTimestamp.from_isoformat("2026-06-02T20:00:00.000000Z")
+    vectors = build_feature_vectors(
+        (_input(0, as_of=cutoff, known_at=cutoff),),
+        as_of=cutoff,
+        known_at=cutoff,
+        universe=universe,
+    )
+    assert vectors[0].status is FactorStatus.COMPLETE
+
+
+def test_evidence_candidates_accept_same_month_universe_on_later_day() -> None:
+    universe = _universe(
+        count=1,
+        known_at=UtcTimestamp.from_isoformat("2026-06-02T20:00:00.000000Z"),
+    )
+    cutoff = UtcTimestamp.from_isoformat("2026-06-02T20:00:00.000000Z")
+    vectors = build_feature_vectors(
+        (_input(0, as_of=cutoff, known_at=cutoff),),
+        as_of=cutoff,
+        known_at=cutoff,
+        universe=universe,
+    )
+    quant = quant_candidates(vectors, universe=universe)
+    evidence = evidence_candidates(
+        quant,
+        [_view(entry) for entry in quant],
+        sector_division=_sectors(quant),
+        identity_records=_identities_for(quant),
+        as_of=cutoff,
+        universe=universe,
+    )
+    assert len(evidence) == 1
+
+
+def test_screening_cutoff_before_universe_known_at_fails_closed() -> None:
+    universe = _universe(
+        count=1,
+        known_at=UtcTimestamp.from_isoformat("2026-08-03T15:00:00.000000Z"),
+        as_of=TradingDate.from_isoformat("2026-08-03"),
+    )
+    cutoff = UtcTimestamp.from_isoformat("2026-08-03T14:59:59.000000Z")
+    with pytest.raises(ValueError, match="universe was not available by screening cutoff"):
+        build_feature_vectors((_input(0),), as_of=cutoff, known_at=cutoff, universe=universe)
+
+
+def test_evidence_cutoff_before_universe_known_at_fails_closed() -> None:
+    universe = _universe(
+        count=1,
+        known_at=UtcTimestamp.from_isoformat("2026-08-03T15:00:00.000000Z"),
+        as_of=TradingDate.from_isoformat("2026-08-03"),
+    )
+    cutoff = UtcTimestamp.from_isoformat("2026-08-03T14:59:59.000000Z")
+    with pytest.raises(ValueError, match="universe was not available by screening cutoff"):
+        evidence_candidates(
+            (),
+            (),
+            sector_division={},
+            identity_records={},
+            as_of=cutoff,
+            universe=universe,
+        )
+
+
+def test_cross_month_universe_is_rejected_for_screening() -> None:
+    universe = _universe(count=1)
+    july_cutoff = UtcTimestamp.from_isoformat("2026-07-01T20:00:00.000000Z")
+    with pytest.raises(ValueError, match="universe month does not match screening cutoff"):
+        build_feature_vectors(
+            (_input(0),),
+            as_of=july_cutoff,
+            known_at=july_cutoff,
+            universe=universe,
+        )
+
+
+def test_cross_month_universe_is_rejected_for_evidence() -> None:
+    universe = _universe(count=1)
+    july_cutoff = UtcTimestamp.from_isoformat("2026-07-01T20:00:00.000000Z")
+    with pytest.raises(ValueError, match="universe month does not match screening cutoff"):
+        evidence_candidates(
+            (),
+            (),
+            sector_division={},
+            identity_records={},
+            as_of=july_cutoff,
+            universe=universe,
+        )

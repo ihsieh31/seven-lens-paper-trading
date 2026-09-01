@@ -49,8 +49,10 @@ from seven_lens.universe.builder import (
     MarketView,
     QuarantineView,
     asset_observation_from_records,
-    build_universe,
     identity_view_from_records,
+)
+from seven_lens.universe.builder import (
+    build_universe as _build_universe_authority,
 )
 from seven_lens.universe.contracts import (
     MAX_UNIVERSE_SNAPSHOT_BYTES,
@@ -70,6 +72,37 @@ _SEC2 = SecurityId("22222222-2222-4222-8222-222222222222")
 _SYM2 = SecuritySymbol("TST2")
 _SEC3 = SecurityId("33333333-3333-4333-8333-333333333333")
 _SYM3 = SecuritySymbol("TST3")
+
+
+def _universe_sessions(as_of: TradingDate) -> tuple[MarketSession, ...]:
+    sessions: list[MarketSession] = []
+    current = as_of.value.replace(day=1)
+    while current <= as_of.value:
+        trading_date = TradingDate(current)
+        if current.weekday() >= 5:
+            sessions.append(MarketSession(trading_date, MarketDayKind.CLOSED, None))
+        else:
+            start = datetime.combine(current, datetime.min.time(), tzinfo=UTC)
+            sessions.append(
+                MarketSession(
+                    trading_date,
+                    MarketDayKind.REGULAR,
+                    RegularSessionWindow(
+                        UtcTimestamp(start + timedelta(hours=13, minutes=30)),
+                        UtcTimestamp(start + timedelta(hours=20)),
+                    ),
+                )
+            )
+        current += timedelta(days=1)
+    return tuple(sessions)
+
+
+def build_universe(**values: object) -> UniverseSnapshot:
+    as_of = values.get("as_of")
+    assert type(as_of) is TradingDate
+    values.setdefault("sessions", _universe_sessions(as_of))
+    return _build_universe_authority(**values)  # type: ignore[arg-type]
+
 
 _MASTER_VERSION = "p4b.securities.v1:" + "a" * 64
 _MARKET_AS_OF = UtcTimestamp.from_isoformat("2026-06-01T14:00:00.000000Z")
@@ -136,7 +169,7 @@ def _asset(
         asset_record,
         exchange_record,
         identity=identity,
-        known_at=max(_KNOWN_AT, observed_at, key=lambda value: value.value),
+        known_at=observed_at if observed_at.value > _KNOWN_AT.value else _KNOWN_AT,
     )
 
 
@@ -216,6 +249,8 @@ def _identity(
     resolved: bool = True,
     symbol: SecuritySymbol | None = None,
     observed_at: UtcTimestamp = _KNOWN_AT,
+    as_of: TradingDate = _AS_OF,
+    known_at: UtcTimestamp = _KNOWN_AT,
 ) -> IdentityView:
     symbols = {_SEC: _SYM, _SEC2: _SYM2, _SEC3: _SYM3}
     resolved_symbol = symbol if symbol is not None else symbols.get(security_id, _SYM)
@@ -237,8 +272,8 @@ def _identity(
     return identity_view_from_records(
         (record,),
         security_id=security_id,
-        as_of=UtcTimestamp(datetime.combine(_AS_OF.value, datetime.min.time(), tzinfo=UTC)),
-        known_at=_KNOWN_AT,
+        as_of=UtcTimestamp(datetime.combine(as_of.value, datetime.min.time(), tzinfo=UTC)),
+        known_at=known_at,
     )
 
 
@@ -272,13 +307,19 @@ def _quarantine(
     master_version: str | None = None,
     observed_at: UtcTimestamp = _KNOWN_AT,
 ) -> QuarantineView:
-    identity = _identity(security_id, symbol=symbol, observed_at=observed_at)
+    identity = _identity(
+        security_id,
+        symbol=symbol,
+        observed_at=observed_at,
+        as_of=TradingDate(observed_at.value.date()),
+        known_at=observed_at,
+    )
     decision = evaluate_quarantine(
         query=QuarantineQuery(
             purpose=QuarantinePurpose.CANDIDATE_CREATION,
             security_id=security_id,
             symbol_as_of=identity.symbol,
-            decision_at=_KNOWN_AT,
+            decision_at=observed_at,
             master_version=master_version_for(identity.record),
         ),
         identity_records=(identity.record,),
@@ -299,14 +340,20 @@ def _market(security_id: SecurityId = _SEC, **overrides: object) -> MarketView:
     trading_history_sessions = overrides.pop("trading_history_sessions", 300)
     freshness_ok = overrides.pop("freshness_ok", True)
     spread_ok = overrides.pop("spread_ok", True)
+    as_of_text = overrides.pop("as_of", "2026-06-01T14:00:00.000000Z")
     if overrides:
         raise AssertionError(f"unexpected market overrides: {sorted(overrides)}")
     if type(price) is not Decimal or type(adv20_usd) is not Decimal:
         raise AssertionError("test market values must be Decimal")
     if type(trading_history_sessions) is not int:
         raise AssertionError("test trading history must be an integer")
+    if type(as_of_text) is not str:
+        raise AssertionError("test market as_of must be timestamp text")
+    market_as_of = UtcTimestamp.from_isoformat(as_of_text)
     sessions: list[MarketSession] = []
-    current = datetime(2026, 6, 1, tzinfo=UTC)
+    current = datetime(
+        market_as_of.value.year, market_as_of.value.month, market_as_of.value.day, tzinfo=UTC
+    )
     while len(sessions) < trading_history_sessions + 1:
         if current.weekday() < 5:
             date = TradingDate(current.date())
@@ -330,11 +377,11 @@ def _market(security_id: SecurityId = _SEC, **overrides: object) -> MarketView:
             close=bar_close,
         )
         for session in ordered_sessions
-        if session.trading_date.value < _MARKET_AS_OF.value.date()
+        if session.trading_date.value < market_as_of.value.date()
     )
-    observed_at = _MARKET_AS_OF
+    observed_at = market_as_of
     if not freshness_ok:
-        observed_at = UtcTimestamp.from_isoformat("2026-06-01T13:59:00.000000Z")
+        observed_at = UtcTimestamp(market_as_of.value - timedelta(minutes=1))
     ask = price if spread_ok else price + Decimal("0.32")
     quote_record = build_normalized_record(
         record_id=f"quote-{security_id.value[:8]}",
@@ -357,8 +404,8 @@ def _market(security_id: SecurityId = _SEC, **overrides: object) -> MarketView:
     snapshot = assemble_market_snapshot(
         security_id=security_id,
         symbol=symbols.get(security_id, _SYM),
-        as_of=_MARKET_AS_OF,
-        known_at=_MARKET_AS_OF,
+        as_of=market_as_of,
+        known_at=market_as_of,
         quote=quote_input_from_record(quote_record),
         bars=bars,
         sessions=ordered_sessions,
@@ -773,3 +820,111 @@ def test_direct_universe_snapshot_constructor_is_not_an_authority() -> None:
 def test_universe_snapshot_canonical_wire_byte_bound_is_closed() -> None:
     with pytest.raises(ValueError, match="canonical wire exceeds"):
         _canonical_universe_wire_bytes({"payload": "x" * (MAX_UNIVERSE_SNAPSHOT_BYTES + 1)})
+
+
+def test_weekend_month_start_universe_uses_first_open_session() -> None:
+    """2026-08-01 is Saturday, so the authoritative as_of is 2026-08-03."""
+    observed_at = UtcTimestamp.from_isoformat("2026-08-03T20:00:00.000000Z")
+    first_open = TradingDate.from_isoformat("2026-08-03")
+    snap = build_universe(
+        as_of=first_open,
+        known_at=observed_at,
+        security_master_version=_MASTER_VERSION,
+        assets=(_asset(observed_at=observed_at),),
+        identities=(_identity(observed_at=observed_at, as_of=first_open, known_at=observed_at),),
+        quarantines=(_quarantine(observed_at=observed_at),),
+        markets=(_market(as_of="2026-08-03T14:00:00.000000Z"),),
+        policy_hash=_POLICY_HASH,
+        schema_version=_SCHEMA,
+    )
+    assert snap.as_of.value.isoformat() == "2026-08-03"
+    assert snap.known_at.value.date().isoformat() == "2026-08-03"
+    assert snap.verify_integrity()
+
+
+def test_universe_builder_fails_closed_when_calendar_cannot_prove_first_open() -> None:
+    observed_at = UtcTimestamp.from_isoformat("2026-08-03T20:00:00.000000Z")
+    first_open = TradingDate.from_isoformat("2026-08-03")
+    with pytest.raises(ValueError, match="cannot prove"):
+        _build_universe_authority(
+            as_of=first_open,
+            known_at=observed_at,
+            security_master_version=_MASTER_VERSION,
+            assets=(),
+            identities=(),
+            quarantines=(),
+            markets=(),
+            sessions=(_universe_sessions(first_open)[-1],),
+            policy_hash=_POLICY_HASH,
+            schema_version=_SCHEMA,
+        )
+
+
+def test_universe_builder_rejects_calendar_first_day_when_closed() -> None:
+    observed_at = UtcTimestamp.from_isoformat("2026-08-03T20:00:00.000000Z")
+    with pytest.raises(ValueError, match="must be an open NYSE session"):
+        _build_universe_authority(
+            as_of=TradingDate.from_isoformat("2026-08-01"),
+            known_at=observed_at,
+            security_master_version=_MASTER_VERSION,
+            assets=(),
+            identities=(),
+            quarantines=(),
+            markets=(),
+            sessions=_universe_sessions(TradingDate.from_isoformat("2026-08-01")),
+            policy_hash=_POLICY_HASH,
+            schema_version=_SCHEMA,
+        )
+
+
+def test_known_at_across_month_boundary_is_rejected() -> None:
+    first_open = TradingDate.from_isoformat("2026-08-03")
+    known_at = UtcTimestamp.from_isoformat("2026-09-01T20:00:00.000000Z")
+    with pytest.raises(ValueError, match="known_at must be on or after"):
+        build_universe(
+            as_of=first_open,
+            known_at=known_at,
+            security_master_version=_MASTER_VERSION,
+            assets=(_asset(),),
+            identities=(_identity(as_of=first_open, known_at=known_at),),
+            quarantines=(_quarantine(),),
+            markets=(),
+            policy_hash=_POLICY_HASH,
+            schema_version=_SCHEMA,
+        )
+
+
+def test_market_snapshot_from_first_open_session_is_admissible() -> None:
+    observed_at = UtcTimestamp.from_isoformat("2026-08-03T20:00:00.000000Z")
+    first_open = TradingDate.from_isoformat("2026-08-03")
+    snap = build_universe(
+        as_of=first_open,
+        known_at=observed_at,
+        security_master_version=_MASTER_VERSION,
+        assets=(_asset(observed_at=observed_at),),
+        identities=(_identity(observed_at=observed_at, as_of=first_open, known_at=observed_at),),
+        quarantines=(_quarantine(observed_at=observed_at),),
+        markets=(_market(as_of="2026-08-03T14:00:00.000000Z"),),
+        policy_hash=_POLICY_HASH,
+        schema_version=_SCHEMA,
+    )
+    assert snap.entries[0].eligible
+
+
+def test_market_snapshot_from_next_month_is_rejected() -> None:
+    observed_at = UtcTimestamp.from_isoformat("2026-08-03T20:00:00.000000Z")
+    first_open = TradingDate.from_isoformat("2026-08-03")
+    with pytest.raises(ValueError, match="must match the universe first open session"):
+        build_universe(
+            as_of=first_open,
+            known_at=observed_at,
+            security_master_version=_MASTER_VERSION,
+            assets=(_asset(observed_at=observed_at),),
+            identities=(
+                _identity(observed_at=observed_at, as_of=first_open, known_at=observed_at),
+            ),
+            quarantines=(_quarantine(observed_at=observed_at),),
+            markets=(_market(as_of="2026-09-01T14:00:00.000000Z"),),
+            policy_hash=_POLICY_HASH,
+            schema_version=_SCHEMA,
+        )

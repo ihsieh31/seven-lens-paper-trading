@@ -30,8 +30,6 @@ from seven_lens.market_data.snapshots import (
 )
 from seven_lens.screening.contracts import (
     EVIDENCE_CAP,
-    FOCUS_CLOSE_CAP,
-    FOCUS_OPEN_CAP,
     QUANT_CAP,
     CandidateEntry,
     CandidateStage,
@@ -39,6 +37,7 @@ from seven_lens.screening.contracts import (
     FeatureVector,
     RawFeature,
     SectorAssignment,
+    _expected_focus_from_evidence,
     _finalize_candidate_entry,
     _finalize_feature_vector,
 )
@@ -1641,6 +1640,26 @@ def _reconstruct_factor_input(**values: object) -> FactorInput:
     return _finalize_factor_input(**values)
 
 
+def _validate_universe_available_for_cutoff(
+    universe: UniverseSnapshot,
+    cutoff: UtcTimestamp,
+) -> None:
+    """Enforce the monthly-universe availability contract for one screening cutoff.
+
+    The universe ``as_of`` is the month's first open NYSE session.  It serves
+    later daily cutoffs in that month only after it became known.
+    """
+    universe.verify_integrity()
+    if (
+        universe.as_of.value.year != cutoff.value.year
+        or universe.as_of.value.month != cutoff.value.month
+        or universe.as_of.value > cutoff.value.date()
+    ):
+        raise ValueError("universe month does not match screening cutoff")
+    if universe.known_at.value > cutoff.value:
+        raise ValueError("universe was not available by screening cutoff")
+
+
 def build_feature_vectors(
     inputs: Sequence[FactorInput],
     *,
@@ -1667,9 +1686,7 @@ def build_feature_vectors(
         raise ValueError("known_at requires canonical UTC")
     if type(universe) is not UniverseSnapshot:
         raise ValueError("universe requires an exact UniverseSnapshot")
-    universe.verify_integrity()
-    if universe.as_of.value != as_of.value.date():
-        raise ValueError("universe as_of date must match feature-vector as_of")
+    _validate_universe_available_for_cutoff(universe, as_of)
     if universe.known_at.value > known_at.value:
         raise ValueError("universe is not visible at the feature-vector cutoff")
     if known_at.value > as_of.value:
@@ -2108,10 +2125,7 @@ def evidence_candidates(
         raise ValueError("evidence_views cannot introduce a security outside quant")
     if type(as_of) is not UtcTimestamp:
         raise ValueError("as_of requires canonical UTC")
-    if universe.as_of.value != as_of.value.date():
-        raise ValueError("universe as_of date must match evidence as_of")
-    if universe.known_at.value > as_of.value:
-        raise ValueError("universe is not visible at evidence as_of")
+    _validate_universe_available_for_cutoff(universe, as_of)
 
     if isinstance(identity_records, Mapping):
         identity_items = tuple(identity_records.items())
@@ -2272,32 +2286,12 @@ def focus_candidates(
     evidence_tuple = _validated_candidate_sequence(
         evidence, stage=CandidateStage.EVIDENCE, label="evidence"
     )
-    cap = FOCUS_OPEN_CAP if window is FocusWindow.OPEN_PLUS_60M else FOCUS_CLOSE_CAP
-    kept = list(evidence_tuple)[:cap]
     stage = (
         CandidateStage.FOCUS_OPEN
         if window is FocusWindow.OPEN_PLUS_60M
         else CandidateStage.FOCUS_CLOSE
     )
-    return tuple(
-        _finalize_candidate_entry(
-            security_id=e.security_id,
-            symbol=e.symbol,
-            composite=e.composite,
-            trend=e.trend,
-            quality=e.quality,
-            value=e.value,
-            low_risk=e.low_risk,
-            stage=stage,
-            feature_hash=e.feature_hash,
-            universe_hash=e.universe_hash,
-            quarantine_decision_hash=e.quarantine_decision_hash,
-            sector_assignment_hash=e.sector_assignment_hash,
-            evidence_source_refs=e.evidence_source_refs,
-            reasons=e.reasons,
-        )
-        for e in kept
-    )
+    return _expected_focus_from_evidence(evidence_tuple, stage=stage)
 
 
 @dataclass(frozen=True, slots=True)
