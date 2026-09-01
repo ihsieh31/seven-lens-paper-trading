@@ -60,7 +60,7 @@ from seven_lens.securities.contracts import (
 )
 from seven_lens.securities.quarantine import QuarantineDecision, QuarantineOutcome
 from seven_lens.sources.adapters.records import NormalizedSourceRecord
-from seven_lens.sources.roles import P4SourceFamily
+from seven_lens.sources.roles import P4SourceFamily, SourceRole
 from seven_lens.universe.contracts import UniverseSnapshot
 
 _FORMULA_VERSION: Final = "p4-factor-v1.0"
@@ -2093,8 +2093,8 @@ class EvidenceView:
         if type(self.quarantine_decision) is not QuarantineDecision:
             raise ValueError("quarantine_decision requires an exact QuarantineDecision")
         self.quarantine_decision.verify_integrity()
-        if type(self.evidence_source_refs) is not tuple or not self.evidence_source_refs:
-            raise ValueError("evidence_source_refs require at least one typed SourceRef")
+        if type(self.evidence_source_refs) is not tuple:
+            raise ValueError("evidence_source_refs require a tuple")
         if any(type(ref) is not SourceRef for ref in self.evidence_source_refs):
             raise ValueError("evidence_source_refs require exact SourceRef values")
         if len({ref.record_id for ref in self.evidence_source_refs}) != len(
@@ -2127,7 +2127,7 @@ def _evidence_view_fingerprint(value: EvidenceView) -> tuple[object, ...]:
 
 
 def _finalize_evidence_view(**values: object) -> EvidenceView:
-    """Finalize typed evidence metadata from the trusted evidence assembler."""
+    """Private trusted finalizer; normal callers must use evidence_view_from_packet."""
     body = dict(values)
     body.pop("_authority", None)
     provisional = object.__new__(EvidenceView)
@@ -2140,6 +2140,205 @@ def _finalize_evidence_view(**values: object) -> EvidenceView:
 def _reconstruct_evidence_view(**values: object) -> EvidenceView:
     """Reconstruct typed evidence metadata after DB/source validation."""
     return _finalize_evidence_view(**values)
+
+
+@dataclass(frozen=True, slots=True)
+class EvidencePacket:
+    """Exact typed inputs for deterministic P4-C evidence assembly."""
+
+    security_id: SecurityId
+    source_records: tuple[NormalizedSourceRecord, ...]
+    identity: SecurityIdentityRecord
+    universe: UniverseSnapshot
+    quarantine_decision: QuarantineDecision
+    cutoff: UtcTimestamp
+
+    def __post_init__(self) -> None:
+        if type(self.security_id) is not SecurityId:
+            raise ValueError("security_id requires an exact SecurityId")
+        if type(self.source_records) is not tuple or any(
+            type(record) is not NormalizedSourceRecord for record in self.source_records
+        ):
+            raise ValueError("source_records require exact NormalizedSourceRecord values")
+        if type(self.identity) is not SecurityIdentityRecord:
+            raise ValueError("identity requires an exact SecurityIdentityRecord")
+        if type(self.universe) is not UniverseSnapshot:
+            raise ValueError("universe requires an exact UniverseSnapshot")
+        if type(self.quarantine_decision) is not QuarantineDecision:
+            raise ValueError("quarantine_decision requires an exact QuarantineDecision")
+        if type(self.cutoff) is not UtcTimestamp:
+            raise ValueError("cutoff requires canonical UTC")
+
+
+def _record_payload(record: NormalizedSourceRecord) -> dict[str, object]:
+    payload = record.wire()["payload"]
+    if type(payload) is not dict:
+        raise ValueError("normalized source payload must be an object")
+    return cast(dict[str, object], payload)
+
+
+def _record_matches_identity(
+    record: NormalizedSourceRecord,
+    identity: SecurityIdentityRecord,
+) -> bool:
+    """Bind only adapter-defined typed identity fields; never infer from text."""
+    payload = _record_payload(record)
+    family = record.family
+    if family is P4SourceFamily.SEC_EDGAR:
+        if identity.cik is None or payload.get("cik") != identity.cik.value:
+            raise ValueError("SEC evidence CIK does not match the security identity")
+        return True
+    if family is P4SourceFamily.ALPACA_ASSETS:
+        if (
+            payload.get("id") != identity.security_id.value
+            or payload.get("symbol") != identity.symbol.value
+        ):
+            raise ValueError("Alpaca asset evidence does not match the security identity")
+        return True
+    if family in (
+        P4SourceFamily.ALPACA_HISTORICAL_BARS,
+        P4SourceFamily.ALPACA_IEX_QUOTES,
+    ):
+        if payload.get("symbol") != identity.symbol.value:
+            raise ValueError("Alpaca market evidence does not match the security identity")
+        return True
+    if family is P4SourceFamily.ALPACA_CORPORATE_ACTIONS:
+        cusip = payload.get("cusip")
+        if cusip is not None:
+            if identity.cusip is None or cusip != identity.cusip.value:
+                raise ValueError("Alpaca corporate-action CUSIP does not match identity")
+        elif payload.get("symbol") != identity.symbol.value:
+            raise ValueError("Alpaca corporate-action symbol does not match identity")
+        return True
+    if family is P4SourceFamily.EXCHANGE_OFFICIAL and payload.get("symbol") is not None:
+        if payload.get("symbol") != identity.symbol.value:
+            raise ValueError("exchange evidence symbol does not match the security identity")
+        return True
+    return False
+
+
+def _material_subject(record: NormalizedSourceRecord) -> tuple[object, ...]:
+    payload = _record_payload(record)
+    return (
+        record.family,
+        record.endpoint_id,
+        payload.get("cik"),
+        payload.get("symbol"),
+        payload.get("concept"),
+        payload.get("accession"),
+        payload.get("start"),
+        payload.get("end"),
+        payload.get("ex_date"),
+        record.observation_at,
+        record.effective_at,
+        record.vintage,
+    )
+
+
+def _has_unsanitized_material_text(record: NormalizedSourceRecord) -> bool:
+    if not record.material_claim:
+        return False
+    payload = _record_payload(record)
+    free_text_keys = {"body", "content", "excerpt", "statement", "summary", "text", "title"}
+    return any(key in payload and type(payload[key]) is str for key in free_text_keys)
+
+
+def evidence_view_from_packet(*, packet: EvidencePacket) -> EvidenceView:
+    """Derive every evidence gate and ref from typed production authority."""
+    if type(packet) is not EvidencePacket:
+        raise ValueError("packet requires an exact EvidencePacket")
+
+    security_id = packet.security_id
+    identity = packet.identity
+    universe = packet.universe
+    quarantine_decision = packet.quarantine_decision
+    cutoff = packet.cutoff
+    identity.verify_integrity()
+    universe.verify_integrity()
+    quarantine_decision.verify_integrity()
+    if identity.security_id != security_id:
+        raise ValueError("identity security does not match the requested security")
+    if not identity.answers_as_of(as_of=cutoff, known_at=cutoff):
+        raise ValueError("identity is not authoritative at the evidence cutoff")
+    if quarantine_decision.security_id != security_id:
+        raise ValueError("quarantine decision security does not match the requested security")
+    if (
+        quarantine_decision.symbol_as_of != identity.symbol
+        or quarantine_decision.decision_at.value > cutoff.value
+        or quarantine_decision.outcome is not QuarantineOutcome.ELIGIBLE
+    ):
+        raise ValueError("quarantine decision does not authorize evidence at the cutoff")
+    _validate_universe_available_for_cutoff(universe, cutoff)
+    matching_entries = tuple(
+        entry for entry in universe.entries if entry.security_id == security_id
+    )
+    if len(matching_entries) != 1:
+        raise ValueError("evidence security must have exactly one universe entry")
+    universe_entry = matching_entries[0]
+    if (
+        not universe_entry.eligible
+        or universe_entry.symbol != identity.symbol
+        or universe_entry.identity_hash != identity.identity_hash
+        or universe_entry.quarantine_decision_hash != quarantine_decision.decision_hash
+    ):
+        raise ValueError("universe, identity, and quarantine authority do not match")
+
+    visible: list[NormalizedSourceRecord] = []
+    for record in packet.source_records:
+        record.verify_integrity()
+        available_at = record.available_at or record.retrieved_at
+        if available_at.value > cutoff.value:
+            continue
+        if record.family not in _EVIDENCE_SOURCE_FAMILIES:
+            continue
+        if _record_matches_identity(record, identity):
+            visible.append(record)
+
+    superseded_hashes = {
+        record.supersedes_content_hash
+        for record in visible
+        if record.supersedes_content_hash is not None
+    }
+    current = tuple(record for record in visible if record.content_hash not in superseded_hashes)
+    children_by_parent: dict[str, list[NormalizedSourceRecord]] = {}
+    for record in visible:
+        if record.supersedes_content_hash is not None:
+            children_by_parent.setdefault(record.supersedes_content_hash, []).append(record)
+    ambiguous_supersession = any(len(children) > 1 for children in children_by_parent.values())
+
+    claims_by_subject: dict[tuple[object, ...], set[str]] = {}
+    for record in current:
+        if record.material_claim and record.role in (SourceRole.AUTHORITY, SourceRole.CONFIRMATION):
+            claims_by_subject.setdefault(_material_subject(record), set()).add(
+                record.payload.to_json()
+            )
+    evidence_conflict = ambiguous_supersession or any(
+        len(claims) > 1 for claims in claims_by_subject.values()
+    )
+    authority_complete = any(
+        record.material_claim and record.role is SourceRole.AUTHORITY for record in current
+    )
+    evidence_fresh = not ambiguous_supersession
+    prompt_injection_unresolved = any(_has_unsanitized_material_text(record) for record in current)
+
+    evidence_source_refs = tuple(
+        sorted(
+            {SourceRef(record.record_id, record.family, record.record_hash) for record in current},
+            key=lambda ref: (ref.family.value, ref.record_id, ref.record_hash),
+        )
+    )
+    if len(evidence_source_refs) > 64:
+        raise ValueError("evidence refs exceed the fail-closed limit")
+
+    return _finalize_evidence_view(
+        security_id=security_id,
+        authority_complete=authority_complete,
+        evidence_fresh=evidence_fresh,
+        evidence_conflict=evidence_conflict,
+        prompt_injection_unresolved=prompt_injection_unresolved,
+        quarantine_decision=quarantine_decision,
+        evidence_source_refs=evidence_source_refs,
+    )
 
 
 def evidence_candidates(
