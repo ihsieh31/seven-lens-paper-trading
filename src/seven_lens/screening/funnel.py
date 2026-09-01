@@ -536,11 +536,17 @@ def session_closes_from_record(
         authority = bar._authority
         if authority is None:
             raise ValueError("daily bar is missing its source authority")
+        applied_splits = tuple(
+            split for split in visible_splits if bar.trading_date.value < split.ex_date.value
+        )
         values: dict[str, object] = {
             "trading_date": bar.trading_date,
-            "close": _adjusted_close_value(bar.close, bar.trading_date, visible_splits),
+            "close": _adjusted_close_value(bar.close, bar.trading_date, applied_splits),
             "source_ref": bar.source_ref,
-            "available_at": bar.available_at,
+            "available_at": max(
+                (bar.available_at, *(split.available_at for split in applied_splits)),
+                key=lambda timestamp: timestamp.value,
+            ),
             "security_id": bar.security_id,
         }
         closes.append(
@@ -2185,7 +2191,7 @@ def _record_matches_identity(
     payload = _record_payload(record)
     family = record.family
     if family is P4SourceFamily.SEC_EDGAR:
-        if identity.cik is None or payload.get("cik") != identity.cik.value:
+        if identity.cik is None or payload.get("cik_padded") != identity.cik.value:
             raise ValueError("SEC evidence CIK does not match the security identity")
         return True
     if family is P4SourceFamily.ALPACA_ASSETS:
@@ -2217,22 +2223,84 @@ def _record_matches_identity(
     return False
 
 
-def _material_subject(record: NormalizedSourceRecord) -> tuple[object, ...]:
+def _material_subject(record: NormalizedSourceRecord) -> tuple[object, ...] | None:
+    """Return the canonical typed claim subject for a production adapter record.
+
+    ``material_claim`` describes direct, citation-bearing text in the P4-A
+    record contract. Deterministic structured adapter observations therefore
+    keep it false. P4-C material eligibility instead closes over the immutable
+    family role and the exact typed payload produced by each supported adapter.
+    """
     payload = _record_payload(record)
-    return (
-        record.family,
-        record.endpoint_id,
-        payload.get("cik"),
-        payload.get("symbol"),
-        payload.get("concept"),
-        payload.get("accession"),
-        payload.get("start"),
-        payload.get("end"),
-        payload.get("ex_date"),
-        record.observation_at,
-        record.effective_at,
-        record.vintage,
-    )
+    if record.family is P4SourceFamily.SEC_EDGAR:
+        cik = payload.get("cik_padded")
+        if type(cik) is not str:
+            return None
+        if record.endpoint_id == "submissions":
+            if type(payload.get("sic")) is str:
+                return (record.family, record.endpoint_id, "sic", cik)
+            accession = payload.get("accession_number")
+            if type(accession) is str:
+                return (record.family, record.endpoint_id, "filing", cik, accession)
+            return None
+        if record.endpoint_id == "companyfacts":
+            required = (
+                payload.get("taxonomy"),
+                payload.get("concept"),
+                payload.get("unit"),
+                payload.get("value"),
+                payload.get("end"),
+                payload.get("accession"),
+            )
+            if any(type(value) is not str for value in required):
+                return None
+            return (
+                record.family,
+                record.endpoint_id,
+                cik,
+                payload["taxonomy"],
+                payload["concept"],
+                payload["unit"],
+                payload.get("start"),
+                payload["end"],
+            )
+        return None
+    if record.family is P4SourceFamily.ALPACA_ASSETS:
+        if type(payload.get("id")) is not str or type(payload.get("symbol")) is not str:
+            return None
+        return (record.family, record.endpoint_id, payload["id"], payload["symbol"])
+    if record.family is P4SourceFamily.ALPACA_CORPORATE_ACTIONS:
+        identity_value = payload.get("cusip") or payload.get("symbol")
+        if (
+            type(identity_value) is not str
+            or payload.get("supported") is not True
+            or payload.get("complete") is not True
+            or payload.get("detection_only") is not True
+            or type(payload.get("ex_date")) is not str
+        ):
+            return None
+        return (
+            record.family,
+            record.endpoint_id,
+            identity_value,
+            payload.get("type"),
+            payload.get("ex_date"),
+        )
+    if record.family is P4SourceFamily.EXCHANGE_OFFICIAL:
+        if (
+            type(payload.get("symbol")) is not str
+            or type(payload.get("instrument_kind")) is not str
+            or type(payload.get("halted")) is not bool
+            or type(payload.get("observed_at")) is not str
+        ):
+            return None
+        return (
+            record.family,
+            record.endpoint_id,
+            payload["symbol"],
+            payload["observed_at"],
+        )
+    return None
 
 
 def _has_unsanitized_material_text(record: NormalizedSourceRecord) -> bool:
@@ -2306,17 +2374,19 @@ def evidence_view_from_packet(*, packet: EvidencePacket) -> EvidenceView:
             children_by_parent.setdefault(record.supersedes_content_hash, []).append(record)
     ambiguous_supersession = any(len(children) > 1 for children in children_by_parent.values())
 
-    claims_by_subject: dict[tuple[object, ...], set[str]] = {}
+    material_records: list[tuple[NormalizedSourceRecord, tuple[object, ...]]] = []
     for record in current:
-        if record.material_claim and record.role in (SourceRole.AUTHORITY, SourceRole.CONFIRMATION):
-            claims_by_subject.setdefault(_material_subject(record), set()).add(
-                record.payload.to_json()
-            )
+        subject = _material_subject(record)
+        if subject is not None and record.role in (SourceRole.AUTHORITY, SourceRole.CONFIRMATION):
+            material_records.append((record, subject))
+    claims_by_subject: dict[tuple[object, ...], set[str]] = {}
+    for record, subject in material_records:
+        claims_by_subject.setdefault(subject, set()).add(record.payload.to_json())
     evidence_conflict = ambiguous_supersession or any(
         len(claims) > 1 for claims in claims_by_subject.values()
     )
     authority_complete = any(
-        record.material_claim and record.role is SourceRole.AUTHORITY for record in current
+        record.role is SourceRole.AUTHORITY for record, _subject in material_records
     )
     evidence_fresh = not ambiguous_supersession
     prompt_injection_unresolved = any(_has_unsanitized_material_text(record) for record in current)
