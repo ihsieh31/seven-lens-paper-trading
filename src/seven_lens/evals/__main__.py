@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import stat
+import sys
 from pathlib import Path
 
 from seven_lens.application.analysis_provider_composition import default_operator_config_root
@@ -17,8 +18,20 @@ from seven_lens.evals.provider_eval import (
 )
 from seven_lens.evals.runner import run_and_verify_frozen
 
+_EXIT_FAILURE = 1
+
 
 def main() -> int:
+    parser = _build_parser()
+    args = parser.parse_args()
+    try:
+        return _dispatch(args, parser)
+    except Exception as error:
+        print(f"evals: {error}", file=sys.stderr)
+        return _EXIT_FAILURE
+
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m seven_lens.evals")
     subcommands = parser.add_subparsers(dest="command", required=True)
     offline = subcommands.add_parser("offline", help="run frozen offline scripted evaluation")
@@ -41,7 +54,10 @@ def main() -> int:
     live_run.add_argument("--fixtures", type=Path, required=True)
     live_run.add_argument("--evidence-filename", required=True)
     live_run.add_argument("--execute-live", action="store_true")
-    args = parser.parse_args()
+    return parser
+
+
+def _dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     if args.command == "offline":
         report = run_and_verify_frozen(args.fixtures, args.frozen_report)
         print(report.to_bytes().decode("utf-8"), end="")
