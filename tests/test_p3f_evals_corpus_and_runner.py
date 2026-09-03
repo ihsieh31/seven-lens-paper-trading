@@ -254,6 +254,16 @@ def test_frozen_report_byte_mutation_is_rejected(tmp_path: Path) -> None:
         run_and_verify_frozen(FIXTURES, changed)
 
 
+def test_missing_corpus_root_reports_a_fixed_error(tmp_path: Path) -> None:
+    with pytest.raises(CorpusIntegrityError, match="eval corpus root does not exist"):
+        load_eval_corpus(tmp_path / "no-such-root")
+
+
+def test_missing_frozen_report_reports_a_fixed_error(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="frozen eval report is missing or unreadable"):
+        run_and_verify_frozen(FIXTURES, tmp_path / "no-report.json")
+
+
 def _object(container: dict[str, object], key: str) -> dict[str, object]:
     value = container[key]
     assert type(value) is dict

@@ -275,7 +275,10 @@ def run_final_offline_evaluation(corpus: EvalCorpus) -> EvalReport:
 def run_and_verify_frozen(corpus_root: Path, frozen_report: Path) -> EvalReport:
     corpus = load_eval_corpus(corpus_root)
     report = run_final_offline_evaluation(corpus)
-    expected = frozen_report.read_bytes()
+    try:
+        expected = frozen_report.read_bytes()
+    except OSError:
+        raise ValueError("frozen eval report is missing or unreadable") from None
     if frozen_report.is_symlink() or expected != report.to_bytes():
         raise ValueError("offline eval report does not match frozen report bytes")
     return report

@@ -131,49 +131,59 @@ def canonical_base_url(raw: object) -> str:
     """Validate an operator base URL and return its exact canonical form."""
 
     if type(raw) is not str or not raw or raw != raw.strip() or any(map(str.isspace, raw)):
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError("analysis provider endpoint must be one non-empty https URL")
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in raw):
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError(
+            "analysis provider endpoint contains a prohibited control character"
+        )
     if "\\" in raw or "%" in raw:
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError(
+            "analysis provider endpoint must not contain escapes or percent encoding"
+        )
     try:
         parts = urlsplit(raw)
     except ValueError:
-        raise ConfigurationError("analysis provider endpoint is invalid") from None
-    if parts.scheme != "https" or parts.username is not None or parts.password is not None:
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError("analysis provider endpoint is not a valid URL") from None
+    if parts.scheme != "https":
+        raise ConfigurationError("analysis provider endpoint scheme must be https")
+    if parts.username is not None or parts.password is not None:
+        raise ConfigurationError("analysis provider endpoint must not include embedded credentials")
     if parts.query or parts.fragment:
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError("analysis provider endpoint must not include a query or fragment")
     host = parts.hostname
     if type(host) is not str or not host:
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError("analysis provider endpoint must include a host name")
     if host != host.lower() or host != host.rstrip("."):
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError(
+            "analysis provider endpoint host must be lowercase without a trailing dot"
+        )
     if any(ord(character) > 0x7E for character in host):
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError("analysis provider endpoint host is invalid")
     if ":" in host or host.startswith("[") or host.endswith("]"):
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError("analysis provider endpoint host must not be an IP literal")
     if _is_ip_literal(host) or _is_forbidden_host(host):
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError("analysis provider endpoint host must be a public DNS name")
     if not _valid_hostname(host) or len(host) > _MAX_HOST_LENGTH:
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError("analysis provider endpoint host is invalid")
     try:
         port = parts.port
     except ValueError:
-        raise ConfigurationError("analysis provider endpoint is invalid") from None
+        raise ConfigurationError("analysis provider endpoint port is invalid") from None
     if port is not None and port != 443:
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError(
+            "analysis provider endpoint must not include a port other than 443"
+        )
     path = _canonical_base_path(parts.path or "")
     return f"https://{host}{path}"
 
 
 def _canonical_base_path(path: str) -> str:
     if len(path) > _MAX_PATH_LENGTH:
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError("analysis provider endpoint path is too long")
     if path in {"", "/"}:
         return ""
     if "//" in path:
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError("analysis provider endpoint path is invalid")
     if path.lower().endswith(_CHAT_COMPLETIONS_SUFFIX):
         raise ConfigurationError("analysis provider endpoint must be a base URL")
     path = path.rstrip("/")
@@ -181,17 +191,17 @@ def _canonical_base_path(path: str) -> str:
         return ""
     segments = path.split("/")
     if segments[0] != "":
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError("analysis provider endpoint path must start with a slash")
     body = segments[1:]
     if any(segment == "" for segment in body):
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError("analysis provider endpoint path is invalid")
     if len(body) > _MAX_PATH_SEGMENTS:
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError("analysis provider endpoint path has too many segments")
     if any(
         segment in {".", ".."} or any(character not in _PATH_CHARACTERS for character in segment)
         for segment in body
     ):
-        raise ConfigurationError("analysis provider endpoint is invalid")
+        raise ConfigurationError("analysis provider endpoint path contains an unsafe segment")
     return "/" + "/".join(body)
 
 
@@ -241,19 +251,25 @@ def canonical_model_id(raw: object) -> str:
     """Validate one exact provider model identifier (never a filesystem path)."""
 
     if type(raw) is not str or not 1 <= len(raw) <= 128:
-        raise ConfigurationError("analysis provider model id is invalid")
+        raise ConfigurationError("analysis provider model id must be 1 to 128 characters")
     if raw != raw.strip() or any(map(str.isspace, raw)):
-        raise ConfigurationError("analysis provider model id is invalid")
+        raise ConfigurationError("analysis provider model id must not contain whitespace")
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in raw):
-        raise ConfigurationError("analysis provider model id is invalid")
+        raise ConfigurationError(
+            "analysis provider model id contains a prohibited control character"
+        )
     segments = raw.split("/")
     if len(segments) > 2:
-        raise ConfigurationError("analysis provider model id is invalid")
+        raise ConfigurationError("analysis provider model id must have at most one slash")
     for segment in segments:
         if not segment or segment in {".", ".."}:
-            raise ConfigurationError("analysis provider model id is invalid")
+            raise ConfigurationError(
+                "analysis provider model id must not contain empty or dot segments"
+            )
         if any(character not in _MODEL_SEGMENT_CHARACTERS for character in segment):
-            raise ConfigurationError("analysis provider model id is invalid")
+            raise ConfigurationError(
+                "analysis provider model id contains a character that is not allowed"
+            )
     return raw
 
 

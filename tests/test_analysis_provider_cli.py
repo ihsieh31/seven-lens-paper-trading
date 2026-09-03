@@ -111,6 +111,35 @@ def test_invalid_model_fails_without_writing(tmp_path: Path) -> None:
     assert "traversal" not in process.stdout + process.stderr
 
 
+def test_invalid_inputs_explain_the_violation_without_echoing(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    cases = [
+        ("set-endpoint", "http://evil.example/v1", "scheme must be https"),
+        ("set-endpoint", "https://evil.example.com:8443/v1", "port other than 443"),
+        ("set-endpoint", "https://user:pass@evil.example/v1", "embedded credentials"),
+        ("set-endpoint", "https://evil.example/v1?x=1", "query or fragment"),
+        ("set-endpoint", "https://evil.example/v1#frag", "query or fragment"),
+        (
+            "set-endpoint",
+            "https://integrate.api.nvidia.com/v1/chat/completions",
+            "must be a base URL",
+        ),
+        ("set-endpoint", "https://localhost/v1", "public DNS name"),
+        ("set-endpoint", "https://integrate.api.nvidia.com/v1/..", "unsafe segment"),
+        ("set-endpoint", "https://evil.example/v1%2Fchat", "percent encoding"),
+        ("set-model", "openai gpt-x", "must not contain whitespace"),
+        ("set-model", "a/b/c", "at most one slash"),
+        ("set-model", "../model", "empty or dot segments"),
+        ("set-model", "modël-x", "not allowed"),
+    ]
+    for command, value, expected in cases:
+        process = _run(root, command, value)
+        assert process.returncode == 3, (command, value, process.stderr)
+        assert expected in process.stderr, (command, value, process.stderr)
+        assert value not in process.stdout + process.stderr, (command, value)
+    assert not (root / _FILE).exists()
+
+
 def test_help_writes_nothing_and_show_does_not_create_files(tmp_path: Path) -> None:
     root = _root(tmp_path)
     help_process = _run(root, "--help")

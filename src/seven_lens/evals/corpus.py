@@ -143,7 +143,10 @@ class EvalCorpus:
 
 
 def load_eval_corpus(root: Path) -> EvalCorpus:
-    normalized = root.resolve(strict=True)
+    try:
+        normalized = root.resolve(strict=True)
+    except OSError:
+        raise CorpusIntegrityError("eval corpus root does not exist") from None
     if root.is_symlink() or not normalized.is_dir():
         raise CorpusIntegrityError("eval corpus root must be a real directory")
     raw = _read_json(normalized, _SPLIT_FILENAME)
